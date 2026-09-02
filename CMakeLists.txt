@@ -14,6 +14,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(fsmd_core
   firmware/core/crc16.cpp
   firmware/core/framing.cpp
+  firmware/core/json.cpp
   firmware/core/rng.cpp
   firmware/core/random_distribution.cpp
   firmware/core/state_graph.cpp

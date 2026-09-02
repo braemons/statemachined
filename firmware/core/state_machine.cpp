@@ -17,7 +17,6 @@ OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask
   hold_pending_ = false;
   has_pending_ = false;
   pending_ = OutputUpdate{};
-  if (graph_ == nullptr) return OutputUpdate{};
 
   enter(graph_->entry, now_us, word);
   const State& s = graph_->states[current_];
@@ -124,7 +123,7 @@ OutputUpdate StateMachine::scan(LineBitmask word, Microseconds now_us) {
     has_pending_ = false;
     pending_ = OutputUpdate{};
   }
-  if (!running_ || graph_ == nullptr) return ops;
+  if (!running_) return ops;
 
   // The runtime cap. Validation proves a terminal state is reachable; it cannot
   // prove one is reached.

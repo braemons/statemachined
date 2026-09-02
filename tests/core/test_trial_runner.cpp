@@ -26,8 +26,7 @@ TEST_CASE("a timeout carries the trial to its terminal state") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 0, t);
   CHECK(e.running());
@@ -52,8 +51,7 @@ TEST_CASE("a single-line transition fires on its rising edge") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 42, t);
   advance(e, 0, t, ms(200));
@@ -84,8 +82,7 @@ TEST_CASE("a transition already true at entry does not fire unless level") {
   SUBCASE("edge semantics wait for the line to fall first") {
     Builder b;
     build(false, b);
-    TrialRunner e;
-    e.set_graph(&b.g);
+    TrialRunner e(b.g);
     uint32_t t = 0;
     e.start(1, 1, t, bit(0));        // the lever is ALREADY down at entry
     advance(e, bit(0), t, ms(300));  // still down: no fire
@@ -101,8 +98,7 @@ TEST_CASE("a transition already true at entry does not fire unless level") {
   SUBCASE("level semantics fire immediately") {
     Builder b;
     build(true, b);
-    TrialRunner e;
-    e.set_graph(&b.g);
+    TrialRunner e(b.g);
     uint32_t t = 0;
     e.start(1, 1, t, bit(0));  // already down, and `level` fires anyway
     t += 100;
@@ -127,8 +123,7 @@ TEST_CASE("a line that rises between arming and the first scan is an edge") {
   b.on(wait, c);
   b.g.entry = wait;
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t, 0);  // low at entry
   t += 100;
@@ -152,8 +147,7 @@ TEST_CASE("a combination of TTL lines is one transition") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
 
@@ -181,8 +175,7 @@ TEST_CASE("any-of fires on whichever line arrives") {
   b.on(wait, c);
   b.g.entry = wait;
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
   t += 100;
@@ -205,8 +198,7 @@ TEST_CASE("hold_ms requires the predicate to stay true") {
   b.on(wait, c);
   b.g.entry = wait;
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
 
@@ -249,8 +241,7 @@ TEST_CASE("declaration order resolves a tie") {
   b.on(wait, c);
   b.g.entry = wait;
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
   t += 100;
@@ -269,8 +260,7 @@ TEST_CASE("outputs a state raised come down when it is left") {
   b.g.entry = reward;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   const OutputUpdate open = e.start(1, 1, t);
   CHECK((open.set_high & bit(2)) != 0);
@@ -291,8 +281,7 @@ TEST_CASE("cancel lowers the outputs and names CANCELLED") {
   b.timeout(reward, b.fixed(10000), hit);
   b.g.entry = reward;
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   const OutputUpdate open = e.start(7, 1, t);
   CHECK((open.set_high & bit(2)) != 0);
@@ -323,8 +312,7 @@ TEST_CASE("the first terminal decision wins") {
   b.on(wait, c);
   b.g.entry = wait;
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
   t += 100;
@@ -350,8 +338,7 @@ TEST_CASE("the trial cap catches a graph that cannot end") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);  // it *looks* fine
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   e.set_trial_cap_ms(1000);
   uint32_t t = 0;
   e.start(1, 1, t);
@@ -375,8 +362,7 @@ TEST_CASE("a self-transition resets the timer and redraws the duration") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
 
@@ -406,8 +392,7 @@ TEST_CASE("the path records every state with its realised duration") {
   b.timeout(c, b.fixed(300), hit);
   b.g.entry = a;
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
   advance(e, 0, t, ms(1000));
@@ -435,8 +420,7 @@ TEST_CASE("a randomised duration is reported and is reproducible") {
   b.g.entry = fore;
 
   auto run = [&](uint32_t trial_id) {
-    TrialRunner e;
-    e.set_graph(&b.g);
+    TrialRunner e(b.g);
     uint32_t t = 0;
     e.start(trial_id, 0xC0FFEE, t);
     advance(e, 0, t, ms(2000));
@@ -465,8 +449,7 @@ TEST_CASE("the path truncates rather than corrupts") {
   b.on(loop, c);
   b.g.entry = loop;
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
   advance(e, 0, t, ms(500));  // ~500 visits into a 64-entry buffer
@@ -483,8 +466,7 @@ TEST_CASE("micros() wraparound does not disturb a trial") {
   b.timeout(wait, b.fixed(500), ns);
   b.g.entry = wait;
 
-  TrialRunner e;
-  e.set_graph(&b.g);
+  TrialRunner e(b.g);
   uint32_t t = 0xFFFFFFFF - ms(200);  // wraps mid-trial
   e.start(1, 1, t);
   for (int i = 0; i < 8000 && e.running(); ++i) {

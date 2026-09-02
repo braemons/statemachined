@@ -27,8 +27,7 @@ TEST_CASE("a run reports the terminal code it reached, not an interpretation") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  StateMachine m;
-  m.set_graph(&b.g);
+  StateMachine m(b.g);
   uint32_t t = 0;
   m.start(12345, t);
   CHECK(m.is_running());
@@ -48,8 +47,7 @@ TEST_CASE("halt ends a run through the ordinary exit path") {
   b.g.entry = hold;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  StateMachine m;
-  m.set_graph(&b.g);
+  StateMachine m(b.g);
   uint32_t t = 0;
   const OutputUpdate up = m.start(1, t);
   CHECK(up.set_high == bit(3));
@@ -77,8 +75,7 @@ TEST_CASE("the run cap stops a graph that validates but never ends") {
   b.g.entry = spin;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  StateMachine m;
-  m.set_graph(&b.g);
+  StateMachine m(b.g);
   m.set_run_cap_ms(50);
   uint32_t t = 0;
   m.start(1, t);
@@ -97,8 +94,7 @@ TEST_CASE("the same seed gives the same run") {
   b.g.entry = wait;
 
   auto run_once = [&](uint64_t seed) {
-    StateMachine m;
-    m.set_graph(&b.g);
+    StateMachine m(b.g);
     uint32_t t = 0;
     m.start(seed, t);
     advance(m, 0, t, ms(500));
@@ -124,8 +120,7 @@ TEST_CASE("every output action kind has a defined effect on the update") {
   b.g.entry = drive;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  StateMachine m;
-  m.set_graph(&b.g);
+  StateMachine m(b.g);
   const OutputUpdate on_entry = m.start(1, 0);
   CHECK((on_entry.set_high & bit(0)) != 0);
   CHECK((on_entry.set_low & bit(0)) == 0);

@@ -15,8 +15,9 @@ namespace fsmd {
 
 class TrialRunner {
  public:
-  void set_graph(const StateGraph* g) { machine_.set_graph(g); }
-  const StateGraph* graph() const { return machine_.graph(); }
+  explicit TrialRunner(const StateGraph& g) : machine_(g) {}
+
+  const StateGraph& graph() const { return machine_.graph(); }
 
   /// Begin a trial. The per-trial stream is derived rather than free-running:
   /// replaying trial 412 alone must draw trial 412's numbers, and a link reset

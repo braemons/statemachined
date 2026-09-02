@@ -53,8 +53,15 @@ struct StateMachineRunRecord {
 
 class StateMachine {
  public:
-  void set_graph(const StateGraph* g) { graph_ = g; }
-  const StateGraph* graph() const { return graph_; }
+  /// The graph arrives at construction and never changes. A machine without one
+  /// would be an object with no legal operation on it, and a set_graph() would
+  /// mean every method had to consider the case where nobody had called it.
+  /// Committing a different graph means constructing a different machine --
+  /// which is also the honest semantics, since a new graph invalidates every
+  /// index the old run was recording.
+  explicit StateMachine(const StateGraph& g) : graph_(&g) {}
+
+  const StateGraph& graph() const { return *graph_; }
 
   /// Begin a run. `now_us` is the arming instant. Returns the entry state's
   /// output actions -- they are outputs like any other and must not wait for
@@ -87,7 +94,7 @@ class StateMachine {
   void record_visit(StateExitCause cause, TransitionIndex fired, Microseconds now_us);
   OutputUpdate apply_actions(OutputActionIndex first, uint8_t count) const;
 
-  const StateGraph* graph_ = nullptr;
+  const StateGraph* graph_;
   Rng rng_;
   StateMachineRunRecord record_;
   TransitionState trans_state_[kMaxTransitions];
