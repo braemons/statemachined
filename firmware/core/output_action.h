@@ -11,7 +11,7 @@ namespace fsmd {
 enum class OutputActionKind : uint8_t { High = 0, Low = 1, Toggle = 2, Pulse = 3 };
 
 struct OutputAction {
-  uint8_t output_line = 0;
+  LineIndex output_line = 0;
   OutputActionKind kind = OutputActionKind::High;
   NarrowMilliseconds pulse_ms = 0;  ///< Pulse only
 };

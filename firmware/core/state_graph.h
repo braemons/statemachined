@@ -32,7 +32,7 @@ struct InputConfig {
 
 struct StateGraph {
   uint16_t version = 0;
-  uint8_t entry = kNoState;
+  StateIndex entry = kNoState;
   uint8_t n_states = 0;
   uint8_t n_transitions = 0;
   uint8_t n_output_actions = 0;

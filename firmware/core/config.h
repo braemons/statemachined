@@ -44,6 +44,7 @@ constexpr uint8_t kMaxPath = FSMD_MAX_PATH;
 /// a graph inside 32 KB -- so a bare uint8_t crossing a call boundary could be
 /// any of four different things. These say which.
 using StateIndex = uint8_t;
+using LineIndex = uint8_t;  ///< bit position in a LineBitmask, < kMaxOutputLines
 using TransitionIndex = uint8_t;
 using OutputActionIndex = uint8_t;
 

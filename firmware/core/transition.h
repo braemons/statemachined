@@ -34,7 +34,7 @@ struct Transition {
   LineBitmask any_high = 0;   ///< at least one must be high; 0 means "don't care"
   LineBitmask none_high = 0;  ///< none of these lines may be high
 
-  uint8_t target_state = 0;
+  StateIndex target_state = 0;  ///< where this transition goes
 
   /// Which distribution the required hold is drawn from, once, on state entry.
   /// The predicate must then stay true that long before the transition fires,
