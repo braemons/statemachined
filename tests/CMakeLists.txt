@@ -8,6 +8,7 @@ set(FSMD_TESTS
   machine/state_machine
   trial/trial_runner
   protocol/framing
+  protocol/graph_builder
   protocol/json
 )
 

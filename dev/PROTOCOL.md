@@ -244,6 +244,15 @@ tie-break an experimenter can reason about from reading the graph.
 | `kind` | `"high"` `"low"` `"toggle"` `"pulse"` | |
 | `ms` | `u16` | `pulse` only: how long it stays high. Ignored otherwise |
 
+**All of a state's `entry` actions must arrive before its first `exit` action.**
+The two are separate slices of the same pool and each has to be contiguous, so
+interleaving them would silently give one slice the other's members. Refused as
+`bad_order`.
+
+**A terminal state's `entry` actions do not run.** The machine records the
+terminal visit and stops. Put a reward pulse on the *exit* of the state before
+it, not on the entry of the terminal state it goes to.
+
 **Every line a state drives high is driven low again when the state is left**,
 by the device, whatever the exit cause and whether or not the graph said so. An
 exit action is for what the graph wants *in addition*; a valve left open because

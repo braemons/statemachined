@@ -57,6 +57,26 @@ struct StateGraph {
   /// Levels outputs are driven to on watchdog timeout, reset, link loss or a
   /// refused graph. Per line, because "off" is not always "low".
   LineBitmask output_safe_levels = 0;
+
+  StateGraph() = default;
+
+  /// Copying re-points every Choice distribution that pointed into the source's
+  /// own option pool, so the copy refers to its own.
+  ///
+  /// Without this a memberwise copy leaves the new graph's distributions
+  /// pointing at the old graph's arrays -- which works, silently, until the old
+  /// graph is overwritten by the next upload, and then a foreperiod is drawn
+  /// from whatever a later paradigm happened to leave there. A distribution
+  /// pointing at a static array (which is how the tests build one) is left
+  /// alone, since it was never pointing into a pool to begin with.
+  StateGraph(const StateGraph& other) { assign(other); }
+  StateGraph& operator=(const StateGraph& other) {
+    if (this != &other) assign(other);
+    return *this;
+  }
+
+ private:
+  void assign(const StateGraph& other);
 };
 
 enum class GraphError : uint8_t {

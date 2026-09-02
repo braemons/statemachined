@@ -31,6 +31,7 @@ add_library(fsmd_core
   firmware/core/trial/trial_runner.cpp
   firmware/core/protocol/crc16.cpp
   firmware/core/protocol/framing.cpp
+  firmware/core/protocol/graph_builder.cpp
   firmware/core/protocol/json.cpp
 )
 target_include_directories(fsmd_core PUBLIC firmware/core)
