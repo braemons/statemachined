@@ -231,18 +231,44 @@ make format-check
 
 ## Editor setup
 
-Export a compilation database and point clangd at it, so the editor sees exactly
-the flags the build uses:
+Any build configures it:
 
 ```sh
-cmake -S . -B build -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
-ln -sf build/compile_commands.json .
+make test
 ```
 
-`compile_commands.json` is already in `.gitignore`. The devcontainer configures
-this for VS Code automatically.
+`CMAKE_EXPORT_COMPILE_COMMANDS` is on unconditionally in `CMakeLists.txt`, so
+that writes `build/compile_commands.json`, and the checked-in `.clangd` points
+clangd at it. No flag to remember and no symlink to make.
+
+This matters more than it looks. The core's headers are included
+**path-qualified** — `"graph/state.h"`, never a bare filename — which is what
+stops one group of `firmware/core/` reaching sideways into another unnoticed. It
+also means clangd cannot fall back on "look next to the file that included it":
+without the include path it resolves *nothing*, and the whole file lights up red.
+
+`.clangd` carries `-Ifirmware/core` and the two test include paths as a floor, so
+a header opened in a fresh clone still resolves before anything has been built.
+The database is what gives the editor the real flags — warnings, standard,
+defines — so build once anyway.
+
+To check what clangd sees for a given file:
+
+```sh
+clangd --check=firmware/core/machine/state_machine.cpp
+```
+
+Ignore the `tweak: ... ==> FAIL` lines; those are refactoring probes, not
+diagnostics. The line that matters is `All checks completed, N errors`.
 
 ## Troubleshooting
+
+**Every `#include` is unresolved in the editor.** clangd has no compilation
+database. Run `make test` once — it writes `build/compile_commands.json`. If it
+is still wrong, check that `build/compile_commands.json` exists and that your
+editor is not overriding `--compile-commands-dir` to point somewhere else; the
+devcontainer sets it to `${workspaceFolder}/build`, which is the Makefile's
+default `BUILD`. A stale database after moving files is fixed the same way.
 
 **`make format` refuses to run: "clang-format X, but this repo pins 23.1.0".**
 Working as intended — that version would format files differently from CI.

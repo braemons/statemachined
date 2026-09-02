@@ -1,0 +1,20 @@
+# Editor configuration for clangd, so an include resolves before anything has
+# been built and whatever generated the compile database.
+#
+# The core's headers are included path-qualified -- "graph/state.h", never a
+# bare filename -- which is what stops one group reaching sideways into another
+# unnoticed. It also means clangd cannot fall back on "look next to the file
+# that included it": without the include path it resolves nothing at all.
+CompileFlags:
+  # Written by CMake (CMAKE_EXPORT_COMPILE_COMMANDS is on unconditionally), so
+  # `make test` is enough to give the editor the real flags. Relative to this
+  # file, and matching the Makefile's BUILD default.
+  CompilationDatabase: build
+
+  # A floor for files the database does not cover: a header opened on its own, a
+  # source file in a fresh clone, anything added since the last configure.
+  Add:
+    - -std=c++17
+    - -Ifirmware/core
+    - -Itests/core
+    - -Itests/third_party

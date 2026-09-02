@@ -7,6 +7,13 @@
 cmake_minimum_required(VERSION 3.16)
 project(fsmd_core LANGUAGES CXX)
 
+# Always, not only when a VS Code extension happens to pass it. clangd reads
+# this file to learn the include paths, and since the core's headers are
+# included path-qualified ("graph/state.h") there is nothing for it to guess
+# from if the database is missing -- the editor simply reports every include as
+# unresolved. See .clangd.
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
