@@ -10,10 +10,10 @@ using namespace fsmd::test;
 namespace {
 /// Run the engine forward to `until_us` in 100 us steps -- the real 10 kHz scan
 /// period -- holding the input word steady.
-void advance(TrialRunner& e, uint32_t word, uint32_t& t, uint32_t until_us) {
+void run_until(TrialRunner& e, uint32_t word, uint32_t& t, uint32_t until_us) {
   while (t < until_us && e.running()) {
     t += 100;
-    e.scan(word, t);
+    e.advance(word, t);
   }
 }
 }  // namespace
@@ -31,9 +31,9 @@ TEST_CASE("a timeout carries the trial to its terminal state") {
   e.start(1, 0, t);
   CHECK(e.running());
 
-  advance(e, 0, t, ms(400));
+  run_until(e, 0, t, ms(400));
   CHECK(e.running());  // not yet
-  advance(e, 0, t, ms(600));
+  run_until(e, 0, t, ms(600));
   CHECK_FALSE(e.running());
   CHECK(e.result().outcome == TrialOutcome::NotStarted);
 }
@@ -54,10 +54,10 @@ TEST_CASE("a single-line transition fires on its rising edge") {
   TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 42, t);
-  advance(e, 0, t, ms(200));
+  run_until(e, 0, t, ms(200));
   CHECK(e.running());
   t += 100;
-  e.scan(bit(0), t);
+  e.advance(bit(0), t);
   CHECK_FALSE(e.running());
   CHECK(e.result().outcome == TrialOutcome::Hit);
 }
@@ -84,13 +84,13 @@ TEST_CASE("a transition already true at entry does not fire unless level") {
     build(false, b);
     TrialRunner e(b.g);
     uint32_t t = 0;
-    e.start(1, 1, t, bit(0));        // the lever is ALREADY down at entry
-    advance(e, bit(0), t, ms(300));  // still down: no fire
+    e.start(1, 1, t, bit(0));          // the lever is ALREADY down at entry
+    run_until(e, bit(0), t, ms(300));  // still down: no fire
     CHECK(e.running());
     t += 100;
-    e.scan(0, t);  // release arms it
+    e.advance(0, t);  // release arms it
     t += 100;
-    e.scan(bit(0), t);  // press fires it
+    e.advance(bit(0), t);  // press fires it
     CHECK_FALSE(e.running());
     CHECK(e.result().outcome == TrialOutcome::Hit);
   }
@@ -102,7 +102,7 @@ TEST_CASE("a transition already true at entry does not fire unless level") {
     uint32_t t = 0;
     e.start(1, 1, t, bit(0));  // already down, and `level` fires anyway
     t += 100;
-    e.scan(bit(0), t);
+    e.advance(bit(0), t);
     CHECK_FALSE(e.running());
     CHECK(e.result().outcome == TrialOutcome::Hit);
   }
@@ -127,7 +127,7 @@ TEST_CASE("a line that rises between arming and the first scan is an edge") {
   uint32_t t = 0;
   e.start(1, 1, t, 0);  // low at entry
   t += 100;
-  e.scan(bit(0), t);  // high on the very first scan: fires
+  e.advance(bit(0), t);  // high on the very first scan: fires
   CHECK_FALSE(e.running());
   CHECK(e.result().outcome == TrialOutcome::Hit);
 }
@@ -152,13 +152,13 @@ TEST_CASE("a combination of TTL lines is one transition") {
   e.start(1, 1, t);
 
   t += 100;
-  e.scan(bit(0), t);  // one lever: no
+  e.advance(bit(0), t);  // one lever: no
   CHECK(e.running());
   t += 100;
-  e.scan(bit(0) | bit(1) | bit(2), t);  // both, but abort high: no
+  e.advance(bit(0) | bit(1) | bit(2), t);  // both, but abort high: no
   CHECK(e.running());
   t += 100;
-  e.scan(bit(0) | bit(1), t);  // both, abort low: fire
+  e.advance(bit(0) | bit(1), t);  // both, abort low: fire
   CHECK_FALSE(e.running());
   CHECK(e.result().outcome == TrialOutcome::Hit);
 }
@@ -179,7 +179,7 @@ TEST_CASE("any-of fires on whichever line arrives") {
   uint32_t t = 0;
   e.start(1, 1, t);
   t += 100;
-  e.scan(bit(4), t);
+  e.advance(bit(4), t);
   CHECK_FALSE(e.running());
   CHECK(e.result().outcome == TrialOutcome::Hit);
 }
@@ -203,13 +203,13 @@ TEST_CASE("hold_ms requires the predicate to stay true") {
   e.start(1, 1, t);
 
   SUBCASE("a dropout restarts the hold") {
-    advance(e, bit(0) | bit(1), t, ms(150));
+    run_until(e, bit(0) | bit(1), t, ms(150));
     CHECK(e.running());
     t += 100;
-    e.scan(0, t);                             // dropped
-    advance(e, bit(0) | bit(1), t, ms(300));  // only 150 ms of new hold
+    e.advance(0, t);                            // dropped
+    run_until(e, bit(0) | bit(1), t, ms(300));  // only 150 ms of new hold
     CHECK(e.running());
-    advance(e, bit(0) | bit(1), t, ms(600));
+    run_until(e, bit(0) | bit(1), t, ms(600));
     CHECK_FALSE(e.running());
     CHECK(e.result().outcome == TrialOutcome::Hit);
   }
@@ -218,7 +218,7 @@ TEST_CASE("hold_ms requires the predicate to stay true") {
     // Also the regression test for the change-detection optimisation: the input
     // word never changes during the hold, so a scan that skipped evaluation on
     // an unchanged word would never fire this.
-    advance(e, bit(0) | bit(1), t, ms(250));
+    run_until(e, bit(0) | bit(1), t, ms(250));
     CHECK_FALSE(e.running());
     CHECK(e.result().outcome == TrialOutcome::Hit);
   }
@@ -245,7 +245,7 @@ TEST_CASE("declaration order resolves a tie") {
   uint32_t t = 0;
   e.start(1, 1, t);
   t += 100;
-  e.scan(bit(0), t);  // both transitions hold on this scan
+  e.advance(bit(0), t);  // both transitions hold on this scan
   CHECK(e.result().outcome == TrialOutcome::Hit);
 }
 
@@ -268,7 +268,7 @@ TEST_CASE("outputs a state raised come down when it is left") {
   uint32_t lowered = 0;
   while (e.running()) {
     t += 100;
-    lowered |= e.scan(0, t).set_low;
+    lowered |= e.advance(0, t).set_low;
   }
   CHECK((lowered & bit(2)) != 0);
 }
@@ -293,7 +293,7 @@ TEST_CASE("cancel lowers the outputs and names CANCELLED") {
   CHECK(e.result().cancel_reason == TrialCancelReason::Host);
   CHECK(e.result().trial_id == 7);
 
-  const OutputUpdate after = e.scan(0, t + 100);
+  const OutputUpdate after = e.advance(0, t + 100);
   CHECK((after.set_low & bit(2)) != 0);  // the valve closes
 }
 
@@ -316,7 +316,7 @@ TEST_CASE("the first terminal decision wins") {
   uint32_t t = 0;
   e.start(1, 1, t);
   t += 100;
-  e.scan(bit(0), t);
+  e.advance(bit(0), t);
   REQUIRE(e.result().outcome == TrialOutcome::Hit);
 
   CHECK_FALSE(e.cancel(TrialCancelReason::Host, t + 100));
@@ -342,7 +342,7 @@ TEST_CASE("the trial cap catches a graph that cannot end") {
   e.set_trial_cap_ms(1000);
   uint32_t t = 0;
   e.start(1, 1, t);
-  advance(e, 0, t, ms(2000));
+  run_until(e, 0, t, ms(2000));
   CHECK_FALSE(e.running());
   CHECK(e.result().outcome == TrialOutcome::Cancelled);
   CHECK(e.result().cancel_reason == TrialCancelReason::TrialTimeout);
@@ -368,17 +368,17 @@ TEST_CASE("a self-transition resets the timer and redraws the duration") {
 
   // Poke the line every 300 ms: the 500 ms timeout must never elapse.
   for (int i = 0; i < 6; ++i) {
-    advance(e, 0, t, t + ms(300));
+    run_until(e, 0, t, t + ms(300));
     REQUIRE(e.running());
     t += 100;
-    e.scan(bit(0), t);
+    e.advance(bit(0), t);
     t += 100;
-    e.scan(0, t);
+    e.advance(0, t);
   }
   CHECK(e.running());
-  CHECK(e.run().path_len >= 6);  // each self-transition is recorded
+  CHECK(e.run_record().path_len >= 6);  // each self-transition is recorded
 
-  advance(e, 0, t, t + ms(700));
+  run_until(e, 0, t, t + ms(700));
   CHECK_FALSE(e.running());
   CHECK(e.result().outcome == TrialOutcome::NotStarted);
 }
@@ -395,10 +395,10 @@ TEST_CASE("the path records every state with its realised duration") {
   TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
-  advance(e, 0, t, ms(1000));
+  run_until(e, 0, t, ms(1000));
   CHECK_FALSE(e.running());
 
-  const StateMachineRunRecord& r = e.run();
+  const StateMachineRunRecord& r = e.run_record();
   REQUIRE(r.path_len >= 2);
   CHECK(r.path[0].state_index == a);
   CHECK(r.path[0].drawn_ms == 200);
@@ -423,8 +423,8 @@ TEST_CASE("a randomised duration is reported and is reproducible") {
     TrialRunner e(b.g);
     uint32_t t = 0;
     e.start(trial_id, 0xC0FFEE, t);
-    advance(e, 0, t, ms(2000));
-    return e.run().path[0].drawn_ms;
+    run_until(e, 0, t, ms(2000));
+    return e.run_record().path[0].drawn_ms;
   };
 
   const int32_t a1 = run(412);
@@ -452,10 +452,10 @@ TEST_CASE("the path truncates rather than corrupts") {
   TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
-  advance(e, 0, t, ms(500));  // ~500 visits into a 64-entry buffer
+  run_until(e, 0, t, ms(500));  // ~500 visits into a 64-entry buffer
 
-  CHECK(e.run().path_len <= kMaxPath);
-  CHECK(e.run().path_truncated);
+  CHECK(e.run_record().path_len <= kMaxPath);
+  CHECK(e.run_record().path_truncated);
 }
 
 TEST_CASE("micros() wraparound does not disturb a trial") {
@@ -471,10 +471,10 @@ TEST_CASE("micros() wraparound does not disturb a trial") {
   e.start(1, 1, t);
   for (int i = 0; i < 8000 && e.running(); ++i) {
     t += 100;
-    e.scan(0, t);
+    e.advance(0, t);
   }
   CHECK_FALSE(e.running());
   CHECK(e.result().outcome == TrialOutcome::NotStarted);
-  CHECK(e.run().path[0].duration_us >= ms(500));
-  CHECK(e.run().path[0].duration_us < ms(501));
+  CHECK(e.run_record().path[0].duration_us >= ms(500));
+  CHECK(e.run_record().path[0].duration_us < ms(501));
 }

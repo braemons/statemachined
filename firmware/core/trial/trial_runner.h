@@ -25,7 +25,10 @@ class TrialRunner {
   OutputUpdate start(uint32_t trial_id, uint64_t session_seed, Microseconds now_us,
                      LineBitmask word = 0);
 
-  OutputUpdate scan(LineBitmask word, Microseconds now_us);
+  /// The machine's advance(), plus latch_outcome() after it -- so the trial has
+  /// a verdict the instant the run acquires one, rather than whenever somebody
+  /// next thinks to ask.
+  OutputUpdate advance(LineBitmask word, Microseconds now_us);
 
   /// Cancel the trial. Returns false if it had already ended: the FIRST terminal
   /// decision wins, so a cancel arriving after a Hit reports the Hit rather than
@@ -36,14 +39,21 @@ class TrialRunner {
   StateIndex current_state() const { return machine_.get_current_state_index(); }
 
   const TrialRecord& result() const { return result_; }
-  const StateMachineRunRecord& run() const { return machine_.get_record(); }
+  const StateMachineRunRecord& run_record() const { return machine_.get_record(); }
 
   void set_trial_cap_ms(Milliseconds ms) { machine_.set_run_cap_ms(ms); }
 
  private:
-  /// Give the machine's terminal code, or its halt, a trial meaning. Runs after
-  /// every scan; the first verdict sticks.
-  void settle();
+  /// Read the run's ending, if it has one, and write down what it meant for the
+  /// trial -- terminal code to TrialOutcome, or the wall-clock cap to
+  /// Cancelled/TrialTimeout, which only this layer knows is a cancellation
+  /// rather than simply the end of a run.
+  ///
+  /// Latched, in the electronics sense: once the outcome is anything but
+  /// Undetermined this returns immediately and the verdict never changes. That
+  /// is what makes "the first terminal decision wins" true no matter how often
+  /// it is called, and it is called after every advance().
+  void latch_outcome();
 
   StateMachine machine_;
   TrialRecord result_;

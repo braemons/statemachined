@@ -9,20 +9,20 @@ OutputUpdate TrialRunner::start(uint32_t trial_id, uint64_t session_seed, Micros
   return machine_.start(Rng::mix(session_seed, trial_id), now_us, word);
 }
 
-OutputUpdate TrialRunner::scan(LineBitmask word, Microseconds now_us) {
-  OutputUpdate ops = machine_.scan(word, now_us);
-  settle();
+OutputUpdate TrialRunner::advance(LineBitmask word, Microseconds now_us) {
+  OutputUpdate ops = machine_.advance(word, now_us);
+  latch_outcome();
   return ops;
 }
 
 bool TrialRunner::cancel(TrialCancelReason why, Microseconds now_us) {
-  if (!machine_.halt(now_us)) return false;
+  if (!machine_.force_end(now_us)) return false;
   result_.outcome = TrialOutcome::Cancelled;
   result_.cancel_reason = why;
   return true;
 }
 
-void TrialRunner::settle() {
+void TrialRunner::latch_outcome() {
   if (result_.outcome != TrialOutcome::Undetermined) return;  // first verdict wins
   const StateMachineRunRecord& r = machine_.get_record();
   if (r.terminal_code != kNotTerminal) {

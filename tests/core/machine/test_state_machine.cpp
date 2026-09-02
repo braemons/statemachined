@@ -11,10 +11,10 @@ using namespace fsmd;
 using namespace fsmd::test;
 
 namespace {
-void advance(StateMachine& m, LineBitmask word, uint32_t& t, uint32_t until_us) {
+void run_until(StateMachine& m, LineBitmask word, uint32_t& t, uint32_t until_us) {
   while (t < until_us) {
     t += 100;
-    m.scan(word, t);
+    m.advance(word, t);
   }
 }
 }  // namespace
@@ -31,14 +31,14 @@ TEST_CASE("a run reports the terminal code it reached, not an interpretation") {
   uint32_t t = 0;
   m.start(12345, t);
   CHECK(m.is_running());
-  advance(m, 0, t, ms(20));
+  run_until(m, 0, t, ms(20));
 
   CHECK_FALSE(m.is_running());
   CHECK(m.get_record().terminal_code == 7);
-  CHECK_FALSE(m.get_record().halted);
+  CHECK_FALSE(m.get_record().force_ended);
 }
 
-TEST_CASE("halt ends a run through the ordinary exit path") {
+TEST_CASE("force_end ends a run through the ordinary exit path") {
   Builder b;
   const uint8_t hold = b.state();
   const uint8_t done = b.terminal_code(1);
@@ -53,17 +53,17 @@ TEST_CASE("halt ends a run through the ordinary exit path") {
   CHECK(up.set_high == bit(3));
 
   t += ms(5);
-  CHECK(m.halt(t));
+  CHECK(m.force_end(t));
   CHECK_FALSE(m.is_running());
-  CHECK(m.get_record().halted);
+  CHECK(m.get_record().force_ended);
   CHECK(m.get_record().terminal_code == kNotTerminal);
 
   // Everything the state raised comes down, even though the graph declared no
   // exit action at all.
-  const OutputUpdate after = m.scan(0, t + 100);
+  const OutputUpdate after = m.advance(0, t + 100);
   CHECK((after.set_low & bit(3)) == bit(3));
 
-  CHECK_FALSE(m.halt(t + 200));  // the first decision wins
+  CHECK_FALSE(m.force_end(t + 200));  // the first decision wins
 }
 
 TEST_CASE("the run cap stops a graph that validates but never ends") {
@@ -79,7 +79,7 @@ TEST_CASE("the run cap stops a graph that validates but never ends") {
   m.set_run_cap_ms(50);
   uint32_t t = 0;
   m.start(1, t);
-  advance(m, 0, t, ms(80));
+  run_until(m, 0, t, ms(80));
 
   CHECK_FALSE(m.is_running());
   CHECK(m.get_record().hit_run_cap);
@@ -97,7 +97,7 @@ TEST_CASE("the same seed gives the same run") {
     StateMachine m(b.g);
     uint32_t t = 0;
     m.start(seed, t);
-    advance(m, 0, t, ms(500));
+    run_until(m, 0, t, ms(500));
     return m.get_record().path[0].drawn_ms;
   };
 
@@ -137,7 +137,7 @@ TEST_CASE("every output action kind has a defined effect on the update") {
   OutputUpdate on_exit;
   while (m.is_running()) {
     t += 100;
-    const OutputUpdate u = m.scan(0, t);
+    const OutputUpdate u = m.advance(0, t);
     on_exit.set_high |= u.set_high;
     on_exit.set_low |= u.set_low;
   }

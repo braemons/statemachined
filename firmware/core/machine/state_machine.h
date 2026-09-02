@@ -47,7 +47,7 @@ struct StateMachineRunRecord {
   bool path_truncated = false;
   Microseconds total_us = 0;
   TerminalCode terminal_code = kNotTerminal;  ///< set if a terminal state was reached
-  bool halted = false;                        ///< stopped by halt() instead
+  bool force_ended = false;                   ///< ended by force_end() rather than by the graph
   bool hit_run_cap = false;                   ///< ...and specifically by the cap
 };
 
@@ -68,16 +68,46 @@ class StateMachine {
   /// the first scan.
   OutputUpdate start(uint64_t seed, Microseconds now_us, LineBitmask word = 0);
 
-  /// One scan. `word` is the conditioned input word (debounced, polarity
-  /// normalised, disabled lines zeroed) -- the HAL's job, not the machine's.
-  OutputUpdate scan(LineBitmask word, Microseconds now_us);
+  /// Move the run forward to `now_us`, given the input lines as they are at
+  /// that instant. This is the whole scan loop and the only thing called
+  /// periodically -- 10 kHz on the reference board.
+  ///
+  /// In order, it: pays out any outputs owed by a force_end() that landed
+  /// between calls; ends the run if the wall-clock cap has expired; evaluates
+  /// the *current* state's transitions against `word`, in declaration order,
+  /// the first whose predicate holds winning; failing that, checks the state's
+  /// timeout; and if either fired, leaves the state and enters the target,
+  /// which may be terminal. At most one transition happens per call.
+  ///
+  /// Returns the lines to move as a result, and moves none itself -- the HAL
+  /// drives them. A call in which nothing happened returns an empty update,
+  /// which is the common case and costs one compare when the input word has
+  /// not changed.
+  ///
+  /// `word` is the *conditioned* input word: debounced, polarity normalised,
+  /// disabled lines zeroed. That is the HAL's job, not the machine's.
+  OutputUpdate advance(LineBitmask word, Microseconds now_us);
 
-  /// Force the run to end through the ordinary exit path, so every output the
-  /// current state raised is lowered by the same code that lowers it on any
-  /// other transition. Returns false if the run had already ended: the FIRST
-  /// terminal decision wins, and we report what actually happened rather than a
-  /// fabricated one.
-  bool halt(Microseconds now_us);
+  /// End the run now, from outside the graph -- a cancel, a lost link, the
+  /// wall-clock cap. Not "stop": the run is over afterwards and its record is
+  /// final.
+  ///
+  /// It ends through the *ordinary* exit path, so every output line the current
+  /// state raised is lowered by the same code that lowers it on any other
+  /// transition. The valve closing on a cancel is not a special case somebody
+  /// has to remember to write; it is the only path there is. The record gets a
+  /// final StateVisit with StateExitCause::Cancel and `force_ended` set, and no
+  /// terminal code -- the machine does not invent one.
+  ///
+  /// Returns false if the run had already ended, in which case nothing happens.
+  /// The FIRST terminal decision wins: a cancel arriving after the graph
+  /// reached a terminal state loses, and the real outcome is reported rather
+  /// than a fabricated one.
+  ///
+  /// The outputs it owes are handed back by the next advance() rather than
+  /// returned here, because a cancel typically arrives between scans and the
+  /// HAL applies output updates where it applies every other one.
+  bool force_end(Microseconds now_us);
 
   bool is_running() const { return running_; }
   StateIndex get_current_state_index() const { return current_; }

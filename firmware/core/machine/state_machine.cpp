@@ -105,10 +105,10 @@ OutputUpdate StateMachine::leave(StateExitCause cause, TransitionIndex fired,
   return ops;
 }
 
-bool StateMachine::halt(Microseconds now_us) {
+bool StateMachine::force_end(Microseconds now_us) {
   if (!running_) return false;  // first terminal decision wins
   OutputUpdate ops = leave(StateExitCause::Cancel, kNoTransition, now_us);
-  record_.halted = true;
+  record_.force_ended = true;
   record_.total_us = since(started_us_, now_us);
   running_ = false;
   pending_ = ops;
@@ -116,7 +116,7 @@ bool StateMachine::halt(Microseconds now_us) {
   return true;
 }
 
-OutputUpdate StateMachine::scan(LineBitmask word, Microseconds now_us) {
+OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   OutputUpdate ops;
   if (has_pending_) {  // outputs owed by a cancel that happened between scans
     ops = pending_;
@@ -129,7 +129,7 @@ OutputUpdate StateMachine::scan(LineBitmask word, Microseconds now_us) {
   // prove one is reached.
   if (run_cap_ms_ > 0 &&
       since(started_us_, now_us) >= static_cast<uint32_t>(run_cap_ms_) * 1000u) {
-    halt(now_us);
+    force_end(now_us);
     record_.hit_run_cap = true;
     if (has_pending_) {
       ops.set_high |= pending_.set_high;
