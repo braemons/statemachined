@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  core-tests:
+    name: core unit tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
+          CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    name: core unit tests (ASan + UBSan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DFSMD_SANITIZE=ON
+      - run: cmake --build build-san -j
+      - name: Test
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          ASAN_OPTIONS: detect_leaks=1
+        run: ctest --test-dir build-san --output-on-failure
+
+  reproducibility:
+    name: golden vectors are byte-identical across compilers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The reproducibility claim is that a seed gives the same durations
+      # everywhere. Optimisation level is the cheapest way to catch a
+      # dependence on undefined behaviour or on float; the boards are checked
+      # on hardware at M3 and M6.
+      - name: Build at -O0 and -O3
+        run: |
+          for opt in -O0 -O3; do
+            cmake -S . -B build$opt -DCMAKE_BUILD_TYPE=Debug \
+                  -DCMAKE_CXX_FLAGS="$opt"
+            cmake --build build$opt -j
+            ctest --test-dir build$opt --output-on-failure
+          done
+
+  firmware-build:
+    name: firmware compiles for ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [uno_r4_minima]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
+      - run: pip install platformio
+      - run: pio run -e ${{ matrix.env }}
+
+  format:
+    name: clang-format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      # Pinned: clang-format's output differs between major versions, so an
+      # unpinned one turns a formatting check into a version lottery.
+      - run: pip install clang-format==23.1.0
+      - run: |
+          find firmware tests -name '*.cpp' -o -name '*.h' \
+            | grep -v third_party \
+            | xargs clang-format --dry-run --Werror

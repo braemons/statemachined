@@ -51,6 +51,23 @@ the trial type.**
   `Arduino.h`; hardware is four functions behind a HAL. The same code runs on the
   host, which is what makes the tests real.
 
+## Build & test
+
+The core is plain C++17 with no `Arduino.h`, so it builds and runs on the host.
+That is the fastest feedback loop in the repo and it needs no board attached.
+
+```sh
+make test        # build and run the core unit tests
+make sanitize    # the same, under ASan and UBSan
+make firmware    # build for the Uno R4 Minima
+make upload      # flash it
+make format      # clang-format in place
+```
+
+CI runs the unit tests under gcc and clang, under sanitizers, at `-O0` and `-O3`
+(the cheapest way to catch a dependence on undefined behaviour), and compiles the
+firmware for the reference board.
+
 ## Target hardware
 
 | | |

@@ -1,7 +1,7 @@
 .pio/
 .pioenvs/
 .piolibdeps/
-build/
+build*/
 *.o
 *.elf
 *.hex
