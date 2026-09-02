@@ -1,3 +1,14 @@
+# Formatting style for fsmd. Keep in step with the clang-format version pinned
+# in .github/workflows/ci.yml and .devcontainer/Dockerfile (currently 23.1.0).
+#
+# This file cannot pin the version by itself: `BasedOnStyle: Google` resolves
+# against the *running* clang-format's Google defaults, which change between
+# releases. `make format` guards the version for that reason.
+#
+# Do NOT replace this with `clang-format --dump-config` output. A dumped config
+# lists every option the dumping version knows, and an older clang-format then
+# fails hard -- "unknown key 'EnumAssignments'" -- rather than ignoring it. The
+# short file plus the version guard is portable; a dumped one is not.
 BasedOnStyle: Google
 ColumnLimit: 96
 DerivePointerAlignment: false

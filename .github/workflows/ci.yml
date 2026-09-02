@@ -90,9 +90,9 @@ jobs:
         with:
           python-version: '3.12'
       # Pinned: clang-format's output differs between major versions, so an
-      # unpinned one turns a formatting check into a version lottery.
+      # unpinned one turns a formatting check into a version lottery. The
+      # Makefile pins the same version and refuses to run against any other, so
+      # if these two ever drift apart the guard fails here rather than silently
+      # checking against something no contributor has.
       - run: pip install clang-format==23.1.0
-      - run: |
-          find firmware tests -name '*.cpp' -o -name '*.h' \
-            | grep -v third_party \
-            | xargs clang-format --dry-run --Werror
+      - run: make format-check

@@ -26,10 +26,31 @@ same environment CI uses and it is one command.
 > **clang-format is pinned on purpose.** Its output changes between major
 > versions, so a distro-provided one can reformat files your CI check then
 > rejects — a red build on a diff you never wrote. Install it from pip
-> (`pip install clang-format==23.1.0`), not from your package manager, and keep
-> it in step with the pin in `.github/workflows/ci.yml`. As of this writing a
-> Fedora 44 host's clang-format 22.1.8 happens to agree with 23.1.0 on this
-> codebase, but that is luck, not a guarantee.
+> (`pip install clang-format==23.1.0`), not from your package manager.
+>
+> `make format` and `make format-check` **refuse to run** against any other
+> version and tell you how to fix it, so this is caught before you commit rather
+> than in CI. To override deliberately: `make format CLANG_FORMAT_PIN=$(clang-format --version | grep -oP '[0-9.]+$')`.
+
+### Why `.clang-format` alone is not enough
+
+The repo has a `.clang-format`, but a style file cannot pin a *version*.
+`BasedOnStyle: Google` resolves against the Google defaults of whichever
+clang-format is running, and those change between releases — the resolved
+config differs by 30 lines between 22.1.8 and 23.1.0.
+
+The obvious fix — committing `clang-format --dump-config` output so nothing is
+inherited — is worse. A dumped config lists every option the dumping version
+knows about, and an older clang-format then fails hard rather than ignoring the
+extras:
+
+```
+.clang-format:13:3: error: unknown key 'EnumAssignments'
+```
+
+That turns "might drift" into "definitely broken for anyone not on 23.1.0". So
+`.clang-format` stays short, and the version guard in the Makefile does the
+pinning. CI runs the same `make format-check` target, so the two cannot disagree.
 
 ## The devcontainer
 
@@ -171,10 +192,11 @@ image is identical.
 ## Verifying the setup
 
 ```sh
-make test        # the core unit tests -- should be 3/3
-make sanitize    # the same under ASan and UBSan
-make firmware    # compiles for the Uno R4 Minima
-make format      # clang-format in place
+make test          # the core unit tests -- should be 3/3
+make sanitize      # the same under ASan and UBSan
+make firmware      # compiles for the Uno R4 Minima
+make format        # clang-format in place
+make format-check  # verify formatting the way CI does, changing nothing
 ```
 
 `make test` passing is the real check; it exercises the same `firmware/core/`
@@ -200,12 +222,11 @@ for cxx in g++ clang++; do
 done
 ```
 
-And check formatting the way CI checks it — `--dry-run --Werror` reports rather
-than rewrites:
+Formatting is checked the same way CI checks it, reporting rather than
+rewriting:
 
 ```sh
-find firmware tests -name '*.cpp' -o -name '*.h' \
-  | grep -v third_party | xargs clang-format --dry-run --Werror
+make format-check
 ```
 
 ## Editor setup
@@ -223,9 +244,11 @@ this for VS Code automatically.
 
 ## Troubleshooting
 
-**`make format` produces a diff CI rejects.** Your clang-format is not 23.1.0.
-Check with `clang-format --version`; a pip install inside an active venv shadows
-the system one.
+**`make format` refuses to run: "clang-format X, but this repo pins 23.1.0".**
+Working as intended — that version would format files differently from CI.
+`pip install clang-format==23.1.0` inside your venv, which shadows the system
+one. If you genuinely mean to use another version, pass
+`CLANG_FORMAT_PIN=<your version>`.
 
 **`pio run` fails to download a platform.** PlatformIO fetches toolchains on
 first use and needs network. Behind a proxy, set `HTTP_PROXY`/`HTTPS_PROXY`.
