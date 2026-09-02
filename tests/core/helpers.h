@@ -10,13 +10,14 @@ struct Builder {
   StateGraph g;
 
   uint8_t fixed(int32_t ms) {
-    g.dists[g.n_dists] = Distribution{DistributionKind::Fixed, 0, ms, 0, 0, nullptr, nullptr};
-    return g.n_dists++;
+    g.distributions[g.n_distributions] =
+        Distribution{DistributionKind::Fixed, 0, ms, 0, 0, nullptr, nullptr};
+    return g.n_distributions++;
   }
   uint8_t uniform(int32_t lo, int32_t hi) {
-    g.dists[g.n_dists] =
+    g.distributions[g.n_distributions] =
         Distribution{DistributionKind::Uniform, 0, lo, hi, 0, nullptr, nullptr};
-    return g.n_dists++;
+    return g.n_distributions++;
   }
 
   uint8_t state() {
@@ -29,15 +30,15 @@ struct Builder {
     return s;
   }
   void timeout(uint8_t s, uint8_t dist, uint8_t target) {
-    g.states[s].timeout_dist = dist;
-    g.states[s].timeout_goto = target;
+    g.states[s].timeout_duration = dist;
+    g.states[s].timeout_target = target;
   }
-  /// Conditions must be contiguous per state, so add them in one run per state.
-  uint8_t on(uint8_t s, Condition c) {
-    if (g.states[s].cond_count == 0) g.states[s].cond_first = g.n_conditions;
-    g.conditions[g.n_conditions] = c;
-    g.states[s].cond_count++;
-    return g.n_conditions++;
+  /// Transitions must be contiguous per state, so add them in one run per state.
+  uint8_t on(uint8_t s, Transition c) {
+    if (g.states[s].trans_count == 0) g.states[s].trans_first = g.n_transitions;
+    g.transitions[g.n_transitions] = c;
+    g.states[s].trans_count++;
+    return g.n_transitions++;
   }
   void on_entry(uint8_t s, Action a) {
     if (g.states[s].entry_count == 0) g.states[s].entry_first = g.n_actions;

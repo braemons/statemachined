@@ -40,9 +40,9 @@ TEST_CASE("a transition to a state that does not exist is refused") {
   const uint8_t w = c.state();
   const uint8_t h = c.terminal(Outcome::Hit);
   c.timeout(w, c.fixed(10), h);
-  Condition cond;
-  cond.all = bit(0);
-  cond.goto_state = 99;
+  Transition cond;
+  cond.all_high = bit(0);
+  cond.target_state = 99;
   c.on(w, cond);
   c.g.entry = w;
   CHECK(validate(c.g) == GraphError::BadTarget);
@@ -82,7 +82,7 @@ TEST_CASE("an unreachable state is refused even when the graph can end") {
   CHECK(validate(b.g) == GraphError::UnreachableState);
 }
 
-TEST_CASE("a state with no timeout and no conditions is a dead end") {
+TEST_CASE("a state with no timeout and no transitions is a dead end") {
   Builder b;
   const uint8_t stuck = b.state();
   b.g.entry = stuck;
@@ -90,11 +90,16 @@ TEST_CASE("a state with no timeout and no conditions is a dead end") {
 }
 
 TEST_CASE("every error has a message") {
-  const GraphError all[] = {
-      GraphError::None,           GraphError::TooManyStates, GraphError::TooManyConditions,
-      GraphError::TooManyActions, GraphError::TooManyDists,  GraphError::BadEntry,
-      GraphError::BadTarget,      GraphError::NoTerminal,    GraphError::UnreachableState};
-  for (GraphError e : all) {
+  const GraphError every_error[] = {GraphError::None,
+                                    GraphError::TooManyStates,
+                                    GraphError::TooManyTransitions,
+                                    GraphError::TooManyActions,
+                                    GraphError::TooManyDistributions,
+                                    GraphError::BadEntry,
+                                    GraphError::BadTarget,
+                                    GraphError::NoTerminal,
+                                    GraphError::UnreachableState};
+  for (GraphError e : every_error) {
     const char* m = graph_error_str(e);
     REQUIRE(m != nullptr);
     CHECK(m[0] != '\0');

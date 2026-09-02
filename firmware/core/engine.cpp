@@ -7,8 +7,8 @@ namespace {
 inline uint32_t since(uint32_t from, uint32_t now) { return now - from; }
 }  // namespace
 
-OutputUpdate TrialStateMachine::start(uint32_t trial_id, uint64_t session_seed, uint32_t now_us,
-                                      uint32_t word) {
+OutputUpdate TrialStateMachine::start(uint32_t trial_id, uint64_t session_seed,
+                                      Microseconds now_us, LineBitmask word) {
   result_ = TrialRecord{};
   result_.trial_id = trial_id;
   rng_.reseed(Rng::mix(session_seed, trial_id));
@@ -28,29 +28,31 @@ OutputUpdate TrialStateMachine::start(uint32_t trial_id, uint64_t session_seed, 
   return ops;
 }
 
-void TrialStateMachine::enter(uint8_t state, uint32_t now_us, uint32_t word) {
+void TrialStateMachine::enter(uint8_t state, Microseconds now_us, LineBitmask word) {
   current_ = state;
   entered_us_ = now_us;
   const State& s = graph_->states[state];
 
-  timeout_ms_ = (s.timeout_dist == 0xFF) ? -1 : graph_->dists[s.timeout_dist].draw(rng_);
+  timeout_ms_ = (s.timeout_duration == kNoDistribution)
+                    ? -1
+                    : graph_->distributions[s.timeout_duration].draw(rng_);
 
-  // Arm this state's conditions against the input word AS IT IS AT ENTRY.
+  // Arm this state's transitions against the input word AS IT IS AT ENTRY.
   //
-  // A condition is edge-triggered by default: it may not fire on a predicate
+  // A transition is edge-triggered by default: it may not fire on a predicate
   // that was *already* true when the state was entered -- "wait for the press",
   // not "wait until held" -- and `level` opts out of that. Arming has to be
   // decided against the real word, not assumed: a line that rises between entry
   // and the first scan is a genuine rising edge and must fire.
-  for (uint8_t c = 0; c < s.cond_count; ++c) {
-    const uint8_t i = s.cond_first + c;
-    const Condition& cond = graph_->conditions[i];
-    ConditionState& cs = cond_state_[i];
+  for (uint8_t c = 0; c < s.trans_count; ++c) {
+    const uint8_t i = s.trans_first + c;
+    const Transition& cond = graph_->transitions[i];
+    TransitionState& cs = trans_state_[i];
     cs.was_true = cond.holds(word);
-    cs.armed = cond.level || !cs.was_true;
+    cs.armed = cond.fire_if_true_on_entry || !cs.was_true;
     cs.held_since = now_us;
-    const uint8_t hd = graph_->conditions[i].hold_dist;
-    cs.hold_needed_ms = (hd == 0xFF) ? 0 : graph_->dists[hd].draw(rng_);
+    const uint8_t hd = graph_->transitions[i].hold_duration;
+    cs.hold_needed_ms = (hd == kNoDistribution) ? 0 : graph_->distributions[hd].draw(rng_);
   }
 }
 
@@ -76,12 +78,12 @@ OutputUpdate TrialStateMachine::apply_actions(uint8_t first, uint8_t count) cons
   return ops;
 }
 
-void TrialStateMachine::record(ExitCause cause, uint8_t cond_index, uint32_t now_us) {
+void TrialStateMachine::record(ExitCause cause, uint8_t trans_index, Microseconds now_us) {
   if (result_.path_len < kMaxPath) {
     StateVisit& e = result_.path[result_.path_len++];
     e.state_index = current_;
     e.cause = cause;
-    e.condition_index = cond_index;
+    e.transition_index = trans_index;
     e.drawn_ms = timeout_ms_;
     e.entered_us = entered_us_;
     e.duration_us = since(entered_us_, now_us);
@@ -91,8 +93,9 @@ void TrialStateMachine::record(ExitCause cause, uint8_t cond_index, uint32_t now
   }
 }
 
-OutputUpdate TrialStateMachine::leave(ExitCause cause, uint8_t cond_index, uint32_t now_us) {
-  record(cause, cond_index, now_us);
+OutputUpdate TrialStateMachine::leave(ExitCause cause, uint8_t trans_index,
+                                      Microseconds now_us) {
+  record(cause, trans_index, now_us);
   const State& s = graph_->states[current_];
   OutputUpdate ops = apply_actions(s.exit_first, s.exit_count);
   // Everything this state raised comes down, whether or not the graph said so.
@@ -103,9 +106,9 @@ OutputUpdate TrialStateMachine::leave(ExitCause cause, uint8_t cond_index, uint3
   return ops;
 }
 
-bool TrialStateMachine::cancel(CancelReason why, uint32_t now_us) {
+bool TrialStateMachine::cancel(CancelReason why, Microseconds now_us) {
   if (!running_) return false;  // first terminal decision wins
-  OutputUpdate ops = leave(ExitCause::Cancel, 0xFF, now_us);
+  OutputUpdate ops = leave(ExitCause::Cancel, kNoTransition, now_us);
   (void)ops;  // the caller re-reads via the next scan; see note below
   result_.outcome = Outcome::Cancelled;
   result_.cancel_reason = why;
@@ -116,7 +119,7 @@ bool TrialStateMachine::cancel(CancelReason why, uint32_t now_us) {
   return true;
 }
 
-OutputUpdate TrialStateMachine::scan(uint32_t word, uint32_t now_us) {
+OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
   OutputUpdate ops;
   if (has_pending_) {  // outputs owed by a cancel that happened between scans
     ops = pending_;
@@ -127,7 +130,8 @@ OutputUpdate TrialStateMachine::scan(uint32_t word, uint32_t now_us) {
 
   // The runtime cap. Validation proves a terminal state is reachable; it cannot
   // prove one is reached.
-  if (trial_cap_ms_ != 0 && since(started_us_, now_us) >= trial_cap_ms_ * 1000u) {
+  if (trial_cap_ms_ > 0 &&
+      since(started_us_, now_us) >= static_cast<uint32_t>(trial_cap_ms_) * 1000u) {
     cancel(CancelReason::TrialTimeout, now_us);
     if (has_pending_) {
       ops.set_high |= pending_.set_high;
@@ -140,12 +144,12 @@ OutputUpdate TrialStateMachine::scan(uint32_t word, uint32_t now_us) {
 
   const State& s = graph_->states[current_];
   uint8_t next = kNoState;
-  uint8_t fired = 0xFF;
+  uint8_t fired = kNoTransition;
   ExitCause cause = ExitCause::Timeout;
 
   // Skip predicate evaluation entirely when nothing on the inputs moved and no
-  // condition is mid-hold. At 10 kHz the overwhelmingly common scan then costs
-  // one compare. A condition accumulating a hold must still be re-checked, or
+  // transition is mid-hold. At 10 kHz the overwhelmingly common scan then costs
+  // one compare. A transition accumulating a hold must still be re-checked, or
   // "both levers held for 200 ms" would never fire on a steady word.
   const bool word_changed = !have_last_word_ || word != last_word_;
   last_word_ = word;
@@ -153,17 +157,17 @@ OutputUpdate TrialStateMachine::scan(uint32_t word, uint32_t now_us) {
   const bool need_eval = word_changed || hold_pending_;
   hold_pending_ = false;
 
-  // Only this state's conditions are evaluated -- cost is bounded by
-  // conditions-per-state, never by graph size. Declaration order resolves ties:
-  // the first condition in the list wins, as in Bpod.
-  for (uint8_t c = 0; need_eval && c < s.cond_count && next == kNoState; ++c) {
-    const uint8_t i = s.cond_first + c;
-    const Condition& cond = graph_->conditions[i];
-    ConditionState& cs = cond_state_[i];
+  // Only this state's transitions are evaluated -- cost is bounded by
+  // transitions-per-state, never by graph size. Declaration order resolves ties:
+  // the first transition in the list wins, as in Bpod.
+  for (uint8_t c = 0; need_eval && c < s.trans_count && next == kNoState; ++c) {
+    const uint8_t i = s.trans_first + c;
+    const Transition& cond = graph_->transitions[i];
+    TransitionState& cs = trans_state_[i];
     const bool now_true = cond.holds(word);
 
     if (!now_true) {
-      cs.armed = true;  // seen false: an edge condition may now fire
+      cs.armed = true;  // seen false: an edge transition may now fire
       cs.was_true = false;
       continue;
     }
@@ -177,14 +181,14 @@ OutputUpdate TrialStateMachine::scan(uint32_t word, uint32_t now_us) {
       hold_pending_ = true;  // re-check next scan even on an unchanged word
       continue;
     }
-    next = cond.goto_state;
+    next = cond.target_state;
     fired = c;
-    cause = ExitCause::Condition;
+    cause = ExitCause::Transition;
   }
 
   if (next == kNoState && timeout_ms_ >= 0 &&
       since(entered_us_, now_us) >= static_cast<uint32_t>(timeout_ms_) * 1000u) {
-    next = s.timeout_goto;
+    next = s.timeout_target;
     cause = ExitCause::Timeout;
   }
 
@@ -203,7 +207,7 @@ OutputUpdate TrialStateMachine::scan(uint32_t word, uint32_t now_us) {
     result_.outcome = target.outcome;
     result_.total_us = since(started_us_, now_us);
     current_ = next;
-    record(ExitCause::Terminal, 0xFF, now_us);
+    record(ExitCause::Terminal, kNoTransition, now_us);
     running_ = false;
     return ops;
   }

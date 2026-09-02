@@ -16,6 +16,8 @@
 #pragma once
 #include <cstdint>
 
+#include "config.h"
+
 namespace fsmd {
 
 class Rng {
@@ -51,15 +53,15 @@ enum class DistributionKind : uint8_t {
 
 struct Distribution {
   DistributionKind kind = DistributionKind::Fixed;
-  uint8_t n = 0;                      ///< Choice: number of options
-  int32_t a = 0;                      ///< Fixed: ms. Uniform/Exponential: min_ms
-  int32_t b = 0;                      ///< Uniform/Exponential: max_ms
-  int32_t c = 0;                      ///< Exponential: mean_ms
-  const int32_t* opts = nullptr;      ///< Choice
-  const uint16_t* weights = nullptr;  ///< Choice, optional
+  uint8_t n = 0;                       ///< Choice: number of options
+  Milliseconds a = 0;                  ///< Fixed: ms. Uniform/Exponential: min_ms
+  Milliseconds b = 0;                  ///< Uniform/Exponential: max_ms
+  Milliseconds c = 0;                  ///< Exponential: mean_ms
+  const Milliseconds* opts = nullptr;  ///< Choice
+  const uint16_t* weights = nullptr;   ///< Choice, optional
 
   /// Draw a duration in milliseconds. Called on state entry.
-  int32_t draw(Rng& rng) const;
+  Milliseconds draw(Rng& rng) const;
 };
 
 }  // namespace fsmd

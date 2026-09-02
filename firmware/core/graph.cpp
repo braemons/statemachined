@@ -4,25 +4,25 @@ namespace fsmd {
 
 GraphError validate(const StateGraph& g) {
   if (g.n_states == 0 || g.n_states > kMaxStates) return GraphError::TooManyStates;
-  if (g.n_conditions > kMaxConditions) return GraphError::TooManyConditions;
+  if (g.n_transitions > kMaxTransitions) return GraphError::TooManyTransitions;
   if (g.n_actions > kMaxActions) return GraphError::TooManyActions;
-  if (g.n_dists > kMaxDists) return GraphError::TooManyDists;
+  if (g.n_distributions > kMaxDistributions) return GraphError::TooManyDistributions;
   if (g.entry >= g.n_states) return GraphError::BadEntry;
 
   for (uint8_t i = 0; i < g.n_states; ++i) {
     const State& s = g.states[i];
-    if (s.cond_first + s.cond_count > g.n_conditions) return GraphError::TooManyConditions;
+    if (s.trans_first + s.trans_count > g.n_transitions) return GraphError::TooManyTransitions;
     if (s.entry_first + s.entry_count > g.n_actions) return GraphError::TooManyActions;
     if (s.exit_first + s.exit_count > g.n_actions) return GraphError::TooManyActions;
-    if (s.timeout_dist != 0xFF) {
-      if (s.timeout_dist >= g.n_dists) return GraphError::TooManyDists;
-      if (s.timeout_goto >= g.n_states) return GraphError::BadTarget;
+    if (s.timeout_duration != kNoDistribution) {
+      if (s.timeout_duration >= g.n_distributions) return GraphError::TooManyDistributions;
+      if (s.timeout_target >= g.n_states) return GraphError::BadTarget;
     }
-    for (uint8_t c = 0; c < s.cond_count; ++c) {
-      const Condition& cond = g.conditions[s.cond_first + c];
-      if (cond.goto_state >= g.n_states) return GraphError::BadTarget;
-      if (cond.hold_dist != 0xFF && cond.hold_dist >= g.n_dists)
-        return GraphError::TooManyDists;
+    for (uint8_t c = 0; c < s.trans_count; ++c) {
+      const Transition& cond = g.transitions[s.trans_first + c];
+      if (cond.target_state >= g.n_states) return GraphError::BadTarget;
+      if (cond.hold_duration != kNoDistribution && cond.hold_duration >= g.n_distributions)
+        return GraphError::TooManyDistributions;
     }
   }
 
@@ -45,8 +45,9 @@ GraphError validate(const StateGraph& g) {
         stack[top++] = t;
       }
     };
-    if (s.timeout_dist != 0xFF) push(s.timeout_goto);
-    for (uint8_t c = 0; c < s.cond_count; ++c) push(g.conditions[s.cond_first + c].goto_state);
+    if (s.timeout_duration != kNoDistribution) push(s.timeout_target);
+    for (uint8_t c = 0; c < s.trans_count; ++c)
+      push(g.transitions[s.trans_first + c].target_state);
   }
 
   if (!terminal_reachable) return GraphError::NoTerminal;
@@ -62,11 +63,11 @@ const char* graph_error_str(GraphError e) {
       return "ok";
     case GraphError::TooManyStates:
       return "too many states";
-    case GraphError::TooManyConditions:
-      return "too many conditions";
+    case GraphError::TooManyTransitions:
+      return "too many transitions";
     case GraphError::TooManyActions:
       return "too many output actions";
-    case GraphError::TooManyDists:
+    case GraphError::TooManyDistributions:
       return "too many distributions";
     case GraphError::BadEntry:
       return "entry state does not exist";

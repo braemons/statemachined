@@ -39,15 +39,15 @@ TEST_CASE("a timeout carries the trial to its terminal state") {
   CHECK(e.result().outcome == Outcome::NotStarted);
 }
 
-TEST_CASE("a single-line condition fires on its rising edge") {
+TEST_CASE("a single-line transition fires on its rising edge") {
   Builder b;
   const uint8_t wait = b.state();
   const uint8_t hit = b.terminal(Outcome::Hit);
   const uint8_t late = b.terminal(Outcome::Late);
   b.timeout(wait, b.fixed(1000), late);
-  Condition c;
-  c.all = bit(0);
-  c.goto_state = hit;
+  Transition c;
+  c.all_high = bit(0);
+  c.target_state = hit;
   b.on(wait, c);
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
@@ -64,19 +64,19 @@ TEST_CASE("a single-line condition fires on its rising edge") {
   CHECK(e.result().outcome == Outcome::Hit);
 }
 
-TEST_CASE("a condition already true at entry does not fire unless level") {
+TEST_CASE("a transition already true at entry does not fire unless level") {
   // "Wait for the press", not "wait until held". This is the distinction the
   // `level` flag exists for, and getting it backwards would make a lever the
   // animal is already holding end the trial instantly.
-  auto build = [](bool level, Builder& b) {
+  auto build = [](bool fire_if_true_on_entry, Builder& b) {
     const uint8_t wait = b.state();
     const uint8_t hit = b.terminal(Outcome::Hit);
     const uint8_t late = b.terminal(Outcome::Late);
     b.timeout(wait, b.fixed(1000), late);
-    Condition c;
-    c.all = bit(0);
-    c.goto_state = hit;
-    c.level = level;
+    Transition c;
+    c.all_high = bit(0);
+    c.target_state = hit;
+    c.fire_if_true_on_entry = fire_if_true_on_entry;
     b.on(wait, c);
     b.g.entry = wait;
   };
@@ -121,9 +121,9 @@ TEST_CASE("a line that rises between arming and the first scan is an edge") {
   const uint8_t hit = b.terminal(Outcome::Hit);
   const uint8_t late = b.terminal(Outcome::Late);
   b.timeout(wait, b.fixed(1000), late);
-  Condition c;
-  c.all = bit(0);
-  c.goto_state = hit;
+  Transition c;
+  c.all_high = bit(0);
+  c.target_state = hit;
   b.on(wait, c);
   b.g.entry = wait;
 
@@ -137,17 +137,17 @@ TEST_CASE("a line that rises between arming and the first scan is an edge") {
   CHECK(e.result().outcome == Outcome::Hit);
 }
 
-TEST_CASE("a combination of TTL lines is one condition") {
-  // The thing Bpod cannot express: its Condition is one channel and one value.
+TEST_CASE("a combination of TTL lines is one transition") {
+  // The thing Bpod cannot express: its Transition is one channel and one value.
   Builder b;
   const uint8_t wait = b.state();
   const uint8_t hit = b.terminal(Outcome::Hit);
   const uint8_t late = b.terminal(Outcome::Late);
   b.timeout(wait, b.fixed(5000), late);
-  Condition c;
-  c.all = bit(0) | bit(1);  // both levers
-  c.none = bit(2);          // and the abort line low
-  c.goto_state = hit;
+  Transition c;
+  c.all_high = bit(0) | bit(1);  // both levers
+  c.none_high = bit(2);          // and the abort line low
+  c.target_state = hit;
   b.on(wait, c);
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
@@ -175,9 +175,9 @@ TEST_CASE("any-of fires on whichever line arrives") {
   const uint8_t hit = b.terminal(Outcome::Hit);
   const uint8_t late = b.terminal(Outcome::Late);
   b.timeout(wait, b.fixed(5000), late);
-  Condition c;
-  c.any = bit(3) | bit(4);
-  c.goto_state = hit;
+  Transition c;
+  c.any_high = bit(3) | bit(4);
+  c.target_state = hit;
   b.on(wait, c);
   b.g.entry = wait;
 
@@ -198,10 +198,10 @@ TEST_CASE("hold_ms requires the predicate to stay true") {
   const uint8_t late = b.terminal(Outcome::Late);
   b.timeout(wait, b.fixed(5000), late);
   const uint8_t hold = b.fixed(200);
-  Condition c;
-  c.all = bit(0) | bit(1);
-  c.goto_state = hit;
-  c.hold_dist = hold;
+  Transition c;
+  c.all_high = bit(0) | bit(1);
+  c.target_state = hit;
+  c.hold_duration = hold;
   b.on(wait, c);
   b.g.entry = wait;
 
@@ -239,13 +239,13 @@ TEST_CASE("declaration order resolves a tie") {
   const uint8_t second = b.terminal(Outcome::WrongResponse);
   const uint8_t late = b.terminal(Outcome::Late);
   b.timeout(wait, b.fixed(5000), late);
-  Condition a;
-  a.all = bit(0);
-  a.goto_state = first;
+  Transition a;
+  a.all_high = bit(0);
+  a.target_state = first;
   b.on(wait, a);
-  Condition c;
-  c.any = bit(0) | bit(1);
-  c.goto_state = second;
+  Transition c;
+  c.any_high = bit(0) | bit(1);
+  c.target_state = second;
   b.on(wait, c);
   b.g.entry = wait;
 
@@ -254,7 +254,7 @@ TEST_CASE("declaration order resolves a tie") {
   uint32_t t = 0;
   e.start(1, 1, t);
   t += 100;
-  e.scan(bit(0), t);  // both conditions hold on this scan
+  e.scan(bit(0), t);  // both transitions hold on this scan
   CHECK(e.result().outcome == Outcome::Hit);
 }
 
@@ -317,9 +317,9 @@ TEST_CASE("the first terminal decision wins") {
   const uint8_t hit = b.terminal(Outcome::Hit);
   const uint8_t late = b.terminal(Outcome::Late);
   b.timeout(wait, b.fixed(5000), late);
-  Condition c;
-  c.all = bit(0);
-  c.goto_state = hit;
+  Transition c;
+  c.all_high = bit(0);
+  c.target_state = hit;
   b.on(wait, c);
   b.g.entry = wait;
 
@@ -338,14 +338,14 @@ TEST_CASE("the first terminal decision wins") {
 
 TEST_CASE("the trial cap catches a graph that cannot end") {
   // Validation proves a terminal state is reachable. It cannot prove one is
-  // reached: a condition that never becomes true is indistinguishable from a
+  // reached: a transition that never becomes true is indistinguishable from a
   // long foreperiod. The cap is why an unreachable exit cannot hang the rig.
   Builder b;
   const uint8_t wait = b.state();
   const uint8_t hit = b.terminal(Outcome::Hit);
-  Condition c;
-  c.all = bit(9);  // never raised in this test
-  c.goto_state = hit;
+  Transition c;
+  c.all_high = bit(9);  // never raised in this test
+  c.target_state = hit;
   b.on(wait, c);
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);  // it *looks* fine
@@ -368,9 +368,9 @@ TEST_CASE("a self-transition resets the timer and redraws the duration") {
   const uint8_t wait = b.state();
   const uint8_t ns = b.terminal(Outcome::NotStarted);
   b.timeout(wait, b.fixed(500), ns);
-  Condition c;
-  c.all = bit(0);
-  c.goto_state = wait;  // back to itself
+  Transition c;
+  c.all_high = bit(0);
+  c.target_state = wait;  // back to itself
   b.on(wait, c);
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
@@ -459,9 +459,9 @@ TEST_CASE("the path truncates rather than corrupts") {
   const uint8_t loop = b.state();
   const uint8_t hit = b.terminal(Outcome::Hit);
   b.timeout(loop, b.fixed(1), loop);  // self-loop every 1 ms
-  Condition c;
-  c.all = bit(0);
-  c.goto_state = hit;
+  Transition c;
+  c.all_high = bit(0);
+  c.target_state = hit;
   b.on(loop, c);
   b.g.entry = loop;
 

@@ -1,4 +1,4 @@
-// The scan loop: conditions, timers, transitions, and the trial record.
+// The scan loop: transitions, timers, transitions, and the trial record.
 //
 // Deterministic in (graph, seed, input word, time): given the same sequence of
 // calls it produces the same outputs and the same record on every board and on
@@ -21,7 +21,7 @@ namespace fsmd {
 
 enum class ExitCause : uint8_t {
   Timeout = 0,
-  Condition = 1,
+  Transition = 1,
   Cancel = 2,
   Terminal = 3,  ///< the trial ended here
 };
@@ -40,12 +40,13 @@ enum class CancelReason : uint8_t {
 struct StateVisit {
   uint8_t state_index = 0;
   ExitCause cause = ExitCause::Terminal;
-  uint8_t condition_index = 0xFF;  ///< which condition fired, if ExitCause::Condition
-  int32_t drawn_ms = 0;            ///< the realised duration, reported so that
-                                   ///< a random draw is evidence and not just
-                                   ///< reproducible
-  uint32_t entered_us = 0;
-  uint32_t duration_us = 0;
+  uint8_t transition_index =
+      kNoTransition;          ///< which transition fired, if ExitCause::Transition
+  Milliseconds drawn_ms = 0;  ///< the realised duration, reported so that
+                              ///< a random draw is evidence and not just
+                              ///< reproducible
+  Microseconds entered_us = 0;
+  Microseconds duration_us = 0;
 };
 
 struct TrialRecord {
@@ -55,15 +56,15 @@ struct TrialRecord {
   StateVisit path[kMaxPath];
   uint8_t path_len = 0;
   bool path_truncated = false;
-  uint32_t total_us = 0;
+  Microseconds total_us = 0;
 };
 
 /// What the engine wants done to the outputs this scan. The HAL applies it; the
 /// engine never touches a pin, which is what lets the whole thing run on the
 /// host.
 struct OutputUpdate {
-  uint32_t set_high = 0;
-  uint32_t set_low = 0;
+  LineBitmask set_high = 0;  ///< lines to drive high this scan
+  LineBitmask set_low = 0;   ///< lines to drive low this scan
 };
 
 class TrialStateMachine {
@@ -74,20 +75,20 @@ class TrialStateMachine {
   /// Begin a trial. `now_us` is the arming instant. Returns the entry
   /// state's output actions -- they are outputs like any other and must not
   /// wait for the first scan.
-  OutputUpdate start(uint32_t trial_id, uint64_t session_seed, uint32_t now_us,
-                     uint32_t word = 0);
+  OutputUpdate start(uint32_t trial_id, uint64_t session_seed, Microseconds now_us,
+                     LineBitmask word = 0);
 
   /// One scan. `word` is the conditioned input word (debounced, polarity
   /// normalised, disabled lines zeroed) -- the HAL's job, not the engine's.
   /// Returns the outputs to apply.
-  OutputUpdate scan(uint32_t word, uint32_t now_us);
+  OutputUpdate scan(LineBitmask word, Microseconds now_us);
 
   /// Force the trial to a terminal state through the ordinary exit path, so
   /// every output the current state raised is lowered by the same code that
   /// lowers it on any other transition. Returns false if the trial had already
   /// ended: the FIRST terminal decision wins, and we report what actually
   /// happened rather than a fabricated CANCELLED.
-  bool cancel(CancelReason why, uint32_t now_us);
+  bool cancel(CancelReason why, Microseconds now_us);
 
   bool running() const { return running_; }
   uint8_t current_state() const { return current_; }
@@ -96,31 +97,31 @@ class TrialStateMachine {
   /// Wall-clock cap on a whole trial. A graph is user data and may contain a
   /// state that never exits; validation cannot tell a 10 s foreperiod from a
   /// hang, so the cap stays regardless.
-  void set_trial_cap_ms(uint32_t ms) { trial_cap_ms_ = ms; }
+  void set_trial_cap_ms(Milliseconds ms) { trial_cap_ms_ = ms; }
 
  private:
-  void enter(uint8_t state, uint32_t now_us, uint32_t word);
-  OutputUpdate leave(ExitCause cause, uint8_t cond_index, uint32_t now_us);
-  void record(ExitCause cause, uint8_t cond_index, uint32_t now_us);
+  void enter(uint8_t state, Microseconds now_us, LineBitmask word);
+  OutputUpdate leave(ExitCause cause, uint8_t trans_index, Microseconds now_us);
+  void record(ExitCause cause, uint8_t trans_index, Microseconds now_us);
   OutputUpdate apply_actions(uint8_t first, uint8_t count) const;
 
   const StateGraph* graph_ = nullptr;
   Rng rng_;
   TrialRecord result_;
-  ConditionState cond_state_[kMaxConditions];
+  TransitionState trans_state_[kMaxTransitions];
 
   bool running_ = false;
   uint8_t current_ = kNoState;
-  uint32_t entered_us_ = 0;
-  uint32_t started_us_ = 0;
-  int32_t timeout_ms_ = -1;
-  uint32_t raised_ = 0;  ///< lines this state raised, lowered on exit
-  uint32_t last_word_ = 0;
+  Microseconds entered_us_ = 0;
+  Microseconds started_us_ = 0;
+  Milliseconds timeout_ms_ = -1;
+  LineBitmask raised_ = 0;  ///< lines this state raised, lowered on exit
+  LineBitmask last_word_ = 0;
   bool have_last_word_ = false;
-  uint32_t trial_cap_ms_ = 0;
+  Milliseconds trial_cap_ms_ = 0;
   OutputUpdate pending_;       ///< outputs owed by a cancel that arrived
   bool has_pending_ = false;   ///< between scans; applied on the next one
-  bool hold_pending_ = false;  ///< a condition is accumulating a hold, so
+  bool hold_pending_ = false;  ///< a transition is accumulating a hold, so
                                ///< an unchanged input word still needs work
 };
 

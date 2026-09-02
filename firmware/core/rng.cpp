@@ -78,7 +78,7 @@ int32_t Rng::between(int32_t lo, int32_t hi) {
   return lo + static_cast<int32_t>(below(span));
 }
 
-int32_t Distribution::draw(Rng& rng) const {
+Milliseconds Distribution::draw(Rng& rng) const {
   switch (kind) {
     case DistributionKind::Fixed:
       return a;
