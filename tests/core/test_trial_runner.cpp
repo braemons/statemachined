@@ -413,7 +413,7 @@ TEST_CASE("the path records every state with its realised duration") {
   advance(e, 0, t, ms(1000));
   CHECK_FALSE(e.running());
 
-  const RunRecord& r = e.run();
+  const StateMachineRunRecord& r = e.run();
   REQUIRE(r.path_len >= 2);
   CHECK(r.path[0].state_index == a);
   CHECK(r.path[0].drawn_ms == 200);

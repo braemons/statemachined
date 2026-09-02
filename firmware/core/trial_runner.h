@@ -31,11 +31,11 @@ class TrialRunner {
   /// a fabricated Cancelled.
   bool cancel(TrialCancelReason why, Microseconds now_us);
 
-  bool running() const { return machine_.running(); }
-  StateIndex current_state() const { return machine_.current_state(); }
+  bool running() const { return machine_.is_running(); }
+  StateIndex current_state() const { return machine_.get_current_state_index(); }
 
   const TrialRecord& result() const { return result_; }
-  const RunRecord& run() const { return machine_.record(); }
+  const StateMachineRunRecord& run() const { return machine_.get_record(); }
 
   void set_trial_cap_ms(Milliseconds ms) { machine_.set_run_cap_ms(ms); }
 

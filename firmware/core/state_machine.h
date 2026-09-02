@@ -41,7 +41,7 @@ struct StateVisit {
 };
 
 /// What the machine saw during one run, with no interpretation attached.
-struct RunRecord {
+struct StateMachineRunRecord {
   StateVisit path[kMaxPath];
   uint8_t path_len = 0;
   bool path_truncated = false;
@@ -72,9 +72,9 @@ class StateMachine {
   /// fabricated one.
   bool halt(Microseconds now_us);
 
-  bool running() const { return running_; }
-  StateIndex current_state() const { return current_; }
-  const RunRecord& record() const { return record_; }
+  bool is_running() const { return running_; }
+  StateIndex get_current_state_index() const { return current_; }
+  const StateMachineRunRecord& get_record() const { return record_; }
 
   /// Wall-clock cap on a whole run. A graph is user data and may contain a
   /// state that never exits; validation cannot tell a 10 s foreperiod from a
@@ -89,7 +89,7 @@ class StateMachine {
 
   const StateGraph* graph_ = nullptr;
   Rng rng_;
-  RunRecord record_;
+  StateMachineRunRecord record_;
   TransitionState trans_state_[kMaxTransitions];
 
   bool running_ = false;

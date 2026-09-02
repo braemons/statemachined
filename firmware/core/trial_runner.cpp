@@ -24,7 +24,7 @@ bool TrialRunner::cancel(TrialCancelReason why, Microseconds now_us) {
 
 void TrialRunner::settle() {
   if (result_.outcome != TrialOutcome::Undetermined) return;  // first verdict wins
-  const RunRecord& r = machine_.record();
+  const StateMachineRunRecord& r = machine_.get_record();
   if (r.terminal_code != kNotTerminal) {
     result_.outcome = outcome_of(r.terminal_code);
   } else if (r.hit_run_cap) {

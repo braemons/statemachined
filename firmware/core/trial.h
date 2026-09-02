@@ -45,7 +45,7 @@ enum class TrialCancelReason : uint8_t {
 };
 
 /// What fsmd adds to a run to make it a trial: an identity and a verdict on how
-/// it ended. Deliberately does NOT embed the RunRecord. That record holds
+/// it ended. Deliberately does NOT embed the StateMachineRunRecord. That record holds
 /// kMaxPath StateVisits -- about 1 KB on the reference board -- and copying it
 /// here would double the largest buffer in the system on a part with 32 KB.
 /// TrialRunner exposes the two side by side instead.

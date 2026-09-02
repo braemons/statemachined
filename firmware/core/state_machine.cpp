@@ -8,7 +8,7 @@ inline uint32_t since(uint32_t from, uint32_t now) { return now - from; }
 }  // namespace
 
 OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask word) {
-  record_ = RunRecord{};
+  record_ = StateMachineRunRecord{};
   rng_.reseed(seed);
   running_ = true;
   started_us_ = now_us;

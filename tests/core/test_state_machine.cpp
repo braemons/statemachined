@@ -31,12 +31,12 @@ TEST_CASE("a run reports the terminal code it reached, not an interpretation") {
   m.set_graph(&b.g);
   uint32_t t = 0;
   m.start(12345, t);
-  CHECK(m.running());
+  CHECK(m.is_running());
   advance(m, 0, t, ms(20));
 
-  CHECK_FALSE(m.running());
-  CHECK(m.record().terminal_code == 7);
-  CHECK_FALSE(m.record().halted);
+  CHECK_FALSE(m.is_running());
+  CHECK(m.get_record().terminal_code == 7);
+  CHECK_FALSE(m.get_record().halted);
 }
 
 TEST_CASE("halt ends a run through the ordinary exit path") {
@@ -56,9 +56,9 @@ TEST_CASE("halt ends a run through the ordinary exit path") {
 
   t += ms(5);
   CHECK(m.halt(t));
-  CHECK_FALSE(m.running());
-  CHECK(m.record().halted);
-  CHECK(m.record().terminal_code == kNotTerminal);
+  CHECK_FALSE(m.is_running());
+  CHECK(m.get_record().halted);
+  CHECK(m.get_record().terminal_code == kNotTerminal);
 
   // Everything the state raised comes down, even though the graph declared no
   // exit action at all.
@@ -84,9 +84,9 @@ TEST_CASE("the run cap stops a graph that validates but never ends") {
   m.start(1, t);
   advance(m, 0, t, ms(80));
 
-  CHECK_FALSE(m.running());
-  CHECK(m.record().hit_run_cap);
-  CHECK(m.record().terminal_code == kNotTerminal);
+  CHECK_FALSE(m.is_running());
+  CHECK(m.get_record().hit_run_cap);
+  CHECK(m.get_record().terminal_code == kNotTerminal);
 }
 
 TEST_CASE("the same seed gives the same run") {
@@ -102,7 +102,7 @@ TEST_CASE("the same seed gives the same run") {
     uint32_t t = 0;
     m.start(seed, t);
     advance(m, 0, t, ms(500));
-    return m.record().path[0].drawn_ms;
+    return m.get_record().path[0].drawn_ms;
   };
 
   CHECK(run_once(99) == run_once(99));
@@ -140,7 +140,7 @@ TEST_CASE("every output action kind has a defined effect on the update") {
   // track, so neither is forced high or low again on the way out.
   uint32_t t = 0;
   OutputUpdate on_exit;
-  while (m.running()) {
+  while (m.is_running()) {
     t += 100;
     const OutputUpdate u = m.scan(0, t);
     on_exit.set_high |= u.set_high;
