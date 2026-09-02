@@ -161,9 +161,17 @@ void setup() {
   // is all low, and it is applied again the moment a graph is committed.
   apply(g_session->fail_safe());
   if (!hal::start_scan_timer(kScanHz, on_tick)) {
+    // Without the timer nothing advances a trial, so the board would sit there
+    // accepting graphs and arming trials that then never end. Halt with every
+    // line at its safe level instead: a board that is obviously dead is a much
+    // better failure than one that looks healthy and silently never scans.
+    //
+    // Nothing here can report why, because the fault is at the point where the
+    // link has not yet been serviced. The bridge sees a device that never
+    // answers `hello`, which is at least unambiguous.
     apply(g_session->fail_safe());
-    for (;;)
-      ;
+    for (;;) {
+    }
   }
 }
 
