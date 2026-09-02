@@ -74,8 +74,15 @@ GraphError validate(const StateGraph& g) {
   // undefined behaviour. In practice it wraps, so line 40 silently drives line
   // 8 -- a graph asking for a line that does not exist must be refused here,
   // not quietly redirected onto a valve at trial 300.
-  for (uint8_t i = 0; i < g.n_output_actions; ++i)
-    if (g.output_actions[i].output_line >= kMaxOutputLines) return GraphError::BadOutputLine;
+  for (uint8_t i = 0; i < g.n_output_actions; ++i) {
+    const OutputAction& a = g.output_actions[i];
+    if (a.output_line >= kMaxOutputLines) return GraphError::BadOutputLine;
+    // A zero-width pulse raises a line and schedules its fall for the same
+    // instant. Whether that reaches a pin at all depends on when the scan
+    // lands, so it is a graph that means nothing in particular -- refuse it
+    // rather than let a reward be silently zero.
+    if (a.kind == OutputActionKind::Pulse && a.pulse_ms == 0) return GraphError::BadPulse;
+  }
 
   // A Choice with no options draws from nothing. draw() returns 0 rather than
   // reading past an empty array, which is safe and silently wrong: a graph
@@ -157,6 +164,8 @@ const char* graph_error_str(GraphError e) {
       return "transition to a state that does not exist";
     case GraphError::BadOutputLine:
       return "an output action names a line the board does not have";
+    case GraphError::BadPulse:
+      return "a pulse output action has no width, so it would never come down";
     case GraphError::BadDistribution:
       return "a choice distribution has no options to choose from";
     case GraphError::NoTerminal:

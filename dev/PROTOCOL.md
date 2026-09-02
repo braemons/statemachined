@@ -253,7 +253,20 @@ tie-break an experimenter can reason about from reading the graph.
 | `on` | `"entry"` or `"exit"` | When it runs |
 | `line` | `u8` | Output line. Must be below the device's `n_output_lines` |
 | `kind` | `"high"` `"low"` `"toggle"` `"pulse"` | |
-| `ms` | `u16` | `pulse` only: how long it stays high. Ignored otherwise |
+| `ms` | `u16` | `pulse` only: how long it stays high. Must be non-zero. Ignored otherwise |
+
+**`pulse` is "high for at most `ms`", not "high for exactly `ms`".** It comes
+down on the device's own clock, at scan resolution, or when the state is left —
+whichever happens first. A pulse longer than its state does not outlive it. A
+`pulse` with `ms` of 0 is refused as `bad_pulse`: it would ask for a line to
+rise and fall in the same instant, and whether that ever reached a pin would
+depend on when the scan landed.
+
+**`toggle` is resolved against the device's own record of where the line is**,
+which starts from the graph's `safe` levels at reset and follows every action
+since. It is not a read-back of the pin. If something outside the graph drives
+an output line, the device does not know and a subsequent `toggle` goes the
+wrong way.
 
 **All of a state's `entry` actions must arrive before its first `exit` action.**
 The two are separate slices of the same pool and each has to be contiguous, so
@@ -265,10 +278,13 @@ written: `pulse` the valve line on entering `Hit`. The alternative — hanging i
 off the exit of whichever state happened to precede the terminal one — spreads a
 single intention across every route into it.
 
-What the device cannot do is lower them, since nothing exits a terminal state.
-A `pulse` falls on the device's own timer. Anything set `high` there **stays
-high until the next trial starts or a fail-safe runs**, which is deliberate:
-prefer `pulse` for anything that must come down on its own.
+What the device cannot do is lower them *by exiting*, since nothing exits a
+terminal state. A `pulse` still falls on its own width — the device keeps
+servicing pulses after the trial has ended, so a reward closes itself. Anything
+set `high` there **stays high until the next trial starts or a fail-safe runs**.
+
+That asymmetry is the reason to write a reward as `pulse` rather than as `high`:
+only one of the two comes down on its own.
 
 **Every line a state drives high is driven low again when the state is left**,
 by the device, whatever the exit cause and whether or not the graph said so. An

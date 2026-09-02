@@ -101,7 +101,10 @@ class HostLinkSession {
   /// Drive every output to its configured safe level. Called on link loss, on a
   /// refused graph and at reset -- "off" is not always "low", so this is data
   /// rather than a zeroed word.
-  OutputUpdate fail_safe() const;
+  ///
+  /// Not const: it also tells the engine where the pins now are, so a Toggle
+  /// after a fail-safe goes the right way. Nothing can read a pin back.
+  OutputUpdate fail_safe();
 
   LinkState state() const { return state_; }
   bool has_graph() const { return have_graph_; }

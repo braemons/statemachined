@@ -431,7 +431,11 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
     booted_us_ = now_us;
     have_boot_ = true;
   }
-  if (state_ != LinkState::Running) return OutputUpdate{};
+  // A pulse raised by the last act of a trial -- the ordinary way to write a
+  // reward -- falls due after the run has ended and the session is back to
+  // Idle. Returning an empty update here would leave the valve open until the
+  // next trial started.
+  if (state_ != LinkState::Running) return runner_.service_outputs(now_us);
 
   const OutputUpdate ops = runner_.advance(word, now_us);
   if (!runner_.running()) {
@@ -443,7 +447,7 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
   return ops;
 }
 
-OutputUpdate HostLinkSession::fail_safe() const {
+OutputUpdate HostLinkSession::fail_safe() {
   OutputUpdate ops;
   const LineBitmask safe = have_graph_ ? live_graph_.output_safe_levels : 0;
   ops.set_high = safe;
@@ -453,6 +457,9 @@ OutputUpdate HostLinkSession::fail_safe() const {
                               ? 0xFFFFFFFFu
                               : ((1u << identity_.output_line_count) - 1u);
   ops.set_low = all & ~safe;
+  // The engine's shadow of the levels is now wrong unless it is told. A Toggle
+  // is the only action whose meaning depends on where the line already was.
+  runner_.set_initial_levels(ops.set_high);
   return ops;
 }
 

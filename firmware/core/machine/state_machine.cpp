@@ -5,7 +5,28 @@ namespace {
 /// Unsigned wraparound-safe elapsed time. micros() wraps every ~71 minutes on a
 /// 32-bit counter and a trial must not care.
 inline uint32_t since(uint32_t from, uint32_t now) { return now - from; }
+
+/// Has `deadline` passed? Signed difference, so it stays right across the
+/// ~71-minute wrap of a 32-bit microsecond counter: correct as long as the
+/// deadline is within ~35 minutes of now, and a pulse width is milliseconds.
+inline bool reached(uint32_t deadline, uint32_t now) {
+  return static_cast<int32_t>(now - deadline) >= 0;
+}
+
+/// Merge `later` over `earlier`, per line. Not two ORs: within one scan a line
+/// can be lowered by a state's exit and raised again by the next state's entry,
+/// and the answer is "high", not "both".
+inline void merge(OutputUpdate& earlier, const OutputUpdate& later) {
+  earlier.set_high = (earlier.set_high | later.set_high) & ~later.set_low;
+  earlier.set_low = (earlier.set_low | later.set_low) & ~later.set_high;
+}
 }  // namespace
+
+void StateMachine::note(const OutputUpdate& ops) {
+  driven_ = (driven_ | ops.set_high) & ~ops.set_low;
+  pulsing_ &= ~ops.set_low;  // a line driven low is no longer pulsing
+  raised_ &= ~ops.set_low;
+}
 
 OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask word) {
   // Anything the previous run left raised comes down here. A terminal state's
@@ -27,9 +48,10 @@ OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask
 
   enter(graph_->entry, now_us, word);
   const State& s = graph_->states[current_];
-  OutputUpdate ops = apply_actions(s.first_entry_action, s.entry_action_count);
+  OutputUpdate ops = apply_actions(s.first_entry_action, s.entry_action_count, now_us);
   ops.set_low |= left_over & ~ops.set_high;
   raised_ |= ops.set_high;
+  note(ops);
   return ops;
 }
 
@@ -62,25 +84,49 @@ void StateMachine::enter(StateIndex state, Microseconds now_us, LineBitmask word
   }
 }
 
-OutputUpdate StateMachine::apply_actions(OutputActionIndex first, uint8_t count) const {
+OutputUpdate StateMachine::apply_actions(OutputActionIndex first, uint8_t count,
+                                         Microseconds now_us) {
   OutputUpdate ops;
+  // The running level, seeded from the shadow. A list saying `toggle` twice on
+  // one line means "back where it started", and the second toggle has to see
+  // what the first one did rather than what the pin was before either.
+  LineBitmask level = driven_;
   for (uint8_t i = 0; i < count; ++i) {
     const OutputAction& a = graph_->output_actions[first + i];
     const LineBitmask bit = 1u << a.output_line;
+    bool high;
     switch (a.kind) {
       case OutputActionKind::High:
-      case OutputActionKind::Pulse:  // the pulse's falling edge is the HAL's timer
-        ops.set_high |= bit;
+        high = true;
         break;
       case OutputActionKind::Low:
-        ops.set_low |= bit;
+        high = false;
         break;
       case OutputActionKind::Toggle:
-        // Toggle is resolved against the live level by the HAL; represent it as
-        // neither, and let the HAL read-modify-write.
+        high = (level & bit) == 0;
+        break;
+      case OutputActionKind::Pulse:
+      default:
+        high = true;
+        // Re-pulsing a line that is already pulsing restarts it at the new
+        // width -- which is what a graph re-entering a state means by it.
+        pulsing_ |= bit;
+        pulse_deadline_us_[a.output_line] =
+            now_us + static_cast<Microseconds>(a.pulse_ms) * 1000u;
         break;
     }
+    if (high) {
+      ops.set_high |= bit;
+      ops.set_low &= ~bit;
+      level |= bit;
+    } else {
+      ops.set_low |= bit;
+      ops.set_high &= ~bit;
+      level &= ~bit;
+      pulsing_ &= ~bit;
+    }
   }
+  driven_ = level;
   return ops;
 }
 
@@ -104,7 +150,7 @@ OutputUpdate StateMachine::leave(StateExitCause cause, TransitionIndex fired,
                                  Microseconds now_us) {
   record_visit(cause, fired, now_us);
   const State& s = graph_->states[current_];
-  OutputUpdate ops = apply_actions(s.first_exit_action, s.exit_action_count);
+  OutputUpdate ops = apply_actions(s.first_exit_action, s.exit_action_count, now_us);
   // Everything this state raised comes down, whether or not the graph said so.
   // A valve left open because a graph forgot an on_exit is not an acceptable
   // failure mode, so the machine guarantees it rather than trusting the data.
@@ -124,13 +170,33 @@ bool StateMachine::force_end(Microseconds now_us) {
   return true;
 }
 
-OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
+OutputUpdate StateMachine::service_outputs(Microseconds now_us) {
   OutputUpdate ops;
   if (has_pending_) {  // outputs owed by a cancel that happened between scans
     ops = pending_;
     has_pending_ = false;
     pending_ = OutputUpdate{};
   }
+
+  // The common scan has no pulse in flight and pays one compare for it.
+  for (LineBitmask rest = pulsing_; rest != 0;) {
+    const uint8_t line = static_cast<uint8_t>(__builtin_ctz(rest));
+    const LineBitmask bit = 1u << line;
+    rest &= ~bit;
+    if (reached(pulse_deadline_us_[line], now_us)) {
+      ops.set_low |= bit;
+      ops.set_high &= ~bit;
+    }
+  }
+
+  note(ops);
+  return ops;
+}
+
+OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
+  // Pulses and cancel debts come down whether or not a run is in flight, so
+  // this is one call rather than a copy of the same logic.
+  OutputUpdate ops = service_outputs(now_us);
   if (!running_) return ops;
 
   // The runtime cap. Validation proves a terminal state is reachable; it cannot
@@ -139,12 +205,7 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
       since(started_us_, now_us) >= static_cast<uint32_t>(run_cap_ms_) * 1000u) {
     force_end(now_us);
     record_.hit_run_cap = true;
-    if (has_pending_) {
-      ops.set_high |= pending_.set_high;
-      ops.set_low |= pending_.set_low;
-      has_pending_ = false;
-      pending_ = OutputUpdate{};
-    }
+    merge(ops, service_outputs(now_us));
     return ops;
   }
 
@@ -205,8 +266,7 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   // with `NewState != CurrentState`, which silently makes a self-loop a no-op;
   // a re-triggerable timeout should be expressible.
   const OutputUpdate exit_ops = leave(cause, fired, now_us);
-  ops.set_high |= exit_ops.set_high;
-  ops.set_low |= exit_ops.set_low;
+  merge(ops, exit_ops);
 
   const State& target = graph_->states[next];
   if (target.terminal()) {
@@ -221,26 +281,29 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
     // hang it off the exit of whichever state happened to precede the terminal
     // one -- spreads one intention over every route into it.
     //
-    // What the machine cannot do is lower them, because there is no exit from a
-    // terminal state. They are left raised and carried in raised_, and the next
-    // start() lowers whatever the previous run left up. So a Pulse comes down
-    // on the HAL's timer, and a High stays high until the next trial begins or
-    // fail_safe runs -- deliberate, and the only honest option once a run has
-    // ended.
+    // What the machine cannot do is lower them by *exiting*, because there is
+    // no exit from a terminal state. So a Pulse still comes down on its own
+    // width -- service_outputs() keeps ticking after the run has ended, which
+    // is exactly why it is separate from advance() -- and anything set High
+    // stays high until the next trial begins or fail_safe runs. High is left
+    // raised, carried in raised_, and the next start() pays it off.
+    //
+    // Which is the argument for writing a reward as `pulse` rather than as
+    // `high`: only one of the two comes down on its own.
     const OutputUpdate final_ops =
-        apply_actions(target.first_entry_action, target.entry_action_count);
-    ops.set_high |= final_ops.set_high;
-    ops.set_low = (ops.set_low | final_ops.set_low) & ~final_ops.set_high;
+        apply_actions(target.first_entry_action, target.entry_action_count, now_us);
+    merge(ops, final_ops);
     raised_ = final_ops.set_high;
+    note(ops);
     return ops;
   }
 
   enter(next, now_us, word);
   const OutputUpdate entry_ops =
-      apply_actions(target.first_entry_action, target.entry_action_count);
-  ops.set_high |= entry_ops.set_high;
-  ops.set_low = (ops.set_low | entry_ops.set_low) & ~entry_ops.set_high;
+      apply_actions(target.first_entry_action, target.entry_action_count, now_us);
+  merge(ops, entry_ops);
   raised_ |= entry_ops.set_high;
+  note(ops);
   return ops;
 }
 
