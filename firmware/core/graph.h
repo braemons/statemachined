@@ -22,26 +22,26 @@ namespace fsmd {
 /// the lab has written and every analysis script that reads one. NEVER
 /// renumber. Mirrors triald's TrialOutcome and VStim's TDR::TrialOutcome.
 enum class Outcome : int8_t {
-  kUndetermined = -1,
-  kNotStarted = 0,
-  kHit = 1,
-  kWrongResponse = 2,
-  kEarlyHit = 3,
-  kEarlyWrongResponse = 4,
-  kEarly = 5,
-  kLate = 6,
-  kEyeError = 7,
-  kInexpectedStartSignal = 8,
-  kWrongStartSignal = 9,
-  kCancelled = 10,
+  Undetermined = -1,
+  NotStarted = 0,
+  Hit = 1,
+  WrongResponse = 2,
+  EarlyHit = 3,
+  EarlyWrongResponse = 4,
+  Early = 5,
+  Late = 6,
+  EyeError = 7,
+  InexpectedStartSignal = 8,
+  WrongStartSignal = 9,
+  Cancelled = 10,
 };
 
-enum class ActionKind : uint8_t { kHigh = 0, kLow = 1, kToggle = 2, kPulse = 3 };
+enum class ActionKind : uint8_t { High = 0, Low = 1, Toggle = 2, Pulse = 3 };
 
 struct Action {
   uint8_t line = 0;
-  ActionKind kind = ActionKind::kHigh;
-  uint16_t ms = 0;  ///< kPulse only
+  ActionKind kind = ActionKind::High;
+  uint16_t ms = 0;  ///< Pulse only
 };
 
 struct State {
@@ -50,9 +50,9 @@ struct State {
   uint8_t exit_first = 0, exit_count = 0;
   uint8_t timeout_dist = 0xFF;  ///< 0xFF = no timeout
   uint8_t timeout_goto = kNoState;
-  Outcome outcome = Outcome::kUndetermined;  ///< set => terminal
+  Outcome outcome = Outcome::Undetermined;  ///< set => terminal
 
-  constexpr bool terminal() const { return outcome != Outcome::kUndetermined; }
+  constexpr bool terminal() const { return outcome != Outcome::Undetermined; }
 };
 
 /// Per-line input conditioning, applied when the word is assembled so that every
@@ -65,7 +65,7 @@ struct InputConfig {
   uint16_t debounce_ms[kMaxLines] = {0};
 };
 
-struct Graph {
+struct StateGraph {
   uint16_t version = 0;
   uint8_t entry = kNoState;
   uint8_t n_states = 0;
@@ -76,7 +76,7 @@ struct Graph {
   State states[kMaxStates];
   Condition conditions[kMaxConditions];
   Action actions[kMaxActions];
-  Dist dists[kMaxDists];
+  Distribution dists[kMaxDists];
   InputConfig inputs;
 
   /// Levels outputs are driven to on watchdog timeout, reset, link loss or a
@@ -85,22 +85,22 @@ struct Graph {
 };
 
 enum class GraphError : uint8_t {
-  kNone = 0,
-  kTooManyStates,
-  kTooManyConditions,
-  kTooManyActions,
-  kTooManyDists,
-  kBadEntry,
-  kBadTarget,   ///< a transition to a state that does not exist
-  kNoTerminal,  ///< no terminal state reachable from the entry state
-  kUnreachableState,
+  None = 0,
+  TooManyStates,
+  TooManyConditions,
+  TooManyActions,
+  TooManyDists,
+  BadEntry,
+  BadTarget,   ///< a transition to a state that does not exist
+  NoTerminal,  ///< no terminal state reachable from the entry state
+  UnreachableState,
 };
 
 /// Refuse a bad graph at upload, never at trial 300 -- triald "refuses rather
 /// than failing later". Reachability analysis does not remove the need for the
 /// runtime trial cap: static analysis cannot distinguish a 10 s foreperiod from
 /// a hang.
-GraphError validate(const Graph& g);
+GraphError validate(const StateGraph& g);
 
 const char* graph_error_str(GraphError e);
 

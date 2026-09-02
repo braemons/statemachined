@@ -2,27 +2,27 @@
 
 namespace fsmd {
 
-GraphError validate(const Graph& g) {
-  if (g.n_states == 0 || g.n_states > kMaxStates) return GraphError::kTooManyStates;
-  if (g.n_conditions > kMaxConditions) return GraphError::kTooManyConditions;
-  if (g.n_actions > kMaxActions) return GraphError::kTooManyActions;
-  if (g.n_dists > kMaxDists) return GraphError::kTooManyDists;
-  if (g.entry >= g.n_states) return GraphError::kBadEntry;
+GraphError validate(const StateGraph& g) {
+  if (g.n_states == 0 || g.n_states > kMaxStates) return GraphError::TooManyStates;
+  if (g.n_conditions > kMaxConditions) return GraphError::TooManyConditions;
+  if (g.n_actions > kMaxActions) return GraphError::TooManyActions;
+  if (g.n_dists > kMaxDists) return GraphError::TooManyDists;
+  if (g.entry >= g.n_states) return GraphError::BadEntry;
 
   for (uint8_t i = 0; i < g.n_states; ++i) {
     const State& s = g.states[i];
-    if (s.cond_first + s.cond_count > g.n_conditions) return GraphError::kTooManyConditions;
-    if (s.entry_first + s.entry_count > g.n_actions) return GraphError::kTooManyActions;
-    if (s.exit_first + s.exit_count > g.n_actions) return GraphError::kTooManyActions;
+    if (s.cond_first + s.cond_count > g.n_conditions) return GraphError::TooManyConditions;
+    if (s.entry_first + s.entry_count > g.n_actions) return GraphError::TooManyActions;
+    if (s.exit_first + s.exit_count > g.n_actions) return GraphError::TooManyActions;
     if (s.timeout_dist != 0xFF) {
-      if (s.timeout_dist >= g.n_dists) return GraphError::kTooManyDists;
-      if (s.timeout_goto >= g.n_states) return GraphError::kBadTarget;
+      if (s.timeout_dist >= g.n_dists) return GraphError::TooManyDists;
+      if (s.timeout_goto >= g.n_states) return GraphError::BadTarget;
     }
     for (uint8_t c = 0; c < s.cond_count; ++c) {
       const Condition& cond = g.conditions[s.cond_first + c];
-      if (cond.goto_state >= g.n_states) return GraphError::kBadTarget;
+      if (cond.goto_state >= g.n_states) return GraphError::BadTarget;
       if (cond.hold_dist != 0xFF && cond.hold_dist >= g.n_dists)
-        return GraphError::kTooManyDists;
+        return GraphError::TooManyDists;
     }
   }
 
@@ -49,32 +49,32 @@ GraphError validate(const Graph& g) {
     for (uint8_t c = 0; c < s.cond_count; ++c) push(g.conditions[s.cond_first + c].goto_state);
   }
 
-  if (!terminal_reachable) return GraphError::kNoTerminal;
+  if (!terminal_reachable) return GraphError::NoTerminal;
   for (uint8_t i = 0; i < g.n_states; ++i)
-    if (!seen[i]) return GraphError::kUnreachableState;
+    if (!seen[i]) return GraphError::UnreachableState;
 
-  return GraphError::kNone;
+  return GraphError::None;
 }
 
 const char* graph_error_str(GraphError e) {
   switch (e) {
-    case GraphError::kNone:
+    case GraphError::None:
       return "ok";
-    case GraphError::kTooManyStates:
+    case GraphError::TooManyStates:
       return "too many states";
-    case GraphError::kTooManyConditions:
+    case GraphError::TooManyConditions:
       return "too many conditions";
-    case GraphError::kTooManyActions:
+    case GraphError::TooManyActions:
       return "too many output actions";
-    case GraphError::kTooManyDists:
+    case GraphError::TooManyDists:
       return "too many distributions";
-    case GraphError::kBadEntry:
+    case GraphError::BadEntry:
       return "entry state does not exist";
-    case GraphError::kBadTarget:
+    case GraphError::BadTarget:
       return "transition to a state that does not exist";
-    case GraphError::kNoTerminal:
+    case GraphError::NoTerminal:
       return "no terminal state is reachable from the entry state";
-    case GraphError::kUnreachableState:
+    case GraphError::UnreachableState:
       return "a state is unreachable from the entry state";
   }
   return "unknown";

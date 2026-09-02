@@ -7,14 +7,15 @@
 namespace fsmd::test {
 
 struct Builder {
-  Graph g;
+  StateGraph g;
 
   uint8_t fixed(int32_t ms) {
-    g.dists[g.n_dists] = Dist{DistKind::kFixed, 0, ms, 0, 0, nullptr, nullptr};
+    g.dists[g.n_dists] = Distribution{DistributionKind::Fixed, 0, ms, 0, 0, nullptr, nullptr};
     return g.n_dists++;
   }
   uint8_t uniform(int32_t lo, int32_t hi) {
-    g.dists[g.n_dists] = Dist{DistKind::kUniform, 0, lo, hi, 0, nullptr, nullptr};
+    g.dists[g.n_dists] =
+        Distribution{DistributionKind::Uniform, 0, lo, hi, 0, nullptr, nullptr};
     return g.n_dists++;
   }
 

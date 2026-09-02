@@ -7,9 +7,9 @@ namespace {
 inline uint32_t since(uint32_t from, uint32_t now) { return now - from; }
 }  // namespace
 
-OutputOps Engine::start(uint32_t trial_id, uint64_t session_seed, uint32_t now_us,
-                        uint32_t word) {
-  result_ = Result{};
+OutputUpdate TrialStateMachine::start(uint32_t trial_id, uint64_t session_seed, uint32_t now_us,
+                                      uint32_t word) {
+  result_ = TrialRecord{};
   result_.trial_id = trial_id;
   rng_.reseed(Rng::mix(session_seed, trial_id));
   running_ = true;
@@ -18,17 +18,17 @@ OutputOps Engine::start(uint32_t trial_id, uint64_t session_seed, uint32_t now_u
   have_last_word_ = false;
   hold_pending_ = false;
   has_pending_ = false;
-  pending_ = OutputOps{};
-  if (graph_ == nullptr) return OutputOps{};
+  pending_ = OutputUpdate{};
+  if (graph_ == nullptr) return OutputUpdate{};
 
   enter(graph_->entry, now_us, word);
   const State& s = graph_->states[current_];
-  OutputOps ops = apply_actions(s.entry_first, s.entry_count);
+  OutputUpdate ops = apply_actions(s.entry_first, s.entry_count);
   raised_ |= ops.set_high;
   return ops;
 }
 
-void Engine::enter(uint8_t state, uint32_t now_us, uint32_t word) {
+void TrialStateMachine::enter(uint8_t state, uint32_t now_us, uint32_t word) {
   current_ = state;
   entered_us_ = now_us;
   const State& s = graph_->states[state];
@@ -54,20 +54,20 @@ void Engine::enter(uint8_t state, uint32_t now_us, uint32_t word) {
   }
 }
 
-OutputOps Engine::apply_actions(uint8_t first, uint8_t count) const {
-  OutputOps ops;
+OutputUpdate TrialStateMachine::apply_actions(uint8_t first, uint8_t count) const {
+  OutputUpdate ops;
   for (uint8_t i = 0; i < count; ++i) {
     const Action& a = graph_->actions[first + i];
     const uint32_t bit = 1u << a.line;
     switch (a.kind) {
-      case ActionKind::kHigh:
-      case ActionKind::kPulse:  // the pulse's falling edge is the HAL's timer
+      case ActionKind::High:
+      case ActionKind::Pulse:  // the pulse's falling edge is the HAL's timer
         ops.set_high |= bit;
         break;
-      case ActionKind::kLow:
+      case ActionKind::Low:
         ops.set_low |= bit;
         break;
-      case ActionKind::kToggle:
+      case ActionKind::Toggle:
         // Toggle is resolved against the live level by the HAL; represent it as
         // neither, and let the HAL read-modify-write.
         break;
@@ -76,9 +76,9 @@ OutputOps Engine::apply_actions(uint8_t first, uint8_t count) const {
   return ops;
 }
 
-void Engine::record(ExitCause cause, uint8_t cond_index, uint32_t now_us) {
+void TrialStateMachine::record(ExitCause cause, uint8_t cond_index, uint32_t now_us) {
   if (result_.path_len < kMaxPath) {
-    PathEntry& e = result_.path[result_.path_len++];
+    StateVisit& e = result_.path[result_.path_len++];
     e.state_index = current_;
     e.cause = cause;
     e.condition_index = cond_index;
@@ -91,10 +91,10 @@ void Engine::record(ExitCause cause, uint8_t cond_index, uint32_t now_us) {
   }
 }
 
-OutputOps Engine::leave(ExitCause cause, uint8_t cond_index, uint32_t now_us) {
+OutputUpdate TrialStateMachine::leave(ExitCause cause, uint8_t cond_index, uint32_t now_us) {
   record(cause, cond_index, now_us);
   const State& s = graph_->states[current_];
-  OutputOps ops = apply_actions(s.exit_first, s.exit_count);
+  OutputUpdate ops = apply_actions(s.exit_first, s.exit_count);
   // Everything this state raised comes down, whether or not the graph said so.
   // A valve left open because a graph forgot an on_exit is not an acceptable
   // failure mode, so the engine guarantees it rather than trusting the data.
@@ -103,11 +103,11 @@ OutputOps Engine::leave(ExitCause cause, uint8_t cond_index, uint32_t now_us) {
   return ops;
 }
 
-bool Engine::cancel(CancelReason why, uint32_t now_us) {
+bool TrialStateMachine::cancel(CancelReason why, uint32_t now_us) {
   if (!running_) return false;  // first terminal decision wins
-  OutputOps ops = leave(ExitCause::kCancel, 0xFF, now_us);
+  OutputUpdate ops = leave(ExitCause::Cancel, 0xFF, now_us);
   (void)ops;  // the caller re-reads via the next scan; see note below
-  result_.outcome = Outcome::kCancelled;
+  result_.outcome = Outcome::Cancelled;
   result_.cancel_reason = why;
   result_.total_us = since(started_us_, now_us);
   running_ = false;
@@ -116,24 +116,24 @@ bool Engine::cancel(CancelReason why, uint32_t now_us) {
   return true;
 }
 
-OutputOps Engine::scan(uint32_t word, uint32_t now_us) {
-  OutputOps ops;
+OutputUpdate TrialStateMachine::scan(uint32_t word, uint32_t now_us) {
+  OutputUpdate ops;
   if (has_pending_) {  // outputs owed by a cancel that happened between scans
     ops = pending_;
     has_pending_ = false;
-    pending_ = OutputOps{};
+    pending_ = OutputUpdate{};
   }
   if (!running_ || graph_ == nullptr) return ops;
 
   // The runtime cap. Validation proves a terminal state is reachable; it cannot
   // prove one is reached.
   if (trial_cap_ms_ != 0 && since(started_us_, now_us) >= trial_cap_ms_ * 1000u) {
-    cancel(CancelReason::kTrialTimeout, now_us);
+    cancel(CancelReason::TrialTimeout, now_us);
     if (has_pending_) {
       ops.set_high |= pending_.set_high;
       ops.set_low |= pending_.set_low;
       has_pending_ = false;
-      pending_ = OutputOps{};
+      pending_ = OutputUpdate{};
     }
     return ops;
   }
@@ -141,7 +141,7 @@ OutputOps Engine::scan(uint32_t word, uint32_t now_us) {
   const State& s = graph_->states[current_];
   uint8_t next = kNoState;
   uint8_t fired = 0xFF;
-  ExitCause cause = ExitCause::kTimeout;
+  ExitCause cause = ExitCause::Timeout;
 
   // Skip predicate evaluation entirely when nothing on the inputs moved and no
   // condition is mid-hold. At 10 kHz the overwhelmingly common scan then costs
@@ -179,13 +179,13 @@ OutputOps Engine::scan(uint32_t word, uint32_t now_us) {
     }
     next = cond.goto_state;
     fired = c;
-    cause = ExitCause::kCondition;
+    cause = ExitCause::Condition;
   }
 
   if (next == kNoState && timeout_ms_ >= 0 &&
       since(entered_us_, now_us) >= static_cast<uint32_t>(timeout_ms_) * 1000u) {
     next = s.timeout_goto;
-    cause = ExitCause::kTimeout;
+    cause = ExitCause::Timeout;
   }
 
   if (next == kNoState) return ops;
@@ -194,7 +194,7 @@ OutputOps Engine::scan(uint32_t word, uint32_t now_us) {
   // resets the timer and REDRAWS the random duration. Bpod detects transitions
   // with `NewState != CurrentState`, which silently makes a self-loop a no-op;
   // a re-triggerable timeout should be expressible.
-  const OutputOps exit_ops = leave(cause, fired, now_us);
+  const OutputUpdate exit_ops = leave(cause, fired, now_us);
   ops.set_high |= exit_ops.set_high;
   ops.set_low |= exit_ops.set_low;
 
@@ -203,13 +203,13 @@ OutputOps Engine::scan(uint32_t word, uint32_t now_us) {
     result_.outcome = target.outcome;
     result_.total_us = since(started_us_, now_us);
     current_ = next;
-    record(ExitCause::kTerminal, 0xFF, now_us);
+    record(ExitCause::Terminal, 0xFF, now_us);
     running_ = false;
     return ops;
   }
 
   enter(next, now_us, word);
-  const OutputOps entry_ops = apply_actions(target.entry_first, target.entry_count);
+  const OutputUpdate entry_ops = apply_actions(target.entry_first, target.entry_count);
   ops.set_high |= entry_ops.set_high;
   ops.set_low = (ops.set_low | entry_ops.set_low) & ~entry_ops.set_high;
   raised_ |= entry_ops.set_high;

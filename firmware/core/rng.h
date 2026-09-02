@@ -42,21 +42,21 @@ class Rng {
   uint32_t s_[4] = {0, 0, 0, 0};
 };
 
-enum class DistKind : uint8_t {
-  kFixed = 0,
-  kUniform = 1,
-  kExponential = 2,  // truncated: min, max, mean -- flat hazard
-  kChoice = 3,
+enum class DistributionKind : uint8_t {
+  Fixed = 0,
+  Uniform = 1,
+  Exponential = 2,  // truncated: min, max, mean -- flat hazard
+  Choice = 3,
 };
 
-struct Dist {
-  DistKind kind = DistKind::kFixed;
-  uint8_t n = 0;                      ///< kChoice: number of options
-  int32_t a = 0;                      ///< kFixed: ms. kUniform/kExp: min_ms
-  int32_t b = 0;                      ///< kUniform/kExp: max_ms
-  int32_t c = 0;                      ///< kExp: mean_ms
-  const int32_t* opts = nullptr;      ///< kChoice
-  const uint16_t* weights = nullptr;  ///< kChoice, optional
+struct Distribution {
+  DistributionKind kind = DistributionKind::Fixed;
+  uint8_t n = 0;                      ///< Choice: number of options
+  int32_t a = 0;                      ///< Fixed: ms. Uniform/Exponential: min_ms
+  int32_t b = 0;                      ///< Uniform/Exponential: max_ms
+  int32_t c = 0;                      ///< Exponential: mean_ms
+  const int32_t* opts = nullptr;      ///< Choice
+  const uint16_t* weights = nullptr;  ///< Choice, optional
 
   /// Draw a duration in milliseconds. Called on state entry.
   int32_t draw(Rng& rng) const;
