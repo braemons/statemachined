@@ -4,10 +4,14 @@
 BUILD ?= build
 
 .PHONY: test
-test:                       ## build and run the core unit tests
+test: check-core            ## build and run the core unit tests
 	cmake -S . -B $(BUILD) -DCMAKE_BUILD_TYPE=Debug
 	cmake --build $(BUILD) -j
 	ctest --test-dir $(BUILD) --output-on-failure
+
+.PHONY: check-core
+check-core:                 ## enforce the portable core's constraints
+	@./tools/check-core-purity.sh
 
 .PHONY: sanitize
 sanitize:                   ## the same tests under ASan and UBSan

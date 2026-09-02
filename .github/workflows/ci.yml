@@ -6,6 +6,16 @@ on:
   pull_request:
 
 jobs:
+  core-purity:
+    name: the portable core stays portable
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No Arduino.h, no allocation, no std containers, no float. Cheap to
+      # check and expensive to discover on a board at trial 300, and it is
+      # exactly the kind of rule that erodes one convenient include at a time.
+      - run: ./tools/check-core-purity.sh
+
   core-tests:
     name: core unit tests
     runs-on: ubuntu-latest

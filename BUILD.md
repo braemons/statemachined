@@ -229,6 +229,22 @@ rewriting:
 make format-check
 ```
 
+## What the core may not do
+
+`firmware/core/` is plain C++17 with **no `Arduino.h`, no dynamic allocation, no
+standard-library containers and no floating point**. `make check-core` enforces
+it, `make test` runs it first, and CI has a job for it.
+
+That is three separate constraints wearing one coat: 32 KB of SRAM where a
+container that allocates fails at trial 300 rather than at compile time; a scan
+running from a 10 kHz timer ISR, where allocation is a latency spike at best;
+and the native build being a real test of the firmware rather than a parallel
+implementation of it, which holds only while the two compile the same code.
+
+The **tests are exempt and deliberately so**. They run on the host, never reach
+a board, and `std::string` is the right tool for building a protocol line to
+feed in. `pio run` compiles `+<src/> +<core/>` and never `tests/`.
+
 ## Editor setup
 
 Any build configures it:
@@ -269,6 +285,13 @@ is still wrong, check that `build/compile_commands.json` exists and that your
 editor is not overriding `--compile-commands-dir` to point somewhere else; the
 devcontainer sets it to `${workspaceFolder}/build`, which is the Makefile's
 default `BUILD`. A stale database after moving files is fixed the same way.
+
+**CMake errors that `build/CMakeCache.txt` was created in a different
+directory.** A `build/` from the host and a `build/` from inside the container
+are the same directory with two different absolute paths, and CMake caches the
+one it was configured with. Use a separate tree for each --
+`make test BUILD=build-container` inside, `make test` outside -- or delete
+`build/` when you switch.
 
 **`make format` refuses to run: "clang-format X, but this repo pins 23.1.0".**
 Working as intended — that version would format files differently from CI.
