@@ -78,6 +78,31 @@ TEST_CASE("below() respects its bound and is unbiased") {
   }
 }
 
+TEST_CASE("below() rejects the short tail rather than folding it") {
+  // Lemire's method only draws again when the product's low word falls in the
+  // short tail, which for a small bound almost never happens -- so the loop
+  // that removes the bias went untested by the bounds above. A bound just over
+  // 2^31 puts roughly half of every draw into that tail and exercises it.
+  Rng r(12345);
+  constexpr uint32_t kBound = 0x80000001u;
+  constexpr int kBuckets = 16;
+  constexpr int kDraws = 200000;
+  int counts[kBuckets] = {0};
+  for (int i = 0; i < kDraws; ++i) {
+    const uint32_t v = r.below(kBound);
+    REQUIRE(v < kBound);
+    counts[v / (kBound / kBuckets + 1)]++;
+  }
+  // Flat across the range: if the tail were folded back instead of rejected,
+  // the low buckets would carry the excess.
+  const double expect = static_cast<double>(kDraws) / kBuckets;
+  for (int i = 0; i < kBuckets; ++i) {
+    const double dev = (counts[i] - expect) / expect;
+    CHECK(dev < 0.05);
+    CHECK(dev > -0.05);
+  }
+}
+
 TEST_CASE("between() is inclusive at both ends") {
   Rng r(99);
   CHECK(r.between(5, 5) == 5);

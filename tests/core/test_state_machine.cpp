@@ -107,3 +107,48 @@ TEST_CASE("the same seed gives the same run") {
 
   CHECK(run_once(99) == run_once(99));
 }
+
+TEST_CASE("every output action kind has a defined effect on the update") {
+  // High and Pulse raise; Low drives low; Toggle appears in neither mask
+  // because it is resolved against the live level by the HAL, which is the one
+  // thing that knows it. Pinned here because the HAL is written against these
+  // four cases and a silent change to any of them moves a real line.
+  Builder b;
+  const uint8_t drive = b.state();
+  const uint8_t done = b.terminal_code(1);
+  b.on_entry(drive, OutputAction{0, OutputActionKind::High, 0});
+  b.on_entry(drive, OutputAction{1, OutputActionKind::Low, 0});
+  b.on_entry(drive, OutputAction{2, OutputActionKind::Toggle, 0});
+  b.on_entry(drive, OutputAction{3, OutputActionKind::Pulse, 50});
+  b.timeout(drive, b.fixed(10), done);
+  b.g.entry = drive;
+  REQUIRE(validate(b.g) == GraphError::None);
+
+  StateMachine m;
+  m.set_graph(&b.g);
+  const OutputUpdate on_entry = m.start(1, 0);
+  CHECK((on_entry.set_high & bit(0)) != 0);
+  CHECK((on_entry.set_low & bit(0)) == 0);
+  CHECK((on_entry.set_low & bit(1)) != 0);
+  CHECK((on_entry.set_high & bit(1)) == 0);
+  CHECK((on_entry.set_high & bit(2)) == 0);  // Toggle: neither
+  CHECK((on_entry.set_low & bit(2)) == 0);
+  CHECK((on_entry.set_high & bit(3)) != 0);  // Pulse rises here; the HAL times the fall
+
+  // Leaving the state lowers what it raised -- and only that. A line the state
+  // drove low was never raised, and a toggled line is not the machine's to
+  // track, so neither is forced high or low again on the way out.
+  uint32_t t = 0;
+  OutputUpdate on_exit;
+  while (m.running()) {
+    t += 100;
+    const OutputUpdate u = m.scan(0, t);
+    on_exit.set_high |= u.set_high;
+    on_exit.set_low |= u.set_low;
+  }
+  CHECK((on_exit.set_low & bit(0)) != 0);   // High came down
+  CHECK((on_exit.set_low & bit(3)) != 0);   // Pulse came down
+  CHECK((on_exit.set_high & bit(1)) == 0);  // Low was not restored
+  CHECK((on_exit.set_high & bit(2)) == 0);  // Toggle stayed untouched
+  CHECK((on_exit.set_low & bit(2)) == 0);
+}

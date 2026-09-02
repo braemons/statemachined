@@ -146,3 +146,71 @@ TEST_CASE("outcome codes are the .tdr wire contract") {
   CHECK(static_cast<int>(TrialOutcome::WrongStartSignal) == 9);
   CHECK(static_cast<int>(TrialOutcome::Cancelled) == 10);
 }
+
+TEST_CASE("a state whose ranges run past the pool is refused") {
+  // Everything in a graph is a (first, count) slice of one flat array, so a
+  // slice that runs off the end is an out-of-bounds read at scan time -- inside
+  // an ISR, on a board with no MMU. These are the bounds that make the runtime
+  // memory-safe, so they are checked rather than assumed.
+  const auto well_formed = [] {
+    Builder b;
+    const uint8_t wait = b.state();
+    const uint8_t hit = b.terminal(TrialOutcome::Hit);
+    b.timeout(wait, b.fixed(10), hit);
+    b.on_entry(wait, OutputAction{0, OutputActionKind::High, 0});
+    b.on_exit(wait, OutputAction{1, OutputActionKind::Low, 0});
+    Transition t;
+    t.all_high = bit(0);
+    t.target_state = hit;
+    b.on(wait, t);
+    b.g.entry = wait;
+    return b;
+  };
+  REQUIRE(validate(well_formed().g) == GraphError::None);
+
+  SUBCASE("transitions") {
+    Builder b = well_formed();
+    b.g.states[0].transition_count = b.g.n_transitions + 1;
+    CHECK(validate(b.g) == GraphError::TooManyTransitions);
+
+    Builder c = well_formed();
+    c.g.states[0].first_transition = c.g.n_transitions;
+    c.g.states[0].transition_count = 1;
+    CHECK(validate(c.g) == GraphError::TooManyTransitions);
+  }
+
+  SUBCASE("entry actions") {
+    Builder b = well_formed();
+    b.g.states[0].entry_action_count = b.g.n_output_actions + 1;
+    CHECK(validate(b.g) == GraphError::TooManyOutputActions);
+  }
+
+  SUBCASE("exit actions") {
+    Builder b = well_formed();
+    b.g.states[0].first_exit_action = b.g.n_output_actions;
+    b.g.states[0].exit_action_count = 1;
+    CHECK(validate(b.g) == GraphError::TooManyOutputActions);
+  }
+}
+
+TEST_CASE("a duration naming a distribution that does not exist is refused") {
+  Builder b;
+  const uint8_t wait = b.state();
+  const uint8_t hit = b.terminal(TrialOutcome::Hit);
+  b.timeout(wait, b.fixed(10), hit);
+  Transition t;
+  t.all_high = bit(0);
+  t.target_state = hit;
+  t.hold_duration = b.g.n_distributions;  // one past the pool
+  b.on(wait, t);
+  b.g.entry = wait;
+  CHECK(validate(b.g) == GraphError::TooManyDistributions);
+
+  // kNoRandomDistribution is the sentinel for "no hold", not an index, so it
+  // must pass the same check that rejects a real out-of-range index.
+  b.g.transitions[0].hold_duration = kNoRandomDistribution;
+  CHECK(validate(b.g) == GraphError::None);
+
+  b.g.states[wait].timeout_duration = b.g.n_distributions;
+  CHECK(validate(b.g) == GraphError::TooManyDistributions);
+}
