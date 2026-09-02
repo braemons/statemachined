@@ -260,9 +260,15 @@ The two are separate slices of the same pool and each has to be contiguous, so
 interleaving them would silently give one slice the other's members. Refused as
 `bad_order`.
 
-**A terminal state's `entry` actions do not run.** The machine records the
-terminal visit and stops. Put a reward pulse on the *exit* of the state before
-it, not on the entry of the terminal state it goes to.
+**A terminal state's `entry` actions do run**, and they are how a reward is
+written: `pulse` the valve line on entering `Hit`. The alternative — hanging it
+off the exit of whichever state happened to precede the terminal one — spreads a
+single intention across every route into it.
+
+What the device cannot do is lower them, since nothing exits a terminal state.
+A `pulse` falls on the device's own timer. Anything set `high` there **stays
+high until the next trial starts or a fail-safe runs**, which is deliberate:
+prefer `pulse` for anything that must come down on its own.
 
 **Every line a state drives high is driven low again when the state is left**,
 by the device, whatever the exit cause and whether or not the graph said so. An

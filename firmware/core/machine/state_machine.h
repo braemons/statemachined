@@ -13,7 +13,10 @@
 //
 // The state is private on purpose. `raised_` is what guarantees every line a
 // state raised is lowered by the same exit path, whatever the exit cause, so a
-// valve cannot be left open by a graph that forgot something.
+// valve cannot be left open by a graph that forgot something. The one place a
+// line outlives its state is a terminal state's entry actions -- nothing can
+// exit a terminal state, so those are carried in `raised_` and lowered by the
+// next start().
 #pragma once
 #include <cstdint>
 

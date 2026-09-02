@@ -23,3 +23,14 @@ foreach(path IN LISTS FSMD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/core)  # helpers.h, shared across the groups
   add_test(NAME ${t} COMMAND test_${t})
 endforeach()
+
+# Links against fsmd_engine ONLY -- no protocol object is on this command line.
+# It is a link-time proof that a graph can be built in C++ and run with no wire
+# anywhere near it, which is what makes the native build a real test of the
+# firmware and what a Linux or bench-rig embedding would depend on.
+add_executable(test_engine_standalone core/machine/test_engine_standalone.cpp)
+target_link_libraries(test_engine_standalone PRIVATE fsmd_engine doctest_main)
+target_include_directories(test_engine_standalone PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+  ${CMAKE_CURRENT_SOURCE_DIR}/core)
+add_test(NAME engine_standalone COMMAND test_engine_standalone)

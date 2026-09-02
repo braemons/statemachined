@@ -18,24 +18,33 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-# One directory per concern, and the dependency runs one way down this list:
-# graph knows nothing of the machine, the machine nothing of trials, and the
-# protocol sits above all three. The include paths say so too -- everything is
-# written as "graph/state.h", never as a bare filename -- so a header that
-# reaches sideways is visible in the diff rather than in a build failure later.
-add_library(fsmd_core
+# Two libraries, not one, and the split is the layering made real.
+#
+# fsmd_engine is the part that runs a trial: a graph, the timings, the scan
+# loop. It has no idea a wire exists. fsmd_core adds the protocol on top.
+#
+# Splitting them means the dependency cannot silently reverse. tests/ links one
+# binary against fsmd_engine alone (see tests/CMakeLists.txt), so if the state
+# machine ever grows a dependency on JSON or framing, that link fails -- which
+# is a better answer than a comment asking people not to.
+add_library(fsmd_engine
   firmware/core/graph/state_graph.cpp
   firmware/core/random/rng.cpp
   firmware/core/random/random_distribution.cpp
   firmware/core/machine/state_machine.cpp
   firmware/core/trial/trial_runner.cpp
+)
+target_include_directories(fsmd_engine PUBLIC firmware/core)
+target_compile_options(fsmd_engine PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+add_library(fsmd_core
   firmware/core/protocol/crc16.cpp
   firmware/core/protocol/framing.cpp
   firmware/core/protocol/graph_builder.cpp
   firmware/core/protocol/host_link_session.cpp
   firmware/core/protocol/json.cpp
 )
-target_include_directories(fsmd_core PUBLIC firmware/core)
+target_link_libraries(fsmd_core PUBLIC fsmd_engine)
 target_compile_options(fsmd_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 option(FSMD_SANITIZE "Build tests with ASan and UBSan" OFF)

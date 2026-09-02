@@ -8,6 +8,13 @@ inline uint32_t since(uint32_t from, uint32_t now) { return now - from; }
 }  // namespace
 
 OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask word) {
+  // Anything the previous run left raised comes down here. A terminal state's
+  // entry actions run but nothing can lower them -- there is no exit from a
+  // terminal state -- so this is where that debt is paid. It means a line left
+  // high by the last trial cannot survive into the next one unnoticed, which is
+  // the same guarantee leave() makes within a run.
+  const LineBitmask left_over = raised_;
+
   record_ = StateMachineRunRecord{};
   rng_.reseed(seed);
   running_ = true;
@@ -21,6 +28,7 @@ OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask
   enter(graph_->entry, now_us, word);
   const State& s = graph_->states[current_];
   OutputUpdate ops = apply_actions(s.first_entry_action, s.entry_action_count);
+  ops.set_low |= left_over & ~ops.set_high;
   raised_ |= ops.set_high;
   return ops;
 }
@@ -207,6 +215,23 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
     current_ = next;
     record_visit(StateExitCause::Terminal, kNoTransition, now_us);
     running_ = false;
+
+    // A terminal state's entry actions DO run: "pulse the valve on entering
+    // Hit" is how a reward is written, and the alternative -- making authors
+    // hang it off the exit of whichever state happened to precede the terminal
+    // one -- spreads one intention over every route into it.
+    //
+    // What the machine cannot do is lower them, because there is no exit from a
+    // terminal state. They are left raised and carried in raised_, and the next
+    // start() lowers whatever the previous run left up. So a Pulse comes down
+    // on the HAL's timer, and a High stays high until the next trial begins or
+    // fail_safe runs -- deliberate, and the only honest option once a run has
+    // ended.
+    const OutputUpdate final_ops =
+        apply_actions(target.first_entry_action, target.entry_action_count);
+    ops.set_high |= final_ops.set_high;
+    ops.set_low = (ops.set_low | final_ops.set_low) & ~final_ops.set_high;
+    raised_ = final_ops.set_high;
     return ops;
   }
 

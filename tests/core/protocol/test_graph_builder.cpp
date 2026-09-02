@@ -137,12 +137,10 @@ TEST_CASE("the assembled graph actually runs") {
   CHECK((lowered & (1u << 2)) != 0);  // the line the entry action raised came down
 }
 
-TEST_CASE("a terminal state's entry actions do not run") {
-  // Pinning current behaviour rather than endorsing it. The machine records the
-  // terminal visit and stops without applying the target's entry actions, so
-  // "open the valve on entering Hit" -- the most natural way to write a reward
-  // -- silently does nothing. Nothing in dev/PROTOCOL.md says so either way.
-  // See the note raised with this commit.
+TEST_CASE("a terminal state's entry actions run -- that is how a reward is written") {
+  // "Pulse the valve on entering Hit" is the natural way to say it. Hanging it
+  // off the exit of whichever state happened to precede the terminal one would
+  // spread a single intention over every route into it.
   Upload u;
   REQUIRE(u.send(R"({"t":"graph_begin","seq":1,"graph_version":1,"n_states":2,"entry":0)") ==
           UploadError::None);
@@ -154,8 +152,9 @@ TEST_CASE("a terminal state's entry actions do not run") {
       UploadError::None);
   REQUIRE(u.send(R"({"t":"graph_state","seq":4,"i":1,"terminal":1,"timeout":null)") ==
           UploadError::None);
-  REQUIRE(u.send(R"({"t":"graph_action","seq":5,"on":"entry","line":3,"kind":"high")") ==
-          UploadError::None);
+  REQUIRE(
+      u.send(R"({"t":"graph_action","seq":5,"on":"entry","line":3,"kind":"pulse","ms":40)") ==
+      UploadError::None);
   REQUIRE(u.finish(0, 1) == UploadError::None);
 
   StateMachine m(u.builder.staged());
@@ -166,7 +165,42 @@ TEST_CASE("a terminal state's entry actions do not run") {
     raised |= m.advance(0, t).set_high;
   }
   CHECK_FALSE(m.is_running());
-  CHECK((raised & (1u << 3)) == 0);  // the valve never opened
+  CHECK((raised & (1u << 3)) != 0);  // the valve opened
+  CHECK(m.get_record().terminal_code == terminal_code_of(TrialOutcome::Hit));
+}
+
+TEST_CASE("what a terminal state raised is lowered when the next run starts") {
+  // Nothing exits a terminal state, so the machine cannot lower those lines
+  // during the run. They are carried instead, and start() pays the debt -- a
+  // line left high by the last trial cannot survive into the next one
+  // unnoticed, which is the guarantee leave() already makes within a run.
+  Upload u;
+  REQUIRE(u.send(R"({"t":"graph_begin","seq":1,"graph_version":1,"n_states":2,"entry":0)") ==
+          UploadError::None);
+  REQUIRE(u.send(R"({"t":"graph_dist","seq":2,"i":0,"kind":"fixed","a":10)") ==
+          UploadError::None);
+  REQUIRE(
+      u.send(
+          R"({"t":"graph_state","seq":3,"i":0,"terminal":null,"timeout":{"dist":0,"target":1})") ==
+      UploadError::None);
+  REQUIRE(u.send(R"({"t":"graph_state","seq":4,"i":1,"terminal":1,"timeout":null)") ==
+          UploadError::None);
+  REQUIRE(u.send(R"({"t":"graph_action","seq":5,"on":"entry","line":6,"kind":"high")") ==
+          UploadError::None);
+  REQUIRE(u.finish(0, 1) == UploadError::None);
+
+  StateMachine m(u.builder.staged());
+  m.start(1, 0);
+  uint32_t t = 0;
+  LineBitmask raised = 0;
+  while (m.is_running() && t < 1000000u) {
+    t += 100;
+    raised |= m.advance(0, t).set_high;
+  }
+  REQUIRE((raised & (1u << 6)) != 0);  // still high after the run ended
+
+  const OutputUpdate next = m.start(2, t + 1000);
+  CHECK((next.set_low & (1u << 6)) != 0);
 }
 
 TEST_CASE("transitions and actions attach to the state that preceded them") {
