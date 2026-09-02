@@ -1,0 +1,15 @@
+.pio/
+.pioenvs/
+.piolibdeps/
+build/
+*.o
+*.elf
+*.hex
+*.bin
+__pycache__/
+*.egg-info/
+.venv/
+.ruff_cache/
+.pytest_cache/
+compile_commands.json
+.DS_Store
