@@ -469,35 +469,62 @@ trial 300.
 
 ### Repository layout
 
+One directory per concern under `core/`, and **the dependency runs one way down
+this list**: `graph/` knows nothing of the machine, `machine/` nothing of trials,
+and `protocol/` sits above all three. Includes are written the same way in both
+builds -- `"graph/state.h"`, never a bare filename -- so a header reaching
+sideways shows up in the diff rather than in a build failure two milestones
+later.
+
 ```
 fsmd/
 ├── README.md                  what it is, the Bpod acknowledgement, quickstart
-├── CLAUDE.md                  build, test, layout, key decisions
+├── BUILD.md                   devcontainer, Ubuntu, Fedora, WSL
 ├── LICENSE
-├── platformio.ini             uno_r4_minima · native · teensy41 · esp32
+├── platformio.ini             uno_r4_minima · teensy41 · esp32
+├── CMakeLists.txt             the host build, for the tests
 ├── firmware/
 │   ├── core/                  no Arduino.h, no malloc, no float on the wire
-│   │   ├── graph.{h,cpp}         parse, validate, resolve names to bit indices
-│   │   ├── engine.{h,cpp}        the scan loop, conditions, timers, transitions
-│   │   ├── condition.{h,cpp}     the three-mask predicate, hold, edge/level
-│   │   ├── rng.{h,cpp}           xoshiro128** · Lemire bounds · the four dists
-│   │   ├── protocol.{h,cpp}      NDJSON framing, seq, CRC, dispatch
-│   │   ├── record.{h,cpp}        the state path, timings, the result message
-│   │   └── hal.h                 the interface above
-│   ├── hal/                   renesas_ra4m1.cpp · native.cpp · teensy41.cpp · esp32.cpp
-│   └── main.cpp
+│   │   ├── config.h              capacities and the unit/index aliases
+│   │   ├── graph/                what a paradigm declares
+│   │   │   ├── state.h              a node, and why one gets left
+│   │   │   ├── transition.h         the three-mask predicate, hold, edge/level
+│   │   │   ├── output_action.h      what a state does to the output lines
+│   │   │   └── state_graph.{h,cpp}  the pools, and validate()
+│   │   ├── random/               timings drawn on the device
+│   │   │   ├── rng.{h,cpp}                  xoshiro128** · Lemire bounds
+│   │   │   └── random_distribution.{h,cpp}  the four distributions
+│   │   ├── machine/              the scan loop. Knows nothing about trials
+│   │   │   └── state_machine.{h,cpp}
+│   │   ├── trial/                the add-on that gives a run an outcome
+│   │   │   ├── trial.h                  the .tdr codes, the wire contract
+│   │   │   └── trial_runner.{h,cpp}
+│   │   ├── protocol/             the wire. See dev/PROTOCOL.md
+│   │   │   ├── crc16.{h,cpp}        CRC-16/CCITT-FALSE, and the accumulator
+│   │   │   ├── framing.{h,cpp}      lines in, lines out, crc verified
+│   │   │   └── json.{h,cpp}         reader and writer, no allocation
+│   │   └── hal.h                 the interface below -- M3
+│   ├── hal/                   renesas_ra4m1.cpp · native.cpp · teensy41.cpp
+│   └── src/main.cpp           board entry point, deliberately thin
 ├── bridge/                    Python: serial ⇄ triald HTTP
 │   └── src/fsmd/              codec, link, the triald client, `fsmd` CLI
-├── sim/                       drive the native core with no hardware
 ├── graphs/                    example graphs — go/no-go, 2AFC, fixation task
 ├── tests/
-│   ├── native/                unit tests on the core, host-speed
-│   └── integration/           bridge ⇄ native core, whole trials
+│   └── core/                  mirrors firmware/core, group for group
+│       ├── helpers.h             the graph builder the tests read as
+│       ├── graph/ random/ machine/ trial/ protocol/
+│       └── third_party/doctest.h
 └── dev/
     ├── PLAN.md                this file
     ├── PROTOCOL.md            the wire contract
     └── HARDWARE.md            pinouts, wiring, per-board notes
 ```
+
+Unit tests do **not** run through PlatformIO. The core is plain C++17 with no
+`Arduino.h`, so CMake builds it on the host and `ctest` runs against it; board
+builds go through PlatformIO and never see a test. Neither knows about the
+other, which is what keeps the native build a real test of the firmware rather
+than a parallel implementation of it.
 
 ### The bridge
 

@@ -1,4 +1,4 @@
-#include "state_graph.h"
+#include "graph/state_graph.h"
 
 namespace fsmd {
 
@@ -16,6 +16,17 @@ GraphError validate(const StateGraph& g) {
   // not quietly redirected onto a valve at trial 300.
   for (uint8_t i = 0; i < g.n_output_actions; ++i)
     if (g.output_actions[i].output_line >= kMaxOutputLines) return GraphError::BadOutputLine;
+
+  // A Choice with no options draws from nothing. draw() returns 0 rather than
+  // reading past an empty array, which is safe and silently wrong: a graph
+  // asking for a random foreperiod would get no foreperiod at all, every trial,
+  // and nothing downstream would say so.
+  for (uint8_t i = 0; i < g.n_distributions; ++i) {
+    const RandomDistribution& d = g.distributions[i];
+    if (d.kind != RandomDistributionKind::Choice) continue;
+    if (d.n == 0 || d.opts == nullptr) return GraphError::BadDistribution;
+    if (d.n > kMaxChoiceOptions) return GraphError::BadDistribution;
+  }
 
   for (uint8_t i = 0; i < g.n_states; ++i) {
     const State& s = g.states[i];
@@ -86,6 +97,8 @@ const char* graph_error_str(GraphError e) {
       return "transition to a state that does not exist";
     case GraphError::BadOutputLine:
       return "an output action names a line the board does not have";
+    case GraphError::BadDistribution:
+      return "a choice distribution has no options to choose from";
     case GraphError::NoTerminal:
       return "no terminal state is reachable from the entry state";
     case GraphError::UnreachableState:

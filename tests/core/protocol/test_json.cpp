@@ -6,8 +6,8 @@
 #include <vector>
 
 #include "doctest.h"
-#include "framing.h"
-#include "json.h"
+#include "protocol/framing.h"
+#include "protocol/json.h"
 
 using namespace fsmd;
 

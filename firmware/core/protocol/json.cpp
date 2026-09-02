@@ -1,7 +1,7 @@
-#include "json.h"
+#include "protocol/json.h"
 
-#include "crc16.h"
-#include "framing.h"
+#include "protocol/crc16.h"
+#include "protocol/framing.h"
 
 namespace fsmd {
 namespace {

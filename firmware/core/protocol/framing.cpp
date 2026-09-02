@@ -1,6 +1,6 @@
-#include "framing.h"
+#include "protocol/framing.h"
 
-#include "crc16.h"
+#include "protocol/crc16.h"
 
 namespace fsmd {
 namespace {

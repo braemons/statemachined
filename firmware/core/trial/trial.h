@@ -8,8 +8,8 @@
 #include <cstdint>
 
 #include "config.h"
-#include "state.h"
-#include "state_machine.h"
+#include "graph/state.h"
+#include "machine/state_machine.h"
 
 namespace fsmd {
 

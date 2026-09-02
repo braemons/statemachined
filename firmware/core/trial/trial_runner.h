@@ -8,8 +8,8 @@
 #pragma once
 #include <cstdint>
 
-#include "state_machine.h"
-#include "trial.h"
+#include "machine/state_machine.h"
+#include "trial/trial.h"
 
 namespace fsmd {
 

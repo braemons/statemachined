@@ -1,8 +1,8 @@
 // Validation exists so a bad graph is refused at upload, never at trial 300 --
 // triald "refuses rather than failing later". These tests are that promise.
 #include "doctest.h"
+#include "graph/state_graph.h"
 #include "helpers.h"
-#include "state_graph.h"
 
 using namespace fsmd;
 using namespace fsmd::test;
@@ -112,6 +112,32 @@ TEST_CASE("an output action on a line the board does not have is refused") {
   CHECK(validate(b.g) == GraphError::None);
 }
 
+TEST_CASE("a choice distribution with nothing to choose from is refused") {
+  // draw() returns 0 for an empty Choice rather than reading past the array --
+  // safe, and silently wrong. A graph asking for a random foreperiod would get
+  // no foreperiod at all, every trial, and nothing downstream would say so.
+  Builder b;
+  const uint8_t wait = b.state();
+  const uint8_t hit = b.terminal(TrialOutcome::Hit);
+  const uint8_t d = b.fixed(10);
+  b.timeout(wait, d, hit);
+  b.g.entry = wait;
+  REQUIRE(validate(b.g) == GraphError::None);
+
+  b.g.distributions[d].kind = RandomDistributionKind::Choice;
+  CHECK(validate(b.g) == GraphError::BadDistribution);
+
+  static const Milliseconds opts[] = {100, 200, 300};
+  b.g.distributions[d].opts = opts;
+  CHECK(validate(b.g) == GraphError::BadDistribution);  // options, but n is 0
+
+  b.g.distributions[d].n = 3;
+  CHECK(validate(b.g) == GraphError::None);
+
+  b.g.distributions[d].n = kMaxChoiceOptions + 1;
+  CHECK(validate(b.g) == GraphError::BadDistribution);
+}
+
 TEST_CASE("every error has a message") {
   const GraphError every_error[] = {GraphError::None,
                                     GraphError::TooManyStates,
@@ -121,6 +147,7 @@ TEST_CASE("every error has a message") {
                                     GraphError::BadEntry,
                                     GraphError::BadTarget,
                                     GraphError::BadOutputLine,
+                                    GraphError::BadDistribution,
                                     GraphError::NoTerminal,
                                     GraphError::UnreachableState};
   for (GraphError e : every_error) {

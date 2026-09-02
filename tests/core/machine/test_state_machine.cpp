@@ -5,7 +5,7 @@
 // stops compiling. It includes state_machine.h and never trial.h.
 #include "doctest.h"
 #include "helpers.h"
-#include "state_machine.h"
+#include "machine/state_machine.h"
 
 using namespace fsmd;
 using namespace fsmd::test;

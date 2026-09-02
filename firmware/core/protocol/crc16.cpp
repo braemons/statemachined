@@ -1,4 +1,4 @@
-#include "crc16.h"
+#include "protocol/crc16.h"
 
 namespace fsmd {
 namespace {

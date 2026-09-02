@@ -1,4 +1,4 @@
-#include "state_machine.h"
+#include "machine/state_machine.h"
 
 namespace fsmd {
 namespace {

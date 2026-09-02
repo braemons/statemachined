@@ -1,4 +1,4 @@
-#include "random_distribution.h"
+#include "random/random_distribution.h"
 
 namespace fsmd {
 

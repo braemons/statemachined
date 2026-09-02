@@ -17,6 +17,9 @@
 #ifndef FSMD_MAX_DISTRIBUTIONS
 #define FSMD_MAX_DISTRIBUTIONS 32
 #endif
+#ifndef FSMD_MAX_CHOICE_OPTIONS
+#define FSMD_MAX_CHOICE_OPTIONS 32  // pooled across every Choice distribution
+#endif
 #ifndef FSMD_MAX_LINES
 #define FSMD_MAX_LINES 32  // one uint32_t input word; widening is a type change
 #endif
@@ -47,6 +50,11 @@ constexpr uint8_t kMaxPath = FSMD_MAX_PATH;
 /// is sized to fit inside it -- which is why the graph upload and the trial
 /// result are both chunked. See dev/PROTOCOL.md.
 constexpr uint16_t kMaxLine = FSMD_MAX_LINE;
+
+/// Choice options and their weights live in one shared pool, like everything
+/// else a graph refers to by index, so a distribution can be uploaded without
+/// the device having to find somewhere to put its array.
+constexpr uint8_t kMaxChoiceOptions = FSMD_MAX_CHOICE_OPTIONS;
 /// Indices into the StateGraph's shared pools. Everything in a graph is stored
 /// in one flat array per kind and referred to by position -- that is what keeps
 /// a graph inside 32 KB -- so a bare uint8_t crossing a call boundary could be

@@ -2,7 +2,7 @@
 // what lets these tests drive whole trials with no board, no clock and no I/O.
 #include "doctest.h"
 #include "helpers.h"
-#include "trial_runner.h"
+#include "trial/trial_runner.h"
 
 using namespace fsmd;
 using namespace fsmd::test;

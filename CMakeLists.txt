@@ -11,15 +11,20 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# One directory per concern, and the dependency runs one way down this list:
+# graph knows nothing of the machine, the machine nothing of trials, and the
+# protocol sits above all three. The include paths say so too -- everything is
+# written as "graph/state.h", never as a bare filename -- so a header that
+# reaches sideways is visible in the diff rather than in a build failure later.
 add_library(fsmd_core
-  firmware/core/crc16.cpp
-  firmware/core/framing.cpp
-  firmware/core/json.cpp
-  firmware/core/rng.cpp
-  firmware/core/random_distribution.cpp
-  firmware/core/state_graph.cpp
-  firmware/core/state_machine.cpp
-  firmware/core/trial_runner.cpp
+  firmware/core/graph/state_graph.cpp
+  firmware/core/random/rng.cpp
+  firmware/core/random/random_distribution.cpp
+  firmware/core/machine/state_machine.cpp
+  firmware/core/trial/trial_runner.cpp
+  firmware/core/protocol/crc16.cpp
+  firmware/core/protocol/framing.cpp
+  firmware/core/protocol/json.cpp
 )
 target_include_directories(fsmd_core PUBLIC firmware/core)
 target_compile_options(fsmd_core PRIVATE -Wall -Wextra -Wpedantic -Werror)

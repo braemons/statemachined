@@ -10,7 +10,7 @@
 #include <cstdint>
 
 #include "config.h"
-#include "rng.h"
+#include "random/rng.h"
 
 namespace fsmd {
 

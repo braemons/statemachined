@@ -1,4 +1,4 @@
-#include "rng.h"
+#include "random/rng.h"
 
 namespace fsmd {
 namespace {

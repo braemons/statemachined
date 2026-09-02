@@ -1,4 +1,4 @@
-#include "trial_runner.h"
+#include "trial/trial_runner.h"
 
 namespace fsmd {
 

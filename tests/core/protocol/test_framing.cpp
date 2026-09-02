@@ -6,9 +6,9 @@
 #include <string>
 #include <vector>
 
-#include "crc16.h"
 #include "doctest.h"
-#include "framing.h"
+#include "protocol/crc16.h"
+#include "protocol/framing.h"
 
 using namespace fsmd;
 

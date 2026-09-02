@@ -13,10 +13,10 @@
 #include <cstdint>
 
 #include "config.h"
-#include "output_action.h"
-#include "random_distribution.h"
-#include "state.h"
-#include "transition.h"
+#include "graph/output_action.h"
+#include "graph/state.h"
+#include "graph/transition.h"
+#include "random/random_distribution.h"
 
 namespace fsmd {
 
@@ -38,10 +38,20 @@ struct StateGraph {
   uint8_t n_output_actions = 0;
   uint8_t n_distributions = 0;
 
+  uint8_t n_choice_options = 0;
+
   State states[kMaxStates];
   Transition transitions[kMaxTransitions];
   OutputAction output_actions[kMaxOutputActions];
   RandomDistribution distributions[kMaxDistributions];
+
+  /// Backing store for every Choice distribution's options, shared the way the
+  /// other pools are. A RandomDistribution's `opts` and `weights` point in
+  /// here for an uploaded graph; a hand-built one may point anywhere, so
+  /// validate() checks that they exist rather than where they live.
+  Milliseconds choice_options[kMaxChoiceOptions] = {0};
+  uint16_t choice_weights[kMaxChoiceOptions] = {0};
+
   InputConfig inputs;
 
   /// Levels outputs are driven to on watchdog timeout, reset, link loss or a
@@ -56,9 +66,10 @@ enum class GraphError : uint8_t {
   TooManyOutputActions,
   TooManyDistributions,
   BadEntry,
-  BadTarget,      ///< a transition to a state that does not exist
-  BadOutputLine,  ///< an action on a line the board cannot represent
-  NoTerminal,     ///< no terminal state reachable from the entry state
+  BadTarget,        ///< a transition to a state that does not exist
+  BadOutputLine,    ///< an action on a line the board cannot represent
+  BadDistribution,  ///< a Choice with no options to choose from
+  NoTerminal,       ///< no terminal state reachable from the entry state
   UnreachableState,
 };
 

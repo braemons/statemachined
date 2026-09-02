@@ -1,9 +1,9 @@
 // A tiny builder, so a test reads as the paradigm it describes rather than as
 // struct initialisation.
 #pragma once
-#include "state_graph.h"
-#include "trial.h"
-#include "trial_runner.h"
+#include "graph/state_graph.h"
+#include "trial/trial.h"
+#include "trial/trial_runner.h"
 
 namespace fsmd::test {
 

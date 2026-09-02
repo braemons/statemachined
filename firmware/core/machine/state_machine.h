@@ -18,10 +18,10 @@
 #include <cstdint>
 
 #include "config.h"
-#include "output_action.h"
-#include "rng.h"
-#include "state.h"
-#include "state_graph.h"
+#include "graph/output_action.h"
+#include "graph/state.h"
+#include "graph/state_graph.h"
+#include "random/rng.h"
 
 namespace fsmd {
 
