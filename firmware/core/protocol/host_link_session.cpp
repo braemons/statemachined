@@ -490,6 +490,7 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
 
 OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
   OutputUpdate ops;
+  pending_ops_ = OutputUpdate{};
   if (state_ == LinkState::Running) {
     runner_.cancel(TrialCancelReason::LinkLost, now_us);
     // cancel() hands its outputs to the next scan rather than returning them,
@@ -510,6 +511,7 @@ OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
 
 OutputUpdate HostLinkSession::fail_safe() {
   OutputUpdate ops;
+  pending_ops_ = OutputUpdate{};
   const LineBitmask safe = have_graph_ ? live_graph_.output_safe_levels : 0;
   ops.set_high = safe;
   // Every line the board has, not only the ones some state raised: this runs

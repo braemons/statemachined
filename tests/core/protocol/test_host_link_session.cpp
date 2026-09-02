@@ -617,6 +617,25 @@ TEST_CASE("a lost link cancels the trial in flight and lowers what it raised") {
   CHECK(h.device.state() == LinkState::Idle);
 }
 
+TEST_CASE("link loss and fail-safe discard un-applied entry actions") {
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":9,"graph_version":7)");
+  h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":9)");
+
+  h.device.link_lost(1000);
+  const OutputUpdate after_link_loss = h.device.advance_trial(0, 2000);
+  CHECK((after_link_loss.set_high & (1u << 2)) == 0);
+
+  greet(h);
+  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":10,"graph_version":7)");
+  h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":10)");
+  h.device.fail_safe();
+  const OutputUpdate after_fail_safe = h.device.advance_trial(0, 3000);
+  CHECK((after_fail_safe.set_high & (1u << 2)) == 0);
+}
+
 TEST_CASE("a lost link keeps the committed graph, so a reconnect costs no re-upload") {
   Host h;
   greet(h);
