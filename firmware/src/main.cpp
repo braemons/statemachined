@@ -160,7 +160,11 @@ void setup() {
   // Every line to its safe level before the first scan. With no graph yet that
   // is all low, and it is applied again the moment a graph is committed.
   apply(g_session->fail_safe());
-  hal::start_scan_timer(kScanHz, on_tick);
+  if (!hal::start_scan_timer(kScanHz, on_tick)) {
+    apply(g_session->fail_safe());
+    for (;;)
+      ;
+  }
 }
 
 void loop() {
