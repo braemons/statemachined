@@ -5,6 +5,7 @@ target_include_directories(doctest_main PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third
 set(FSMD_TESTS
   graph/state_graph
   random/rng
+  io/input_conditioner
   machine/state_machine
   trial/trial_runner
   protocol/framing

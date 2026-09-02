@@ -115,7 +115,8 @@ class StateMachine {
   /// not changed.
   ///
   /// `word` is the *conditioned* input word: debounced, polarity normalised,
-  /// disabled lines zeroed. That is the HAL's job, not the machine's.
+  /// disabled lines zeroed. InputConditioner does all three -- the HAL reads a
+  /// port register and nothing more.
   OutputUpdate advance(LineBitmask word, Microseconds now_us);
 
   /// End the run now, from outside the graph -- a cancel, a lost link, the

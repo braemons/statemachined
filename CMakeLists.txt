@@ -31,6 +31,7 @@ add_library(fsmd_engine
   firmware/core/graph/state_graph.cpp
   firmware/core/random/rng.cpp
   firmware/core/random/random_distribution.cpp
+  firmware/core/io/input_conditioner.cpp
   firmware/core/machine/state_machine.cpp
   firmware/core/trial/trial_runner.cpp
 )

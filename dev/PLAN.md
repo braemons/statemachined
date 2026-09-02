@@ -496,6 +496,8 @@ fsmd/
 │   │   │   └── random_distribution.{h,cpp}  the four distributions
 │   │   ├── machine/              the scan loop. Knows nothing about trials
 │   │   │   └── state_machine.{h,cpp}
+│   │   ├── io/                   the pins, conditioned, before the machine sees them
+│   │   │   └── input_conditioner.{h,cpp}  debounce · invert · enable
 │   │   ├── trial/                the add-on that gives a run an outcome
 │   │   │   ├── trial.h                  the .tdr codes, the wire contract
 │   │   │   └── trial_runner.{h,cpp}
@@ -503,7 +505,7 @@ fsmd/
 │   │   │   ├── crc16.{h,cpp}        CRC-16/CCITT-FALSE, and the accumulator
 │   │   │   ├── framing.{h,cpp}      lines in, lines out, crc verified
 │   │   │   └── json.{h,cpp}         reader and writer, no allocation
-│   │   └── hal.h                 the interface below -- M3
+│   │   └── hal.h                 the whole hardware surface: seven functions
 │   ├── hal/                   renesas_ra4m1.cpp · native.cpp · teensy41.cpp
 │   └── src/main.cpp           board entry point, deliberately thin
 ├── bridge/                    Python: serial ⇄ triald HTTP

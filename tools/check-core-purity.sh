@@ -50,11 +50,19 @@ if grep -rn 'Arduino\.h' firmware/core >/dev/null 2>&1; then
   grep -rn 'Arduino\.h' firmware/core >&2
 fi
 
+# Every line of the core as file:line:code, with comments removed rather than
+# whole commented lines skipped. A trailing `// accept the new level` is prose
+# and must not trip the `new` rule, while `int* p = new int;  // fine, honest`
+# still must. The leading-`*` case covers a block comment's continuation lines.
+core_code() {
+  grep -rn '' firmware/core --include='*.h' --include='*.cpp' |
+    grep -vE ':[[:space:]]*(//|\*|///)' |
+    sed 's://.*::'
+}
+
 # No allocation, and no standard library beyond the fixed-width integer types.
 for pattern in 'std::' '\bnew\b' '\bdelete\b' '\bmalloc\b' '\bcalloc\b' '\brealloc\b' '\bfree\b'; do
-  hits=$(grep -rnE "$pattern" firmware/core --include='*.h' --include='*.cpp' || true)
-  # Comments and doc text may say the words; code may not.
-  hits=$(printf '%s\n' "$hits" | grep -vE ':[[:space:]]*(//|\*|///)' || true)
+  hits=$(core_code | grep -E "$pattern" || true)
   if [ -n "$hits" ]; then
     report "firmware/core must not use $pattern:"
     printf '%s\n' "$hits" >&2
@@ -64,8 +72,7 @@ done
 # Floating point reaches no value that crosses the wire. The truncated
 # exponential is integer-only for exactly this reason: a float path would make
 # the native simulator's numbers merely close to the firmware's.
-floats=$(grep -rnE '\b(float|double)\b' firmware/core --include='*.h' --include='*.cpp' || true)
-floats=$(printf '%s\n' "$floats" | grep -vE ':[[:space:]]*(//|\*|///)' || true)
+floats=$(core_code | grep -E '\b(float|double)\b' || true)
 if [ -n "$floats" ]; then
   report 'firmware/core must not use float or double:'
   printf '%s\n' "$floats" >&2
