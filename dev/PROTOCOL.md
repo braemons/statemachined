@@ -88,11 +88,22 @@ never conflated.
 - Every device reply to a host command carries `req` — the `seq` of the command
   it answers — in addition to its own `seq`.
 - Unsolicited device messages (`event`, `log`, and `result_*`) carry no `req`.
-- A receiver that sees a `seq` it has already processed **repeats its previous
-  answer and performs no action**. The device remembers the last 8. This makes
-  every host command idempotent under retry, which is what allows the bridge to
-  resend blindly after a timeout rather than having to reason about whether the
-  device got it.
+- **Every host command gets exactly one reply**, including each message of a
+  graph upload. That is what makes a retry decidable: the bridge resends when it
+  did not get one, and needs no rule per message type.
+
+- A `seq` equal to **the one the device last answered** makes it repeat that
+  answer verbatim and perform no action. So a host command is idempotent under
+  retry and the bridge can resend blindly after a timeout instead of reasoning
+  about whether the device got it. A re-executed `start` would run a second
+  trial; this is the thing that prevents it.
+
+  The memory is **one command deep**, not a window, because this is strict
+  request/response with one command in flight. Deeper would mean storing that
+  many complete replies — `max_line` bytes each — which on a 32 KB part buys
+  nothing that the one-deep case does not already cover. An older duplicate is
+  therefore re-executed rather than deduplicated; the bridge must not have two
+  commands outstanding.
 - A gap in `seq` is **not** an error. USB CDC does not lose bytes in the middle
   of a session, and treating a gap as a fault would turn a cosmetic problem into
   a dropped trial. Gaps are reported in `state` for diagnosis.
@@ -337,17 +348,27 @@ inspection only — it is never in a trial's critical path.
 
 ```json
 {"t":"hello_ack","seq":0,"req":0,"proto":1,"board":"uno_r4_minima",
- "fw":"0.1.0","n_input_lines":8,"n_output_lines":8,"max_line":512,
- "max_states":32,"max_transitions":64,"max_output_actions":64,
- "max_distributions":32,"max_path":64,"scan_hz":10000,"crc":"...."}
+ "fw":"0.1.0","n_input_lines":8,"n_output_lines":8,"scan_hz":10000,
+ "has_graph":true,"graph_version":7,
+ "caps":{"max_line":512,"max_states":32,"max_transitions":64,
+         "max_output_actions":64,"max_distributions":32,
+         "max_choice_options":32,"max_path":64},"crc":"...."}
 ```
 
 `scan_hz` is **measured at boot, not declared**, so the host knows the timing
 resolution it is actually getting rather than the one the design hoped for.
 
-The `max_*` fields are the device's compile-time capacities. The bridge checks a
-graph against them before uploading, which turns "refused at `graph_end`" into
+`caps` holds the device's compile-time capacities. The bridge checks a graph
+against them before uploading, which turns "refused at `graph_end`" into
 "refused before the first byte" — a better error at no cost.
+
+They are **nested rather than flat**, and that is a memory decision rather than a
+stylistic one: a receiver's per-message member limit is what bounds how much
+stack a parse costs, and flattening these would push the largest message in the
+protocol past a limit that every other parse would then pay for.
+
+`has_graph` and `graph_version` say whether a graph survived the reconnect, so a
+bridge that dropped its link knows whether it has to re-upload.
 
 ### 4.2 `armed`
 

@@ -32,6 +32,7 @@ add_library(fsmd_core
   firmware/core/protocol/crc16.cpp
   firmware/core/protocol/framing.cpp
   firmware/core/protocol/graph_builder.cpp
+  firmware/core/protocol/host_link_session.cpp
   firmware/core/protocol/json.cpp
 )
 target_include_directories(fsmd_core PUBLIC firmware/core)

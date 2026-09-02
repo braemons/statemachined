@@ -9,6 +9,7 @@ set(FSMD_TESTS
   trial/trial_runner
   protocol/framing
   protocol/graph_builder
+  protocol/host_link_session
   protocol/json
 )
 
