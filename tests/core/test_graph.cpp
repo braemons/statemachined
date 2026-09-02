@@ -101,14 +101,14 @@ TEST_CASE("an output action on a line the board does not have is refused") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  b.on_entry(wait, Action{kMaxOutputLines, ActionKind::High, 0});
+  b.on_entry(wait, OutputAction{kMaxOutputLines, OutputActionKind::High, 0});
   CHECK(validate(b.g) == GraphError::BadOutputLine);
 
-  b.g.actions[b.g.n_actions - 1].line = 40;
+  b.g.output_actions[b.g.n_output_actions - 1].output_line = 40;
   CHECK(validate(b.g) == GraphError::BadOutputLine);
 
   // The last representable line is still fine.
-  b.g.actions[b.g.n_actions - 1].line = kMaxOutputLines - 1;
+  b.g.output_actions[b.g.n_output_actions - 1].output_line = kMaxOutputLines - 1;
   CHECK(validate(b.g) == GraphError::None);
 }
 
@@ -116,7 +116,7 @@ TEST_CASE("every error has a message") {
   const GraphError every_error[] = {GraphError::None,
                                     GraphError::TooManyStates,
                                     GraphError::TooManyTransitions,
-                                    GraphError::TooManyActions,
+                                    GraphError::TooManyOutputActions,
                                     GraphError::TooManyDistributions,
                                     GraphError::BadEntry,
                                     GraphError::BadTarget,

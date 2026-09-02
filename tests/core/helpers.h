@@ -40,14 +40,14 @@ struct Builder {
     g.states[s].trans_count++;
     return g.n_transitions++;
   }
-  void on_entry(uint8_t s, Action a) {
-    if (g.states[s].entry_count == 0) g.states[s].entry_first = g.n_actions;
-    g.actions[g.n_actions++] = a;
+  void on_entry(uint8_t s, OutputAction a) {
+    if (g.states[s].entry_count == 0) g.states[s].entry_first = g.n_output_actions;
+    g.output_actions[g.n_output_actions++] = a;
     g.states[s].entry_count++;
   }
-  void on_exit(uint8_t s, Action a) {
-    if (g.states[s].exit_count == 0) g.states[s].exit_first = g.n_actions;
-    g.actions[g.n_actions++] = a;
+  void on_exit(uint8_t s, OutputAction a) {
+    if (g.states[s].exit_count == 0) g.states[s].exit_first = g.n_output_actions;
+    g.output_actions[g.n_output_actions++] = a;
     g.states[s].exit_count++;
   }
 };

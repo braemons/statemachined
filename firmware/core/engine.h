@@ -73,7 +73,7 @@ class TrialStateMachine {
   const StateGraph* graph() const { return graph_; }
 
   /// Begin a trial. `now_us` is the arming instant. Returns the entry
-  /// state's output actions -- they are outputs like any other and must not
+  /// state's output output_actions -- they are outputs like any other and must not
   /// wait for the first scan.
   OutputUpdate start(uint32_t trial_id, uint64_t session_seed, Microseconds now_us,
                      LineBitmask word = 0);

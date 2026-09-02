@@ -59,17 +59,17 @@ void TrialStateMachine::enter(uint8_t state, Microseconds now_us, LineBitmask wo
 OutputUpdate TrialStateMachine::apply_actions(uint8_t first, uint8_t count) const {
   OutputUpdate ops;
   for (uint8_t i = 0; i < count; ++i) {
-    const Action& a = graph_->actions[first + i];
-    const uint32_t bit = 1u << a.line;
+    const OutputAction& a = graph_->output_actions[first + i];
+    const LineBitmask bit = 1u << a.output_line;
     switch (a.kind) {
-      case ActionKind::High:
-      case ActionKind::Pulse:  // the pulse's falling edge is the HAL's timer
+      case OutputActionKind::High:
+      case OutputActionKind::Pulse:  // the pulse's falling edge is the HAL's timer
         ops.set_high |= bit;
         break;
-      case ActionKind::Low:
+      case OutputActionKind::Low:
         ops.set_low |= bit;
         break;
-      case ActionKind::Toggle:
+      case OutputActionKind::Toggle:
         // Toggle is resolved against the live level by the HAL; represent it as
         // neither, and let the HAL read-modify-write.
         break;
@@ -194,7 +194,7 @@ OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
 
   if (next == kNoState) return ops;
 
-  // A self-transition is a real transition: it re-runs exit and entry actions,
+  // A self-transition is a real transition: it re-runs exit and entry output_actions,
   // resets the timer and REDRAWS the random duration. Bpod detects transitions
   // with `NewState != CurrentState`, which silently makes a self-loop a no-op;
   // a re-triggerable timeout should be expressible.

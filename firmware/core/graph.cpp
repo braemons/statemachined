@@ -5,7 +5,7 @@ namespace fsmd {
 GraphError validate(const StateGraph& g) {
   if (g.n_states == 0 || g.n_states > kMaxStates) return GraphError::TooManyStates;
   if (g.n_transitions > kMaxTransitions) return GraphError::TooManyTransitions;
-  if (g.n_actions > kMaxActions) return GraphError::TooManyActions;
+  if (g.n_output_actions > kMaxOutputActions) return GraphError::TooManyOutputActions;
   if (g.n_distributions > kMaxDistributions) return GraphError::TooManyDistributions;
   if (g.entry >= g.n_states) return GraphError::BadEntry;
 
@@ -14,14 +14,16 @@ GraphError validate(const StateGraph& g) {
   // undefined behaviour. In practice it wraps, so line 40 silently drives line
   // 8 -- a graph asking for a line that does not exist must be refused here,
   // not quietly redirected onto a valve at trial 300.
-  for (uint8_t i = 0; i < g.n_actions; ++i)
-    if (g.actions[i].line >= kMaxOutputLines) return GraphError::BadOutputLine;
+  for (uint8_t i = 0; i < g.n_output_actions; ++i)
+    if (g.output_actions[i].output_line >= kMaxOutputLines) return GraphError::BadOutputLine;
 
   for (uint8_t i = 0; i < g.n_states; ++i) {
     const State& s = g.states[i];
     if (s.trans_first + s.trans_count > g.n_transitions) return GraphError::TooManyTransitions;
-    if (s.entry_first + s.entry_count > g.n_actions) return GraphError::TooManyActions;
-    if (s.exit_first + s.exit_count > g.n_actions) return GraphError::TooManyActions;
+    if (s.entry_first + s.entry_count > g.n_output_actions)
+      return GraphError::TooManyOutputActions;
+    if (s.exit_first + s.exit_count > g.n_output_actions)
+      return GraphError::TooManyOutputActions;
     if (s.timeout_duration != kNoDistribution) {
       if (s.timeout_duration >= g.n_distributions) return GraphError::TooManyDistributions;
       if (s.timeout_target >= g.n_states) return GraphError::BadTarget;
@@ -73,8 +75,8 @@ const char* graph_error_str(GraphError e) {
       return "too many states";
     case GraphError::TooManyTransitions:
       return "too many transitions";
-    case GraphError::TooManyActions:
-      return "too many output actions";
+    case GraphError::TooManyOutputActions:
+      return "too many output output_actions";
     case GraphError::TooManyDistributions:
       return "too many distributions";
     case GraphError::BadEntry:

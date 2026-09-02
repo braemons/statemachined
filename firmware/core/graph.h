@@ -1,4 +1,4 @@
-// The graph: states, their transitions, their output actions, and the outcomes
+// The graph: states, their transitions, their output output_actions, and the outcomes
 // terminal states name.
 //
 // Sparse per-state lists, not Bpod's dense [state][event] matrix. Bpod's gives
@@ -36,11 +36,11 @@ enum class Outcome : int8_t {
   Cancelled = 10,
 };
 
-enum class ActionKind : uint8_t { High = 0, Low = 1, Toggle = 2, Pulse = 3 };
+enum class OutputActionKind : uint8_t { High = 0, Low = 1, Toggle = 2, Pulse = 3 };
 
-struct Action {
-  uint8_t line = 0;
-  ActionKind kind = ActionKind::High;
+struct OutputAction {
+  uint8_t output_line = 0;
+  OutputActionKind kind = OutputActionKind::High;
   NarrowMilliseconds pulse_ms = 0;  ///< Pulse only
 };
 
@@ -70,12 +70,12 @@ struct StateGraph {
   uint8_t entry = kNoState;
   uint8_t n_states = 0;
   uint8_t n_transitions = 0;
-  uint8_t n_actions = 0;
+  uint8_t n_output_actions = 0;
   uint8_t n_distributions = 0;
 
   State states[kMaxStates];
   Transition transitions[kMaxTransitions];
-  Action actions[kMaxActions];
+  OutputAction output_actions[kMaxOutputActions];
   Distribution distributions[kMaxDistributions];
   InputConfig inputs;
 
@@ -88,7 +88,7 @@ enum class GraphError : uint8_t {
   None = 0,
   TooManyStates,
   TooManyTransitions,
-  TooManyActions,
+  TooManyOutputActions,
   TooManyDistributions,
   BadEntry,
   BadTarget,      ///< a transition to a state that does not exist

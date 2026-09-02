@@ -264,7 +264,7 @@ TEST_CASE("outputs a state raised come down when it is left") {
   Builder b;
   const uint8_t reward = b.state();
   const uint8_t hit = b.terminal(Outcome::Hit);
-  b.on_entry(reward, Action{2, ActionKind::High, 0});  // the valve
+  b.on_entry(reward, OutputAction{2, OutputActionKind::High, 0});  // the valve
   b.timeout(reward, b.fixed(100), hit);
   b.g.entry = reward;
   REQUIRE(validate(b.g) == GraphError::None);
@@ -287,7 +287,7 @@ TEST_CASE("cancel lowers the outputs and names CANCELLED") {
   Builder b;
   const uint8_t reward = b.state();
   const uint8_t hit = b.terminal(Outcome::Hit);
-  b.on_entry(reward, Action{2, ActionKind::High, 0});
+  b.on_entry(reward, OutputAction{2, OutputActionKind::High, 0});
   b.timeout(reward, b.fixed(10000), hit);
   b.g.entry = reward;
 

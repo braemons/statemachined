@@ -11,8 +11,8 @@
 #ifndef FSMD_MAX_TRANSITIONS
 #define FSMD_MAX_TRANSITIONS 64
 #endif
-#ifndef FSMD_MAX_ACTIONS
-#define FSMD_MAX_ACTIONS 64
+#ifndef FSMD_MAX_OUTPUT_ACTIONS
+#define FSMD_MAX_OUTPUT_ACTIONS 64
 #endif
 #ifndef FSMD_MAX_DISTRIBUTIONS
 #define FSMD_MAX_DISTRIBUTIONS 32
@@ -30,7 +30,7 @@
 namespace fsmd {
 constexpr uint8_t kMaxStates = FSMD_MAX_STATES;
 constexpr uint8_t kMaxTransitions = FSMD_MAX_TRANSITIONS;
-constexpr uint8_t kMaxActions = FSMD_MAX_ACTIONS;
+constexpr uint8_t kMaxOutputActions = FSMD_MAX_OUTPUT_ACTIONS;
 constexpr uint8_t kMaxDistributions = FSMD_MAX_DISTRIBUTIONS;
 constexpr uint8_t kMaxLines = FSMD_MAX_LINES;
 
