@@ -23,6 +23,9 @@
 #ifndef FSMD_MAX_OUTPUT_LINES
 #define FSMD_MAX_OUTPUT_LINES 32  // one LineBitmask of outputs; a line at or
 #endif                            // past this cannot be represented at all
+#ifndef FSMD_MAX_LINE
+#define FSMD_MAX_LINE 512  // one protocol line, newline included. The largest
+#endif                     // single message is one state's worth of graph
 #ifndef FSMD_MAX_PATH
 #define FSMD_MAX_PATH 64  // ring buffer: a graph may loop, and a long trial
 #endif                    // must degrade to a truncated path, never a corrupt one
@@ -39,6 +42,11 @@ constexpr uint8_t kMaxLines = FSMD_MAX_LINES;
 /// LineBitmask at all, and shifting by it is undefined behaviour.
 constexpr uint8_t kMaxOutputLines = FSMD_MAX_OUTPUT_LINES;
 constexpr uint8_t kMaxPath = FSMD_MAX_PATH;
+
+/// The protocol's line budget, reported to the host in hello_ack. Every message
+/// is sized to fit inside it -- which is why the graph upload and the trial
+/// result are both chunked. See dev/PROTOCOL.md.
+constexpr uint16_t kMaxLine = FSMD_MAX_LINE;
 /// Indices into the StateGraph's shared pools. Everything in a graph is stored
 /// in one flat array per kind and referred to by position -- that is what keeps
 /// a graph inside 32 KB -- so a bare uint8_t crossing a call boundary could be
