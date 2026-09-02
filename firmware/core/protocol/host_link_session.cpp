@@ -421,6 +421,14 @@ void HostLinkSession::on_state_request(uint16_t seq, Microseconds now_us) {
   // is debugging the rig rather than inferred from trials that did not happen.
   w.key_u32("dropped_lines", reader_.dropped());
   w.key_u32("bad_lines", bad_lines_);
+  // Nested rather than three more top-level members: a message is capped at
+  // kJsonMaxMembers, and that cap is a RAM decision about JsonObject's stack
+  // footprint rather than a formatting preference.
+  w.begin_object("scan");
+  w.key_u32("hz", scan_.hz);
+  w.key_u32("overruns", scan_.overruns);
+  w.key_u32("worst_gap", scan_.worst_gap);
+  w.end_object();
   send(w, seq);
 }
 
@@ -444,6 +452,26 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
     emit_result();
     state_ = LinkState::Idle;
   }
+  return ops;
+}
+
+OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
+  OutputUpdate ops;
+  if (state_ == LinkState::Running) {
+    runner_.cancel(TrialCancelReason::LinkLost, now_us);
+    // cancel() hands its outputs to the next scan rather than returning them,
+    // because a cancel normally arrives between scans. There is not going to be
+    // a next scan of this trial, so collect them here.
+    ops = runner_.advance(0, now_us);
+  }
+  // Back to Idle, not Greeting: the committed graph survives a reconnect, so a
+  // bridge that comes back does not have to re-upload one. It sends hello
+  // anyway, which is what brings a fresh session seed.
+  if (state_ != LinkState::Greeting) state_ = LinkState::Idle;
+  armed_trial_id_ = 0;
+  builder_.abandon();
+  reader_.reset();
+  guard_.forget();
   return ops;
 }
 

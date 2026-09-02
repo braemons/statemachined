@@ -596,3 +596,58 @@ TEST_CASE("every reply to a command carries the seq it answers") {
   const auto e = h.send(R"({"t":"nope","seq":)" + h.next_seq());
   CHECK(field(e[0], "req") == "2");
 }
+
+TEST_CASE("a lost link cancels the trial in flight and lowers what it raised") {
+  // There is nobody to send a result to, which is exactly why the outputs
+  // cannot be left for the host to sort out. The trial ends through the
+  // ordinary exit path, so the line the state raised comes down by the same
+  // code that lowers it on any other transition.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":9,"graph_version":7)");
+  const auto started = h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":9)");
+  REQUIRE(type_of(started[0]) == "started");
+  REQUIRE(h.device.state() == LinkState::Running);
+
+  h.now = 100000;  // 100 ms
+  const OutputUpdate ops = h.device.link_lost(h.now);
+  CHECK((ops.set_low & (1u << 2)) != 0);
+  CHECK_FALSE(h.device.state() == LinkState::Running);
+  CHECK(h.device.state() == LinkState::Idle);
+}
+
+TEST_CASE("a lost link keeps the committed graph, so a reconnect costs no re-upload") {
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  REQUIRE(h.device.has_graph());
+
+  h.device.link_lost(1000);
+  CHECK(h.device.has_graph());
+  CHECK(h.device.graph_version() == 7);
+
+  // The bridge comes back. hello is what brings a fresh session seed; the graph
+  // is already there.
+  const auto r = h.send(R"({"t":"hello","seq":)" + h.next_seq() +
+                        R"(,"proto":1,"seed":"FEDCBA9876543210")");
+  REQUIRE(type_of(r[0]) == "hello_ack");
+  CHECK(field(r[0], "graph_version") == "7");
+}
+
+TEST_CASE("state_report carries the scan health the board measured") {
+  // The scan rate is a claim until a board runs it, and a board that quietly
+  // misses scans looks exactly like one that is fine.
+  Host h;
+  greet(h);
+  ScanHealth sh;
+  sh.hz = 9871;
+  sh.overruns = 4;
+  sh.worst_gap = 2;
+  h.device.report_scan_health(sh);
+
+  const auto r = h.send(R"({"t":"state","seq":)" + h.next_seq());
+  REQUIRE(r.size() == 1);
+  REQUIRE(type_of(r[0]) == "state_report");
+  CHECK(r[0].find(R"("scan":{"hz":9871,"overruns":4,"worst_gap":2})") != std::string::npos);
+}

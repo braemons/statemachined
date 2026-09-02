@@ -48,6 +48,19 @@ struct DeviceIdentity {
   uint32_t measured_scan_hz = 0;
 };
 
+/// How well the board is keeping to its scan period, reported to the host in
+/// `state_report`.
+///
+/// The scan rate is a claim until a board runs it, and a board that quietly
+/// misses scans looks exactly like a board that is fine. So a missed scan is
+/// counted rather than absorbed: whoever is debugging a rig can see that a
+/// response window was measured on a clock that stuttered.
+struct ScanHealth {
+  uint32_t hz = 0;         ///< measured at boot, not declared
+  uint32_t overruns = 0;   ///< scan periods that elapsed with no scan in them
+  uint32_t worst_gap = 0;  ///< the most periods ever missed in a row
+};
+
 /// Makes a retried command idempotent.
 ///
 /// The bridge sends a command, times out waiting, and resends. Acting on it
@@ -98,6 +111,17 @@ class HostLinkSession {
   /// outcome without having to ask.
   OutputUpdate advance_trial(LineBitmask word, Microseconds now_us);
 
+  /// The host is gone -- the port closed, or the heartbeat lapsed. Cancels a
+  /// trial in flight as `link_lost` and returns the outputs that owes, which
+  /// the caller should apply along with fail_safe().
+  ///
+  /// A cancel rather than a stop: the trial ends through the ordinary exit
+  /// path, so every line the current state raised comes down by the same code
+  /// that lowers it on any other transition. There is nobody to send the result
+  /// to, which is exactly why the outputs cannot be left to the host to sort
+  /// out.
+  OutputUpdate link_lost(Microseconds now_us);
+
   /// Drive every output to its configured safe level. Called on link loss, on a
   /// refused graph and at reset -- "off" is not always "low", so this is data
   /// rather than a zeroed word.
@@ -111,6 +135,10 @@ class HostLinkSession {
   uint16_t graph_version() const { return live_graph_.version; }
   const StateGraph& graph() const { return live_graph_; }
   uint32_t armed_trial_id() const { return armed_trial_id_; }
+
+  /// Tell the session how the scan loop is doing, for state_report. Set by
+  /// whatever owns the timer -- the session cannot see its own lateness.
+  void report_scan_health(const ScanHealth& h) { scan_ = h; }
 
   /// Lines the link layer threw away, for state_report. A link dropping lines
   /// should be visible to whoever is debugging the rig rather than inferred
@@ -163,6 +191,7 @@ class HostLinkSession {
   Microseconds booted_us_ = 0;
   bool have_boot_ = false;
   uint32_t bad_lines_ = 0;
+  ScanHealth scan_;
 };
 
 }  // namespace fsmd

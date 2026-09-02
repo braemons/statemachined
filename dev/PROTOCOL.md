@@ -465,9 +465,23 @@ up drops events rather than delaying a scan.
 `log` is free text, rate-limited, and never load-bearing. Nothing in the bridge
 may parse it.
 
-`state_report` answers `state` with the current state index, the live input word,
-the live output word, uptime, the committed `graph_version`, and the counts of
-CRC failures and `seq` gaps seen. Diagnosis, not control.
+`state_report` answers `state` with the current state index, uptime, the
+committed `graph_version`, the counts of dropped and unusable lines, and a
+nested `scan` object. Diagnosis, not control.
+
+```jsonc
+"scan": {"hz": 9871, "overruns": 4, "worst_gap": 2}
+```
+
+`hz` is what the device measured of itself at boot, not a declared figure — and
+it is a *floor*, covering reading and conditioning the pins but not evaluating
+a graph's transitions. `overruns` counts scan periods that went by with no scan
+in them since boot, and `worst_gap` is the most ever missed in a row.
+
+**A non-zero `overruns` means the reported timings were taken on a clock that
+skipped.** It is counted rather than absorbed for exactly that reason: a board
+quietly missing scans looks identical to a board that is fine, and the
+difference is a response window measured wrongly. A bridge should surface it.
 
 ---
 

@@ -56,3 +56,11 @@ endif()
 
 enable_testing()
 add_subdirectory(tests)
+
+# The host HAL, built here so that hal.h is compiled by something CI runs. It is
+# not linked into the tests: those drive StateMachine and HostLinkSession
+# directly, which is the seam that matters. This target exists to keep the
+# interface honest -- a board-only header rots between board builds.
+add_library(fsmd_hal_native firmware/hal/native.cpp)
+target_link_libraries(fsmd_hal_native PUBLIC fsmd_engine)
+target_compile_options(fsmd_hal_native PRIVATE -Wall -Wextra -Wpedantic -Werror)
