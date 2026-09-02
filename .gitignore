@@ -21,3 +21,8 @@ log.html
 report.html
 /logs/
 /snapshots/
+
+# Editor swap files. One of these got committed by a careless `git add -A`.
+*.swp
+*.swo
+*~
