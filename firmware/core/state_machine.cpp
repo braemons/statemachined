@@ -1,4 +1,4 @@
-#include "engine.h"
+#include "state_machine.h"
 
 namespace fsmd {
 namespace {
@@ -7,11 +7,9 @@ namespace {
 inline uint32_t since(uint32_t from, uint32_t now) { return now - from; }
 }  // namespace
 
-OutputUpdate TrialStateMachine::start(uint32_t trial_id, uint64_t session_seed,
-                                      Microseconds now_us, LineBitmask word) {
-  result_ = TrialRecord{};
-  result_.trial_id = trial_id;
-  rng_.reseed(Rng::mix(session_seed, trial_id));
+OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask word) {
+  record_ = RunRecord{};
+  rng_.reseed(seed);
   running_ = true;
   started_us_ = now_us;
   raised_ = 0;
@@ -28,7 +26,7 @@ OutputUpdate TrialStateMachine::start(uint32_t trial_id, uint64_t session_seed,
   return ops;
 }
 
-void TrialStateMachine::enter(uint8_t state, Microseconds now_us, LineBitmask word) {
+void StateMachine::enter(StateIndex state, Microseconds now_us, LineBitmask word) {
   current_ = state;
   entered_us_ = now_us;
   const State& s = graph_->states[state];
@@ -45,19 +43,19 @@ void TrialStateMachine::enter(uint8_t state, Microseconds now_us, LineBitmask wo
   // decided against the real word, not assumed: a line that rises between entry
   // and the first scan is a genuine rising edge and must fire.
   for (uint8_t c = 0; c < s.transition_count; ++c) {
-    const uint8_t i = s.first_transition + c;
+    const TransitionIndex i = s.first_transition + c;
     const Transition& cond = graph_->transitions[i];
     TransitionState& cs = trans_state_[i];
     cs.was_true = cond.holds(word);
     cs.armed = cond.fire_if_true_on_entry || !cs.was_true;
     cs.held_since = now_us;
-    const uint8_t hd = graph_->transitions[i].hold_duration;
+    const RandomDistributionIndex hd = graph_->transitions[i].hold_duration;
     cs.hold_needed_ms =
         (hd == kNoRandomDistribution) ? 0 : graph_->distributions[hd].draw(rng_);
   }
 }
 
-OutputUpdate TrialStateMachine::apply_actions(uint8_t first, uint8_t count) const {
+OutputUpdate StateMachine::apply_actions(OutputActionIndex first, uint8_t count) const {
   OutputUpdate ops;
   for (uint8_t i = 0; i < count; ++i) {
     const OutputAction& a = graph_->output_actions[first + i];
@@ -79,48 +77,47 @@ OutputUpdate TrialStateMachine::apply_actions(uint8_t first, uint8_t count) cons
   return ops;
 }
 
-void TrialStateMachine::record(StateExitCause cause, uint8_t trans_index, Microseconds now_us) {
-  if (result_.path_len < kMaxPath) {
-    StateVisit& e = result_.path[result_.path_len++];
+void StateMachine::record_visit(StateExitCause cause, TransitionIndex fired,
+                                Microseconds now_us) {
+  if (record_.path_len < kMaxPath) {
+    StateVisit& e = record_.path[record_.path_len++];
     e.state_index = current_;
     e.cause = cause;
-    e.transition_index = trans_index;
+    e.transition_index = fired;
     e.drawn_ms = timeout_ms_;
     e.entered_us = entered_us_;
     e.duration_us = since(entered_us_, now_us);
   } else {
     // A graph may loop. Truncate the path rather than corrupt it, and say so.
-    result_.path_truncated = true;
+    record_.path_truncated = true;
   }
 }
 
-OutputUpdate TrialStateMachine::leave(StateExitCause cause, uint8_t trans_index,
-                                      Microseconds now_us) {
-  record(cause, trans_index, now_us);
+OutputUpdate StateMachine::leave(StateExitCause cause, TransitionIndex fired,
+                                 Microseconds now_us) {
+  record_visit(cause, fired, now_us);
   const State& s = graph_->states[current_];
   OutputUpdate ops = apply_actions(s.first_exit_action, s.exit_action_count);
   // Everything this state raised comes down, whether or not the graph said so.
   // A valve left open because a graph forgot an on_exit is not an acceptable
-  // failure mode, so the engine guarantees it rather than trusting the data.
+  // failure mode, so the machine guarantees it rather than trusting the data.
   ops.set_low |= raised_ & ~ops.set_high;
   raised_ = 0;
   return ops;
 }
 
-bool TrialStateMachine::cancel(TrialCancelReason why, Microseconds now_us) {
+bool StateMachine::halt(Microseconds now_us) {
   if (!running_) return false;  // first terminal decision wins
   OutputUpdate ops = leave(StateExitCause::Cancel, kNoTransition, now_us);
-  (void)ops;  // the caller re-reads via the next scan; see note below
-  result_.outcome = TrialOutcome::Cancelled;
-  result_.cancel_reason = why;
-  result_.total_us = since(started_us_, now_us);
+  record_.halted = true;
+  record_.total_us = since(started_us_, now_us);
   running_ = false;
   pending_ = ops;
   has_pending_ = true;
   return true;
 }
 
-OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
+OutputUpdate StateMachine::scan(LineBitmask word, Microseconds now_us) {
   OutputUpdate ops;
   if (has_pending_) {  // outputs owed by a cancel that happened between scans
     ops = pending_;
@@ -131,9 +128,10 @@ OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
 
   // The runtime cap. Validation proves a terminal state is reachable; it cannot
   // prove one is reached.
-  if (trial_cap_ms_ > 0 &&
-      since(started_us_, now_us) >= static_cast<uint32_t>(trial_cap_ms_) * 1000u) {
-    cancel(TrialCancelReason::TrialTimeout, now_us);
+  if (run_cap_ms_ > 0 &&
+      since(started_us_, now_us) >= static_cast<uint32_t>(run_cap_ms_) * 1000u) {
+    halt(now_us);
+    record_.hit_run_cap = true;
     if (has_pending_) {
       ops.set_high |= pending_.set_high;
       ops.set_low |= pending_.set_low;
@@ -144,8 +142,8 @@ OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
   }
 
   const State& s = graph_->states[current_];
-  uint8_t next = kNoState;
-  uint8_t fired = kNoTransition;
+  StateIndex next = kNoState;
+  TransitionIndex fired = kNoTransition;
   StateExitCause cause = StateExitCause::Timeout;
 
   // Skip predicate evaluation entirely when nothing on the inputs moved and no
@@ -162,7 +160,7 @@ OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
   // transitions-per-state, never by graph size. Declaration order resolves ties:
   // the first transition in the list wins, as in Bpod.
   for (uint8_t c = 0; need_eval && c < s.transition_count && next == kNoState; ++c) {
-    const uint8_t i = s.first_transition + c;
+    const TransitionIndex i = s.first_transition + c;
     const Transition& cond = graph_->transitions[i];
     TransitionState& cs = trans_state_[i];
     const bool now_true = cond.holds(word);
@@ -205,10 +203,10 @@ OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
 
   const State& target = graph_->states[next];
   if (target.terminal()) {
-    result_.outcome = target.outcome;
-    result_.total_us = since(started_us_, now_us);
+    record_.terminal_code = target.terminal_code;
+    record_.total_us = since(started_us_, now_us);
     current_ = next;
-    record(StateExitCause::Terminal, kNoTransition, now_us);
+    record_visit(StateExitCause::Terminal, kNoTransition, now_us);
     running_ = false;
     return ops;
   }

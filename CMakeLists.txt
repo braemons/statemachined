@@ -13,8 +13,10 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(fsmd_core
   firmware/core/rng.cpp
-  firmware/core/graph.cpp
-  firmware/core/engine.cpp
+  firmware/core/random_distribution.cpp
+  firmware/core/state_graph.cpp
+  firmware/core/state_machine.cpp
+  firmware/core/trial_runner.cpp
 )
 target_include_directories(fsmd_core PUBLIC firmware/core)
 target_compile_options(fsmd_core PRIVATE -Wall -Wextra -Wpedantic -Werror)

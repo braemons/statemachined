@@ -1,4 +1,5 @@
-// Deterministic PRNG and the timing distributions.
+// The deterministic PRNG. The distributions that draw from it are in
+// random_distribution.h.
 //
 // Reproducibility is the whole point, so every choice here is made for it:
 //
@@ -42,26 +43,6 @@ class Rng {
 
  private:
   uint32_t s_[4] = {0, 0, 0, 0};
-};
-
-enum class RandomDistributionKind : uint8_t {
-  Fixed = 0,
-  Uniform = 1,
-  Exponential = 2,  // truncated: min, max, mean -- flat hazard
-  Choice = 3,
-};
-
-struct RandomDistribution {
-  RandomDistributionKind kind = RandomDistributionKind::Fixed;
-  uint8_t n = 0;                       ///< Choice: number of options
-  Milliseconds a = 0;                  ///< Fixed: ms. Uniform/Exponential: min_ms
-  Milliseconds b = 0;                  ///< Uniform/Exponential: max_ms
-  Milliseconds c = 0;                  ///< Exponential: mean_ms
-  const Milliseconds* opts = nullptr;  ///< Choice
-  const uint16_t* weights = nullptr;   ///< Choice, optional
-
-  /// Draw a duration in milliseconds. Called on state entry.
-  Milliseconds draw(Rng& rng) const;
 };
 
 }  // namespace fsmd

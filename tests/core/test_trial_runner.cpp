@@ -1,8 +1,8 @@
 // The engine is a pure function of (graph, seed, input word, time), which is
 // what lets these tests drive whole trials with no board, no clock and no I/O.
 #include "doctest.h"
-#include "engine.h"
 #include "helpers.h"
+#include "trial_runner.h"
 
 using namespace fsmd;
 using namespace fsmd::test;
@@ -10,7 +10,7 @@ using namespace fsmd::test;
 namespace {
 /// Run the engine forward to `until_us` in 100 us steps -- the real 10 kHz scan
 /// period -- holding the input word steady.
-void advance(TrialStateMachine& e, uint32_t word, uint32_t& t, uint32_t until_us) {
+void advance(TrialRunner& e, uint32_t word, uint32_t& t, uint32_t until_us) {
   while (t < until_us && e.running()) {
     t += 100;
     e.scan(word, t);
@@ -26,7 +26,7 @@ TEST_CASE("a timeout carries the trial to its terminal state") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 0, t);
@@ -52,7 +52,7 @@ TEST_CASE("a single-line transition fires on its rising edge") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 42, t);
@@ -84,7 +84,7 @@ TEST_CASE("a transition already true at entry does not fire unless level") {
   SUBCASE("edge semantics wait for the line to fall first") {
     Builder b;
     build(false, b);
-    TrialStateMachine e;
+    TrialRunner e;
     e.set_graph(&b.g);
     uint32_t t = 0;
     e.start(1, 1, t, bit(0));        // the lever is ALREADY down at entry
@@ -101,7 +101,7 @@ TEST_CASE("a transition already true at entry does not fire unless level") {
   SUBCASE("level semantics fire immediately") {
     Builder b;
     build(true, b);
-    TrialStateMachine e;
+    TrialRunner e;
     e.set_graph(&b.g);
     uint32_t t = 0;
     e.start(1, 1, t, bit(0));  // already down, and `level` fires anyway
@@ -127,7 +127,7 @@ TEST_CASE("a line that rises between arming and the first scan is an edge") {
   b.on(wait, c);
   b.g.entry = wait;
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 1, t, 0);  // low at entry
@@ -152,7 +152,7 @@ TEST_CASE("a combination of TTL lines is one transition") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
@@ -181,7 +181,7 @@ TEST_CASE("any-of fires on whichever line arrives") {
   b.on(wait, c);
   b.g.entry = wait;
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
@@ -205,7 +205,7 @@ TEST_CASE("hold_ms requires the predicate to stay true") {
   b.on(wait, c);
   b.g.entry = wait;
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
@@ -249,7 +249,7 @@ TEST_CASE("declaration order resolves a tie") {
   b.on(wait, c);
   b.g.entry = wait;
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
@@ -269,7 +269,7 @@ TEST_CASE("outputs a state raised come down when it is left") {
   b.g.entry = reward;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   const OutputUpdate open = e.start(1, 1, t);
@@ -291,7 +291,7 @@ TEST_CASE("cancel lowers the outputs and names CANCELLED") {
   b.timeout(reward, b.fixed(10000), hit);
   b.g.entry = reward;
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   const OutputUpdate open = e.start(7, 1, t);
@@ -323,7 +323,7 @@ TEST_CASE("the first terminal decision wins") {
   b.on(wait, c);
   b.g.entry = wait;
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
@@ -350,7 +350,7 @@ TEST_CASE("the trial cap catches a graph that cannot end") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);  // it *looks* fine
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   e.set_trial_cap_ms(1000);
   uint32_t t = 0;
@@ -375,7 +375,7 @@ TEST_CASE("a self-transition resets the timer and redraws the duration") {
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
@@ -390,7 +390,7 @@ TEST_CASE("a self-transition resets the timer and redraws the duration") {
     e.scan(0, t);
   }
   CHECK(e.running());
-  CHECK(e.result().path_len >= 6);  // each self-transition is recorded
+  CHECK(e.run().path_len >= 6);  // each self-transition is recorded
 
   advance(e, 0, t, t + ms(700));
   CHECK_FALSE(e.running());
@@ -406,14 +406,14 @@ TEST_CASE("the path records every state with its realised duration") {
   b.timeout(c, b.fixed(300), hit);
   b.g.entry = a;
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
   advance(e, 0, t, ms(1000));
   CHECK_FALSE(e.running());
 
-  const TrialRecord& r = e.result();
+  const RunRecord& r = e.run();
   REQUIRE(r.path_len >= 2);
   CHECK(r.path[0].state_index == a);
   CHECK(r.path[0].drawn_ms == 200);
@@ -435,12 +435,12 @@ TEST_CASE("a randomised duration is reported and is reproducible") {
   b.g.entry = fore;
 
   auto run = [&](uint32_t trial_id) {
-    TrialStateMachine e;
+    TrialRunner e;
     e.set_graph(&b.g);
     uint32_t t = 0;
     e.start(trial_id, 0xC0FFEE, t);
     advance(e, 0, t, ms(2000));
-    return e.result().path[0].drawn_ms;
+    return e.run().path[0].drawn_ms;
   };
 
   const int32_t a1 = run(412);
@@ -465,14 +465,14 @@ TEST_CASE("the path truncates rather than corrupts") {
   b.on(loop, c);
   b.g.entry = loop;
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
   advance(e, 0, t, ms(500));  // ~500 visits into a 64-entry buffer
 
-  CHECK(e.result().path_len <= kMaxPath);
-  CHECK(e.result().path_truncated);
+  CHECK(e.run().path_len <= kMaxPath);
+  CHECK(e.run().path_truncated);
 }
 
 TEST_CASE("micros() wraparound does not disturb a trial") {
@@ -483,7 +483,7 @@ TEST_CASE("micros() wraparound does not disturb a trial") {
   b.timeout(wait, b.fixed(500), ns);
   b.g.entry = wait;
 
-  TrialStateMachine e;
+  TrialRunner e;
   e.set_graph(&b.g);
   uint32_t t = 0xFFFFFFFF - ms(200);  // wraps mid-trial
   e.start(1, 1, t);
@@ -493,6 +493,6 @@ TEST_CASE("micros() wraparound does not disturb a trial") {
   }
   CHECK_FALSE(e.running());
   CHECK(e.result().outcome == TrialOutcome::NotStarted);
-  CHECK(e.result().path[0].duration_us >= ms(500));
-  CHECK(e.result().path[0].duration_us < ms(501));
+  CHECK(e.run().path[0].duration_us >= ms(500));
+  CHECK(e.run().path[0].duration_us < ms(501));
 }

@@ -1,4 +1,4 @@
-#include "graph.h"
+#include "state_graph.h"
 
 namespace fsmd {
 
@@ -30,10 +30,9 @@ GraphError validate(const StateGraph& g) {
       if (s.timeout_target >= g.n_states) return GraphError::BadTarget;
     }
     for (uint8_t c = 0; c < s.transition_count; ++c) {
-      const Transition& cond = g.transitions[s.first_transition + c];
-      if (cond.target_state >= g.n_states) return GraphError::BadTarget;
-      if (cond.hold_duration != kNoRandomDistribution &&
-          cond.hold_duration >= g.n_distributions)
+      const Transition& t = g.transitions[s.first_transition + c];
+      if (t.target_state >= g.n_states) return GraphError::BadTarget;
+      if (t.hold_duration != kNoRandomDistribution && t.hold_duration >= g.n_distributions)
         return GraphError::TooManyDistributions;
     }
   }

@@ -1,8 +1,8 @@
 // Validation exists so a bad graph is refused at upload, never at trial 300 --
 // triald "refuses rather than failing later". These tests are that promise.
 #include "doctest.h"
-#include "graph.h"
 #include "helpers.h"
+#include "state_graph.h"
 
 using namespace fsmd;
 using namespace fsmd::test;

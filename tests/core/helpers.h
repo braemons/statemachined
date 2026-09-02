@@ -1,8 +1,9 @@
 // A tiny builder, so a test reads as the paradigm it describes rather than as
 // struct initialisation.
 #pragma once
-#include "engine.h"
-#include "graph.h"
+#include "state_graph.h"
+#include "trial.h"
+#include "trial_runner.h"
 
 namespace fsmd::test {
 
@@ -24,11 +25,14 @@ struct Builder {
     g.states[g.n_states] = State{};
     return g.n_states++;
   }
-  uint8_t terminal(TrialOutcome o) {
+  /// A terminal state reporting a raw code -- for tests that exercise the state
+  /// machine without any trial vocabulary.
+  uint8_t terminal_code(TerminalCode c) {
     const uint8_t s = state();
-    g.states[s].outcome = o;
+    g.states[s].terminal_code = c;
     return s;
   }
+  uint8_t terminal(TrialOutcome o) { return terminal_code(terminal_code_of(o)); }
   void timeout(uint8_t s, uint8_t dist, uint8_t target) {
     g.states[s].timeout_duration = dist;
     g.states[s].timeout_target = target;

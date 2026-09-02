@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "doctest.h"
+#include "random_distribution.h"
 #include "rng.h"
 
 using namespace fsmd;
