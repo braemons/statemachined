@@ -19,19 +19,21 @@ GraphError validate(const StateGraph& g) {
 
   for (uint8_t i = 0; i < g.n_states; ++i) {
     const State& s = g.states[i];
-    if (s.trans_first + s.trans_count > g.n_transitions) return GraphError::TooManyTransitions;
-    if (s.entry_first + s.entry_count > g.n_output_actions)
+    if (s.first_transition + s.transition_count > g.n_transitions)
+      return GraphError::TooManyTransitions;
+    if (s.first_entry_action + s.entry_action_count > g.n_output_actions)
       return GraphError::TooManyOutputActions;
-    if (s.exit_first + s.exit_count > g.n_output_actions)
+    if (s.first_exit_action + s.exit_action_count > g.n_output_actions)
       return GraphError::TooManyOutputActions;
-    if (s.timeout_duration != kNoDistribution) {
+    if (s.timeout_duration != kNoRandomDistribution) {
       if (s.timeout_duration >= g.n_distributions) return GraphError::TooManyDistributions;
       if (s.timeout_target >= g.n_states) return GraphError::BadTarget;
     }
-    for (uint8_t c = 0; c < s.trans_count; ++c) {
-      const Transition& cond = g.transitions[s.trans_first + c];
+    for (uint8_t c = 0; c < s.transition_count; ++c) {
+      const Transition& cond = g.transitions[s.first_transition + c];
       if (cond.target_state >= g.n_states) return GraphError::BadTarget;
-      if (cond.hold_duration != kNoDistribution && cond.hold_duration >= g.n_distributions)
+      if (cond.hold_duration != kNoRandomDistribution &&
+          cond.hold_duration >= g.n_distributions)
         return GraphError::TooManyDistributions;
     }
   }
@@ -55,9 +57,9 @@ GraphError validate(const StateGraph& g) {
         stack[top++] = t;
       }
     };
-    if (s.timeout_duration != kNoDistribution) push(s.timeout_target);
-    for (uint8_t c = 0; c < s.trans_count; ++c)
-      push(g.transitions[s.trans_first + c].target_state);
+    if (s.timeout_duration != kNoRandomDistribution) push(s.timeout_target);
+    for (uint8_t c = 0; c < s.transition_count; ++c)
+      push(g.transitions[s.first_transition + c].target_state);
   }
 
   if (!terminal_reachable) return GraphError::NoTerminal;

@@ -21,7 +21,7 @@ namespace fsmd {
 /// triald's .tdr outcome codes. A wire contract: these values are in every .tdr
 /// the lab has written and every analysis script that reads one. NEVER
 /// renumber. Mirrors triald's TrialOutcome and VStim's TDR::TrialOutcome.
-enum class Outcome : int8_t {
+enum class TrialOutcome : int8_t {
   Undetermined = -1,
   NotStarted = 0,
   Hit = 1,
@@ -44,15 +44,30 @@ struct OutputAction {
   NarrowMilliseconds pulse_ms = 0;  ///< Pulse only
 };
 
+/// A node of the graph. Its transitions and its output actions live in the
+/// graph's shared pools rather than inside the state, so each is a (first,
+/// count) run into the relevant array -- a slice, not a list. That is what makes
+/// a 32-state graph fit in ~7.5 KB where Bpod's dense [state][event] matrix
+/// needs a Due or a Teensy.
 struct State {
-  uint8_t trans_first = 0, trans_count = 0;
-  uint8_t entry_first = 0, entry_count = 0;
-  uint8_t exit_first = 0, exit_count = 0;
-  DistributionIndex timeout_duration = kNoDistribution;
-  uint8_t timeout_target = kNoState;
-  Outcome outcome = Outcome::Undetermined;  ///< set => terminal
+  TransitionIndex first_transition = 0;  ///< slice of StateGraph::transitions
+  uint8_t transition_count = 0;
 
-  constexpr bool terminal() const { return outcome != Outcome::Undetermined; }
+  OutputActionIndex first_entry_action = 0;  ///< slice of output_actions, raised
+  uint8_t entry_action_count = 0;            ///< on entry
+
+  OutputActionIndex first_exit_action = 0;  ///< slice of output_actions, applied
+  uint8_t exit_action_count = 0;            ///< on exit, beyond the automatic
+                                            ///< lowering of everything raised
+
+  /// Drawn once on entry; kNoRandomDistribution means the state has no timeout
+  /// and can only be left through a transition or a cancel.
+  RandomDistributionIndex timeout_duration = kNoRandomDistribution;
+  StateIndex timeout_target = kNoState;  ///< where a timeout goes
+
+  TrialOutcome outcome = TrialOutcome::Undetermined;  ///< set => terminal
+
+  constexpr bool terminal() const { return outcome != TrialOutcome::Undetermined; }
 };
 
 /// Per-line input conditioning, applied when the word is assembled so that every
@@ -76,7 +91,7 @@ struct StateGraph {
   State states[kMaxStates];
   Transition transitions[kMaxTransitions];
   OutputAction output_actions[kMaxOutputActions];
-  Distribution distributions[kMaxDistributions];
+  RandomDistribution distributions[kMaxDistributions];
   InputConfig inputs;
 
   /// Levels outputs are driven to on watchdog timeout, reset, link loss or a

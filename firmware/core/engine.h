@@ -19,14 +19,14 @@
 
 namespace fsmd {
 
-enum class ExitCause : uint8_t {
+enum class StateExitCause : uint8_t {
   Timeout = 0,
   Transition = 1,
   Cancel = 2,
   Terminal = 3,  ///< the trial ended here
 };
 
-enum class CancelReason : uint8_t {
+enum class TrialCancelReason : uint8_t {
   None = 0,
   Host = 1,          ///< the experimenter, via triald and the bridge
   LinkLost = 2,      ///< heartbeat gap
@@ -39,9 +39,9 @@ enum class CancelReason : uint8_t {
 /// 32 KB.
 struct StateVisit {
   uint8_t state_index = 0;
-  ExitCause cause = ExitCause::Terminal;
+  StateExitCause cause = StateExitCause::Terminal;
   uint8_t transition_index =
-      kNoTransition;          ///< which transition fired, if ExitCause::Transition
+      kNoTransition;          ///< which transition fired, if StateExitCause::Transition
   Milliseconds drawn_ms = 0;  ///< the realised duration, reported so that
                               ///< a random draw is evidence and not just
                               ///< reproducible
@@ -51,8 +51,8 @@ struct StateVisit {
 
 struct TrialRecord {
   uint32_t trial_id = 0;
-  Outcome outcome = Outcome::Undetermined;
-  CancelReason cancel_reason = CancelReason::None;
+  TrialOutcome outcome = TrialOutcome::Undetermined;
+  TrialCancelReason cancel_reason = TrialCancelReason::None;
   StateVisit path[kMaxPath];
   uint8_t path_len = 0;
   bool path_truncated = false;
@@ -88,7 +88,7 @@ class TrialStateMachine {
   /// lowers it on any other transition. Returns false if the trial had already
   /// ended: the FIRST terminal decision wins, and we report what actually
   /// happened rather than a fabricated CANCELLED.
-  bool cancel(CancelReason why, Microseconds now_us);
+  bool cancel(TrialCancelReason why, Microseconds now_us);
 
   bool running() const { return running_; }
   uint8_t current_state() const { return current_; }
@@ -101,8 +101,8 @@ class TrialStateMachine {
 
  private:
   void enter(uint8_t state, Microseconds now_us, LineBitmask word);
-  OutputUpdate leave(ExitCause cause, uint8_t trans_index, Microseconds now_us);
-  void record(ExitCause cause, uint8_t trans_index, Microseconds now_us);
+  OutputUpdate leave(StateExitCause cause, uint8_t trans_index, Microseconds now_us);
+  void record(StateExitCause cause, uint8_t trans_index, Microseconds now_us);
   OutputUpdate apply_actions(uint8_t first, uint8_t count) const;
 
   const StateGraph* graph_ = nullptr;

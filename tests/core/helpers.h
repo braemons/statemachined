@@ -11,12 +11,12 @@ struct Builder {
 
   uint8_t fixed(int32_t ms) {
     g.distributions[g.n_distributions] =
-        Distribution{DistributionKind::Fixed, 0, ms, 0, 0, nullptr, nullptr};
+        RandomDistribution{RandomDistributionKind::Fixed, 0, ms, 0, 0, nullptr, nullptr};
     return g.n_distributions++;
   }
   uint8_t uniform(int32_t lo, int32_t hi) {
     g.distributions[g.n_distributions] =
-        Distribution{DistributionKind::Uniform, 0, lo, hi, 0, nullptr, nullptr};
+        RandomDistribution{RandomDistributionKind::Uniform, 0, lo, hi, 0, nullptr, nullptr};
     return g.n_distributions++;
   }
 
@@ -24,7 +24,7 @@ struct Builder {
     g.states[g.n_states] = State{};
     return g.n_states++;
   }
-  uint8_t terminal(Outcome o) {
+  uint8_t terminal(TrialOutcome o) {
     const uint8_t s = state();
     g.states[s].outcome = o;
     return s;
@@ -35,20 +35,21 @@ struct Builder {
   }
   /// Transitions must be contiguous per state, so add them in one run per state.
   uint8_t on(uint8_t s, Transition c) {
-    if (g.states[s].trans_count == 0) g.states[s].trans_first = g.n_transitions;
+    if (g.states[s].transition_count == 0) g.states[s].first_transition = g.n_transitions;
     g.transitions[g.n_transitions] = c;
-    g.states[s].trans_count++;
+    g.states[s].transition_count++;
     return g.n_transitions++;
   }
   void on_entry(uint8_t s, OutputAction a) {
-    if (g.states[s].entry_count == 0) g.states[s].entry_first = g.n_output_actions;
+    if (g.states[s].entry_action_count == 0)
+      g.states[s].first_entry_action = g.n_output_actions;
     g.output_actions[g.n_output_actions++] = a;
-    g.states[s].entry_count++;
+    g.states[s].entry_action_count++;
   }
   void on_exit(uint8_t s, OutputAction a) {
-    if (g.states[s].exit_count == 0) g.states[s].exit_first = g.n_output_actions;
+    if (g.states[s].exit_action_count == 0) g.states[s].first_exit_action = g.n_output_actions;
     g.output_actions[g.n_output_actions++] = a;
-    g.states[s].exit_count++;
+    g.states[s].exit_action_count++;
   }
 };
 

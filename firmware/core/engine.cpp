@@ -23,7 +23,7 @@ OutputUpdate TrialStateMachine::start(uint32_t trial_id, uint64_t session_seed,
 
   enter(graph_->entry, now_us, word);
   const State& s = graph_->states[current_];
-  OutputUpdate ops = apply_actions(s.entry_first, s.entry_count);
+  OutputUpdate ops = apply_actions(s.first_entry_action, s.entry_action_count);
   raised_ |= ops.set_high;
   return ops;
 }
@@ -33,7 +33,7 @@ void TrialStateMachine::enter(uint8_t state, Microseconds now_us, LineBitmask wo
   entered_us_ = now_us;
   const State& s = graph_->states[state];
 
-  timeout_ms_ = (s.timeout_duration == kNoDistribution)
+  timeout_ms_ = (s.timeout_duration == kNoRandomDistribution)
                     ? -1
                     : graph_->distributions[s.timeout_duration].draw(rng_);
 
@@ -44,15 +44,16 @@ void TrialStateMachine::enter(uint8_t state, Microseconds now_us, LineBitmask wo
   // not "wait until held" -- and `level` opts out of that. Arming has to be
   // decided against the real word, not assumed: a line that rises between entry
   // and the first scan is a genuine rising edge and must fire.
-  for (uint8_t c = 0; c < s.trans_count; ++c) {
-    const uint8_t i = s.trans_first + c;
+  for (uint8_t c = 0; c < s.transition_count; ++c) {
+    const uint8_t i = s.first_transition + c;
     const Transition& cond = graph_->transitions[i];
     TransitionState& cs = trans_state_[i];
     cs.was_true = cond.holds(word);
     cs.armed = cond.fire_if_true_on_entry || !cs.was_true;
     cs.held_since = now_us;
     const uint8_t hd = graph_->transitions[i].hold_duration;
-    cs.hold_needed_ms = (hd == kNoDistribution) ? 0 : graph_->distributions[hd].draw(rng_);
+    cs.hold_needed_ms =
+        (hd == kNoRandomDistribution) ? 0 : graph_->distributions[hd].draw(rng_);
   }
 }
 
@@ -78,7 +79,7 @@ OutputUpdate TrialStateMachine::apply_actions(uint8_t first, uint8_t count) cons
   return ops;
 }
 
-void TrialStateMachine::record(ExitCause cause, uint8_t trans_index, Microseconds now_us) {
+void TrialStateMachine::record(StateExitCause cause, uint8_t trans_index, Microseconds now_us) {
   if (result_.path_len < kMaxPath) {
     StateVisit& e = result_.path[result_.path_len++];
     e.state_index = current_;
@@ -93,11 +94,11 @@ void TrialStateMachine::record(ExitCause cause, uint8_t trans_index, Microsecond
   }
 }
 
-OutputUpdate TrialStateMachine::leave(ExitCause cause, uint8_t trans_index,
+OutputUpdate TrialStateMachine::leave(StateExitCause cause, uint8_t trans_index,
                                       Microseconds now_us) {
   record(cause, trans_index, now_us);
   const State& s = graph_->states[current_];
-  OutputUpdate ops = apply_actions(s.exit_first, s.exit_count);
+  OutputUpdate ops = apply_actions(s.first_exit_action, s.exit_action_count);
   // Everything this state raised comes down, whether or not the graph said so.
   // A valve left open because a graph forgot an on_exit is not an acceptable
   // failure mode, so the engine guarantees it rather than trusting the data.
@@ -106,11 +107,11 @@ OutputUpdate TrialStateMachine::leave(ExitCause cause, uint8_t trans_index,
   return ops;
 }
 
-bool TrialStateMachine::cancel(CancelReason why, Microseconds now_us) {
+bool TrialStateMachine::cancel(TrialCancelReason why, Microseconds now_us) {
   if (!running_) return false;  // first terminal decision wins
-  OutputUpdate ops = leave(ExitCause::Cancel, kNoTransition, now_us);
+  OutputUpdate ops = leave(StateExitCause::Cancel, kNoTransition, now_us);
   (void)ops;  // the caller re-reads via the next scan; see note below
-  result_.outcome = Outcome::Cancelled;
+  result_.outcome = TrialOutcome::Cancelled;
   result_.cancel_reason = why;
   result_.total_us = since(started_us_, now_us);
   running_ = false;
@@ -132,7 +133,7 @@ OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
   // prove one is reached.
   if (trial_cap_ms_ > 0 &&
       since(started_us_, now_us) >= static_cast<uint32_t>(trial_cap_ms_) * 1000u) {
-    cancel(CancelReason::TrialTimeout, now_us);
+    cancel(TrialCancelReason::TrialTimeout, now_us);
     if (has_pending_) {
       ops.set_high |= pending_.set_high;
       ops.set_low |= pending_.set_low;
@@ -145,7 +146,7 @@ OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
   const State& s = graph_->states[current_];
   uint8_t next = kNoState;
   uint8_t fired = kNoTransition;
-  ExitCause cause = ExitCause::Timeout;
+  StateExitCause cause = StateExitCause::Timeout;
 
   // Skip predicate evaluation entirely when nothing on the inputs moved and no
   // transition is mid-hold. At 10 kHz the overwhelmingly common scan then costs
@@ -160,8 +161,8 @@ OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
   // Only this state's transitions are evaluated -- cost is bounded by
   // transitions-per-state, never by graph size. Declaration order resolves ties:
   // the first transition in the list wins, as in Bpod.
-  for (uint8_t c = 0; need_eval && c < s.trans_count && next == kNoState; ++c) {
-    const uint8_t i = s.trans_first + c;
+  for (uint8_t c = 0; need_eval && c < s.transition_count && next == kNoState; ++c) {
+    const uint8_t i = s.first_transition + c;
     const Transition& cond = graph_->transitions[i];
     TransitionState& cs = trans_state_[i];
     const bool now_true = cond.holds(word);
@@ -183,13 +184,13 @@ OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
     }
     next = cond.target_state;
     fired = c;
-    cause = ExitCause::Transition;
+    cause = StateExitCause::Transition;
   }
 
   if (next == kNoState && timeout_ms_ >= 0 &&
       since(entered_us_, now_us) >= static_cast<uint32_t>(timeout_ms_) * 1000u) {
     next = s.timeout_target;
-    cause = ExitCause::Timeout;
+    cause = StateExitCause::Timeout;
   }
 
   if (next == kNoState) return ops;
@@ -207,13 +208,14 @@ OutputUpdate TrialStateMachine::scan(LineBitmask word, Microseconds now_us) {
     result_.outcome = target.outcome;
     result_.total_us = since(started_us_, now_us);
     current_ = next;
-    record(ExitCause::Terminal, kNoTransition, now_us);
+    record(StateExitCause::Terminal, kNoTransition, now_us);
     running_ = false;
     return ops;
   }
 
   enter(next, now_us, word);
-  const OutputUpdate entry_ops = apply_actions(target.entry_first, target.entry_count);
+  const OutputUpdate entry_ops =
+      apply_actions(target.first_entry_action, target.entry_action_count);
   ops.set_high |= entry_ops.set_high;
   ops.set_low = (ops.set_low | entry_ops.set_low) & ~entry_ops.set_high;
   raised_ |= entry_ops.set_high;

@@ -44,15 +44,15 @@ class Rng {
   uint32_t s_[4] = {0, 0, 0, 0};
 };
 
-enum class DistributionKind : uint8_t {
+enum class RandomDistributionKind : uint8_t {
   Fixed = 0,
   Uniform = 1,
   Exponential = 2,  // truncated: min, max, mean -- flat hazard
   Choice = 3,
 };
 
-struct Distribution {
-  DistributionKind kind = DistributionKind::Fixed;
+struct RandomDistribution {
+  RandomDistributionKind kind = RandomDistributionKind::Fixed;
   uint8_t n = 0;                       ///< Choice: number of options
   Milliseconds a = 0;                  ///< Fixed: ms. Uniform/Exponential: min_ms
   Milliseconds b = 0;                  ///< Uniform/Exponential: max_ms

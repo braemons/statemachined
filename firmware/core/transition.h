@@ -41,7 +41,7 @@ struct Transition {
   /// which is what makes "both levers held for 200 ms" one guard rather than
   /// hand-rolled bookkeeping. Drawn rather than fixed so a hold can be
   /// randomised per trial, and reported afterwards so the draw is evidence.
-  DistributionIndex hold_duration = kNoDistribution;
+  RandomDistributionIndex hold_duration = kNoRandomDistribution;
 
   /// Fire immediately if the predicate already holds when the state is entered,
   /// instead of waiting for a false->true edge. The default is the edge, which

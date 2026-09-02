@@ -96,16 +96,16 @@ TEST_CASE("between() is inclusive at both ends") {
 
 TEST_CASE("fixed distribution returns its value") {
   Rng r(1);
-  Distribution d;
-  d.kind = DistributionKind::Fixed;
+  RandomDistribution d;
+  d.kind = RandomDistributionKind::Fixed;
   d.a = 250;
   for (int i = 0; i < 32; ++i) CHECK(d.draw(r) == 250);
 }
 
 TEST_CASE("uniform distribution stays in range and covers it") {
   Rng r(2);
-  Distribution d;
-  d.kind = DistributionKind::Uniform;
+  RandomDistribution d;
+  d.kind = RandomDistributionKind::Uniform;
   d.a = 500;
   d.b = 3000;
   int64_t sum = 0;
@@ -123,8 +123,8 @@ TEST_CASE("uniform distribution stays in range and covers it") {
 
 TEST_CASE("truncated exponential is bounded, integer-only, and flat-hazard") {
   Rng r(3);
-  Distribution d;
-  d.kind = DistributionKind::Exponential;
+  RandomDistribution d;
+  d.kind = RandomDistributionKind::Exponential;
   d.a = 500;
   d.b = 3000;
   d.c = 1200;
@@ -160,8 +160,8 @@ TEST_CASE("truncated exponential is bounded, integer-only, and flat-hazard") {
 
 TEST_CASE("exponential degenerates safely") {
   Rng r(4);
-  Distribution d;
-  d.kind = DistributionKind::Exponential;
+  RandomDistribution d;
+  d.kind = RandomDistributionKind::Exponential;
   d.a = 100;
   d.b = 100;
   d.c = 50;
@@ -177,8 +177,8 @@ TEST_CASE("exponential degenerates safely") {
 TEST_CASE("choice distribution draws only from its options") {
   Rng r(5);
   const int32_t opts[3] = {100, 200, 400};
-  Distribution d;
-  d.kind = DistributionKind::Choice;
+  RandomDistribution d;
+  d.kind = RandomDistributionKind::Choice;
   d.n = 3;
   d.opts = opts;
 
@@ -195,8 +195,8 @@ TEST_CASE("choice distribution honours weights") {
   Rng r(6);
   const int32_t opts[2] = {10, 20};
   const uint16_t weights[2] = {9, 1};
-  Distribution d;
-  d.kind = DistributionKind::Choice;
+  RandomDistribution d;
+  d.kind = RandomDistributionKind::Choice;
   d.n = 2;
   d.opts = opts;
   d.weights = weights;
@@ -216,9 +216,10 @@ TEST_CASE("a draw is reproducible from the seed alone") {
   const int32_t opts[3] = {1, 2, 3};
   auto run = [&] {
     Rng r(Rng::mix(0xABCDEF, 412));
-    Distribution u{DistributionKind::Uniform, 0, 100, 900, 0, nullptr, nullptr};
-    Distribution e{DistributionKind::Exponential, 0, 200, 2000, 700, nullptr, nullptr};
-    Distribution c{DistributionKind::Choice, 3, 0, 0, 0, opts, nullptr};
+    RandomDistribution u{RandomDistributionKind::Uniform, 0, 100, 900, 0, nullptr, nullptr};
+    RandomDistribution e{
+        RandomDistributionKind::Exponential, 0, 200, 2000, 700, nullptr, nullptr};
+    RandomDistribution c{RandomDistributionKind::Choice, 3, 0, 0, 0, opts, nullptr};
     std::vector<int32_t> out;
     for (int i = 0; i < 50; ++i) {
       out.push_back(u.draw(r));

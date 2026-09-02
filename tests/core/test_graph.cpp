@@ -10,7 +10,7 @@ using namespace fsmd::test;
 TEST_CASE("a minimal well-formed graph validates") {
   Builder b;
   const uint8_t wait = b.state();
-  const uint8_t hit = b.terminal(Outcome::Hit);
+  const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.timeout(wait, b.fixed(100), hit);
   b.g.entry = wait;
   CHECK(validate(b.g) == GraphError::None);
@@ -23,7 +23,7 @@ TEST_CASE("an empty graph is refused") {
 
 TEST_CASE("an entry state that does not exist is refused") {
   Builder b;
-  b.terminal(Outcome::Hit);
+  b.terminal(TrialOutcome::Hit);
   b.g.entry = 7;
   CHECK(validate(b.g) == GraphError::BadEntry);
 }
@@ -31,14 +31,14 @@ TEST_CASE("an entry state that does not exist is refused") {
 TEST_CASE("a transition to a state that does not exist is refused") {
   Builder b;
   const uint8_t wait = b.state();
-  b.terminal(Outcome::Hit);
+  b.terminal(TrialOutcome::Hit);
   b.timeout(wait, b.fixed(100), 42);
   b.g.entry = wait;
   CHECK(validate(b.g) == GraphError::BadTarget);
 
   Builder c;
   const uint8_t w = c.state();
-  const uint8_t h = c.terminal(Outcome::Hit);
+  const uint8_t h = c.terminal(TrialOutcome::Hit);
   c.timeout(w, c.fixed(10), h);
   Transition cond;
   cond.all_high = bit(0);
@@ -64,7 +64,7 @@ TEST_CASE("a terminal state that exists but cannot be reached is refused") {
   Builder b;
   const uint8_t a = b.state();
   const uint8_t loop = b.state();
-  b.terminal(Outcome::Hit);  // reachable from nothing
+  b.terminal(TrialOutcome::Hit);  // reachable from nothing
   b.timeout(a, b.fixed(10), loop);
   b.timeout(loop, b.fixed(10), a);
   b.g.entry = a;
@@ -75,8 +75,8 @@ TEST_CASE("a terminal state that exists but cannot be reached is refused") {
 TEST_CASE("an unreachable state is refused even when the graph can end") {
   Builder b;
   const uint8_t wait = b.state();
-  const uint8_t hit = b.terminal(Outcome::Hit);
-  b.terminal(Outcome::Late);  // nothing points here
+  const uint8_t hit = b.terminal(TrialOutcome::Hit);
+  b.terminal(TrialOutcome::Late);  // nothing points here
   b.timeout(wait, b.fixed(100), hit);
   b.g.entry = wait;
   CHECK(validate(b.g) == GraphError::UnreachableState);
@@ -96,7 +96,7 @@ TEST_CASE("an output action on a line the board does not have is refused") {
   // silently drove line 8. On a rig line 8 is somebody's valve.
   Builder b;
   const uint8_t wait = b.state();
-  const uint8_t hit = b.terminal(Outcome::Hit);
+  const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.timeout(wait, b.fixed(10), hit);
   b.g.entry = wait;
   REQUIRE(validate(b.g) == GraphError::None);
@@ -133,16 +133,16 @@ TEST_CASE("every error has a message") {
 TEST_CASE("outcome codes are the .tdr wire contract") {
   // These values are in every .tdr the lab has written and every analysis
   // script that reads one. If this test fails, someone renumbered them.
-  CHECK(static_cast<int>(Outcome::Undetermined) == -1);
-  CHECK(static_cast<int>(Outcome::NotStarted) == 0);
-  CHECK(static_cast<int>(Outcome::Hit) == 1);
-  CHECK(static_cast<int>(Outcome::WrongResponse) == 2);
-  CHECK(static_cast<int>(Outcome::EarlyHit) == 3);
-  CHECK(static_cast<int>(Outcome::EarlyWrongResponse) == 4);
-  CHECK(static_cast<int>(Outcome::Early) == 5);
-  CHECK(static_cast<int>(Outcome::Late) == 6);
-  CHECK(static_cast<int>(Outcome::EyeError) == 7);
-  CHECK(static_cast<int>(Outcome::InexpectedStartSignal) == 8);
-  CHECK(static_cast<int>(Outcome::WrongStartSignal) == 9);
-  CHECK(static_cast<int>(Outcome::Cancelled) == 10);
+  CHECK(static_cast<int>(TrialOutcome::Undetermined) == -1);
+  CHECK(static_cast<int>(TrialOutcome::NotStarted) == 0);
+  CHECK(static_cast<int>(TrialOutcome::Hit) == 1);
+  CHECK(static_cast<int>(TrialOutcome::WrongResponse) == 2);
+  CHECK(static_cast<int>(TrialOutcome::EarlyHit) == 3);
+  CHECK(static_cast<int>(TrialOutcome::EarlyWrongResponse) == 4);
+  CHECK(static_cast<int>(TrialOutcome::Early) == 5);
+  CHECK(static_cast<int>(TrialOutcome::Late) == 6);
+  CHECK(static_cast<int>(TrialOutcome::EyeError) == 7);
+  CHECK(static_cast<int>(TrialOutcome::InexpectedStartSignal) == 8);
+  CHECK(static_cast<int>(TrialOutcome::WrongStartSignal) == 9);
+  CHECK(static_cast<int>(TrialOutcome::Cancelled) == 10);
 }

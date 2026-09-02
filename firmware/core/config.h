@@ -39,7 +39,15 @@ constexpr uint8_t kMaxLines = FSMD_MAX_LINES;
 /// LineBitmask at all, and shifting by it is undefined behaviour.
 constexpr uint8_t kMaxOutputLines = FSMD_MAX_OUTPUT_LINES;
 constexpr uint8_t kMaxPath = FSMD_MAX_PATH;
-constexpr uint8_t kNoState = 0xFF;
+/// Indices into the StateGraph's shared pools. Everything in a graph is stored
+/// in one flat array per kind and referred to by position -- that is what keeps
+/// a graph inside 32 KB -- so a bare uint8_t crossing a call boundary could be
+/// any of four different things. These say which.
+using StateIndex = uint8_t;
+using TransitionIndex = uint8_t;
+using OutputActionIndex = uint8_t;
+
+constexpr StateIndex kNoState = 0xFF;
 
 /// A set of I/O lines, one bit per line. Named because a bare uint32_t here is
 /// indistinguishable from a duration or a count, and the masks, the input word,
@@ -49,11 +57,11 @@ using LineBitmask = uint32_t;
 /// Index into StateGraph::distributions. Timeouts and holds are drawn from the
 /// shared pool rather than stored inline, so a graph can reuse one distribution
 /// everywhere it means the same thing.
-using DistributionIndex = uint8_t;
-constexpr DistributionIndex kNoDistribution = 0xFF;
+using RandomDistributionIndex = uint8_t;
+constexpr RandomDistributionIndex kNoRandomDistribution = 0xFF;
 
 /// "no transition fired" in a StateVisit, for an exit that was not a guard.
-constexpr uint8_t kNoTransition = 0xFF;
+constexpr TransitionIndex kNoTransition = 0xFF;
 
 /// Time. The two units are never interchangeable: the device clock ticks in
 /// microseconds and everything a graph declares is in milliseconds, so a bare

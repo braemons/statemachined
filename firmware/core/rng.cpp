@@ -78,15 +78,15 @@ int32_t Rng::between(int32_t lo, int32_t hi) {
   return lo + static_cast<int32_t>(below(span));
 }
 
-Milliseconds Distribution::draw(Rng& rng) const {
+Milliseconds RandomDistribution::draw(Rng& rng) const {
   switch (kind) {
-    case DistributionKind::Fixed:
+    case RandomDistributionKind::Fixed:
       return a;
 
-    case DistributionKind::Uniform:
+    case RandomDistributionKind::Uniform:
       return rng.between(a, b);
 
-    case DistributionKind::Exponential: {
+    case RandomDistributionKind::Exponential: {
       // Truncated exponential over [a, b] with mean parameter c: a flat hazard
       // rate, so the animal cannot time the go cue from elapsed time alone.
       if (b <= a) return a;
@@ -104,7 +104,7 @@ Milliseconds Distribution::draw(Rng& rng) const {
       return static_cast<int32_t>(ms);
     }
 
-    case DistributionKind::Choice: {
+    case RandomDistributionKind::Choice: {
       if (n == 0 || opts == nullptr) return 0;
       if (weights == nullptr) return opts[rng.below(n)];
       uint32_t total = 0;
