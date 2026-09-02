@@ -13,3 +13,11 @@ __pycache__/
 .pytest_cache/
 compile_commands.json
 .DS_Store
+
+# renode-test writes its Robot report and, on a failure, the Renode log and a
+# snapshot of the emulated machine, into the directory it was run from.
+robot_output.xml
+log.html
+report.html
+/logs/
+/snapshots/

@@ -16,6 +16,23 @@
 
 #include "hal.h"
 
+// Which port the host is on.
+//
+// A rig uses native USB CDC: one cable, no adapter, and the port appears when
+// the bridge opens it. Under emulation it is SCI2 on D0/D1 instead, because
+// tinyusb against an emulated USBFS is by far the most fragile thing in the
+// picture and the point of the emulator is to test *our* code. It is also the
+// right build for a rig that wants a hardware serial bridge rather than a USB
+// one, so this is not a test-only switch.
+//
+// Only the three link functions differ. Pins, timer and clock are the same
+// board either way.
+#if defined(FSMD_LINK_UART)
+#define FSMD_LINK Serial1
+#else
+#define FSMD_LINK Serial
+#endif
+
 namespace fsmd {
 namespace hal {
 namespace {
@@ -130,7 +147,8 @@ void init() {
     in_ports_[in_slot_[i]].mask |= in_[i].mask;
   }
 
-  Serial.begin(921600);  // ignored on native USB CDC, which runs at bus speed
+  // Real on a UART, ignored on native USB CDC, which runs at bus speed.
+  FSMD_LINK.begin(921600);
 }
 
 LineBitmask read_inputs() {
@@ -177,17 +195,29 @@ Microseconds micros_now() { return micros(); }
 
 size_t link_read(char* dst, size_t max) {
   size_t n = 0;
-  while (n < max && Serial.available() > 0) {
-    const int c = Serial.read();
+  while (n < max && FSMD_LINK.available() > 0) {
+    const int c = FSMD_LINK.read();
     if (c < 0) break;
     dst[n++] = static_cast<char>(c);
   }
   return n;
 }
 
-void link_write(const char* src, size_t n) { Serial.write(src, n); }
+void link_write(const char* src, size_t n) { FSMD_LINK.write(src, n); }
 
-bool link_up() { return static_cast<bool>(Serial); }
+bool link_up() {
+#if defined(FSMD_LINK_UART)
+  // A UART has no DTR and no carrier: there is nothing to ask. Link loss on
+  // this build is detectable only by the heartbeat lapsing, which is the
+  // bridge's job, so saying "up" here is the honest answer rather than an
+  // optimistic one.
+  return true;
+#else
+  // USB CDC: false the moment the bridge closes the port. This is what a rig
+  // should fail-safe on -- it is immediate, where a heartbeat timeout is not.
+  return static_cast<bool>(FSMD_LINK);
+#endif
+}
 
 // ---------------------------------------------------------- the scan timer ---
 

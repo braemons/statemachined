@@ -77,9 +77,11 @@ docker run --rm -it -v "$PWD":/w -w /w fsmd-dev make test
 ```
 
 It pins Ubuntu 24.04, gcc 13, clang 18, CMake 3.28, PlatformIO 6.1.16 and
-clang-format 23.1.0. Board toolchains are *not* baked into the image — the first
-`make firmware` downloads a few hundred MB into a named volume, where it
-survives container rebuilds.
+clang-format 23.1.0. It also carries Renode 1.16.1, which runs the firmware on
+an emulated Uno R4 Minima — `make emulate`, and see `emulation/README.md` for
+what that does and does not prove. Board toolchains are *not* baked into the
+image — the first `make firmware` downloads a few hundred MB into a named
+volume, where it survives container rebuilds.
 
 Flashing from inside the container needs the board passed through: uncomment the
 `runArgs` line in `.devcontainer/devcontainer.json` and adjust the device path.

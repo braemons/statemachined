@@ -140,6 +140,13 @@ class HostLinkSession {
   /// whatever owns the timer -- the session cannot see its own lateness.
   void report_scan_health(const ScanHealth& h) { scan_ = h; }
 
+  /// The conditioned input word as of the last scan, and what the engine
+  /// believes it has driven the outputs to. Reported in state_report, which is
+  /// the only way anything outside the device can check that a graph's line
+  /// numbers reach the pins somebody wired -- there is no read-back path.
+  LineBitmask input_word() const { return last_word_; }
+  LineBitmask output_word() const { return runner_.driven_levels(); }
+
   /// Lines the link layer threw away, for state_report. A link dropping lines
   /// should be visible to whoever is debugging the rig rather than inferred
   /// from trials that did not happen.
@@ -192,6 +199,13 @@ class HostLinkSession {
   bool have_boot_ = false;
   uint32_t bad_lines_ = 0;
   ScanHealth scan_;
+  LineBitmask last_word_ = 0;
+
+  /// Outputs owed by a start() that happened between scans. The entry state's
+  /// actions are returned by TrialRunner::start(), which is called from the
+  /// link, and the only thing that drives pins is advance_trial(), which is
+  /// called from the timer. Without this they are returned to nobody.
+  OutputUpdate pending_ops_;
 };
 
 }  // namespace fsmd

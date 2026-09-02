@@ -1,0 +1,19 @@
+// The Uno R4 Minima as Renode models it, plus the one thing fsmd needs to boot.
+using "platforms/boards/arduino_uno_r4_minima.repl"
+
+// Renode's RA4M1 description *tags* the USB module rather than modelling it, so
+// every read of it returns zero. The Arduino core initialises USB before it
+// reaches setup(), whatever else the sketch does, and tinyusb's dcd_init() sets
+// the USB clock-enable bit in SYSCFG and then spins until it reads back as one.
+// Against a tag that is never, so the firmware hangs before main().
+//
+// Plain RAM here is enough: the write sticks, the read-back satisfies the wait,
+// and the rest of dcd_init() finds its status bits clear and returns. Nothing
+// afterwards blocks on USB, because this platform runs the SCI build
+// (-DFSMD_LINK_UART) where the host is on SCI2 and USB is only what the core
+// brought along.
+//
+// It is a boot shim and nothing more. Emulating USB is not a goal -- if it were,
+// the tests would be testing tinyusb rather than fsmd.
+usbfs: Memory.MappedMemory @ sysbus 0x40090000
+    size: 0x1000

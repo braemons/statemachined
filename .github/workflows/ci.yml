@@ -91,6 +91,46 @@ jobs:
       - run: pip install platformio
       - run: pio run -e ${{ matrix.env }}
 
+  emulation:
+    name: the HAL runs on an emulated board
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-uno_r4_minima_sci-${{ hashFiles('platformio.ini') }}
+      # Pinned to the devcontainer's version. The Robot keyword library ships
+      # inside Renode, so a different Renode is a different set of keywords.
+      - name: Install Renode
+        run: |
+          curl -fsSL https://github.com/renode/renode/releases/download/v1.16.1/renode-1.16.1.linux-portable-dotnet.tar.gz -o /tmp/renode.tar.gz
+          mkdir -p /opt/renode
+          sudo tar xzf /tmp/renode.tar.gz -C /opt/renode --strip-components=1
+          sudo ln -s /opt/renode/renode-test /usr/local/bin/renode-test
+          pip install -r /opt/renode/tests/requirements.txt
+      - run: pip install platformio
+      - run: pio run -e uno_r4_minima_sci
+      # This covers what the host build cannot compile: the pin map, the port
+      # registers, the timer ISR, and the protocol over a real UART. It asserts
+      # nothing about timing -- Renode's virtual time makes that meaningless.
+      # See emulation/README.md.
+      - run: renode-test emulation/tests/fsmd.robot
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: renode-logs
+          path: |
+            logs/
+            log.html
+            robot_output.xml
+
   format:
     name: clang-format
     runs-on: ubuntu-latest

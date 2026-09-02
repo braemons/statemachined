@@ -23,6 +23,14 @@ sanitize:                   ## the same tests under ASan and UBSan
 firmware:                   ## build for the reference board
 	pio run -e uno_r4_minima
 
+# Emulation. Covers what the host build cannot compile -- the pin map, the port
+# registers, the timer ISR, the protocol over a real UART -- and says nothing
+# about timing. See emulation/README.md.
+.PHONY: emulate
+emulate:                    ## run the firmware under Renode, in Robot tests
+	pio run -e uno_r4_minima_sci
+	renode-test emulation/tests/fsmd.robot
+
 .PHONY: upload
 upload:                     ## flash the reference board
 	pio run -e uno_r4_minima -t upload

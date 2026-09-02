@@ -509,6 +509,11 @@ fsmd/
 │   ├── hal/                   renesas_ra4m1.cpp · native.cpp · teensy41.cpp
 │   │                          one file per board, each guarded by its own arch
 │   └── src/main.cpp           board entry point, deliberately thin
+├── emulation/                 the board under Renode, so firmware/hal/ has tests
+│   ├── fsmd-uno-r4.repl       Renode's own board file, plus a USB boot shim
+│   ├── fsmd.resc              loads the platform and the ELF
+│   └── tests/                 Robot: pin map, port registers, timer ISR, a whole
+│                              session over a real UART. Never timing
 ├── bridge/                    Python: serial ⇄ triald HTTP
 │   └── src/fsmd/              codec, link, the triald client, `fsmd` CLI
 ├── graphs/                    example graphs — go/no-go, 2AFC, fixation task
@@ -574,7 +579,7 @@ With names resolved to bit indices at upload and distributions in a shared pool:
 | | | **≈ 7.5 kB** | **~23% of SRAM** |
 
 > **Measured at M3, and this estimate was wrong by about a factor of three.**
-> The real figure is **11 920 B of `.data`+`.bss` (36.4%)**, and **21 136 B
+> The real figure is **11 928 B of `.data`+`.bss` (36.4%)**, and **21 144 B
 > committed (64.5%)** once the framework's 8 KB heap and the 1 KB main stack are
 > counted. It fits, with ~11 KB unclaimed.
 >
@@ -761,6 +766,24 @@ the trial type store. **Open: which.**
 | **M5** | Example graphs, `dev/HARDWARE.md` with R4 pinout and wiring, virtual events and output overrides, sync line |
 | **M6** | Teensy 4.1 and ESP32 HALs; the golden reproducibility test green on all three boards |
 | **M7** | Packaging |
+
+### Emulation, and what it can and cannot settle
+
+`firmware/hal/` is the one part of this repo the host build cannot compile, so
+until M3 it was covered by nothing. It now runs under **Renode**, whose own
+platform files already describe the R7FA4M1A and the Uno R4 Minima: the pin map,
+the port-register access, the timer ISR and the protocol over a real UART
+peripheral are all tested in CI with no board attached. See
+`emulation/README.md`.
+
+That is worth having on its own evidence — it immediately found that the session
+dropped the entry state's output actions, so an action on the first state never
+reached a pin, which every host test missed.
+
+**It settles nothing about timing.** Renode runs on virtual time against a
+nominal MIPS figure, so a scan there takes exactly as long as it is told to.
+Emulation makes the HAL *correct*; only a board makes the 10 kHz claim *true*.
+That division is why the milestone below still stands as written.
 
 **M3 is the milestone that decides whether this plan is right.** The RAM budget
 and the 10 kHz claim are both arithmetic until a board runs them; if either is

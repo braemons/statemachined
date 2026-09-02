@@ -342,7 +342,16 @@ void HostLinkSession::on_start(const JsonObject& m, uint16_t seq, Microseconds n
     return;
   }
 
-  runner_.start(armed_trial_id_, session_seed_, now_us);
+  // The entry state's output actions come back from start() and are owed to
+  // the pins. They are handed to the next advance_trial() rather than applied
+  // here, for the same reason a cancel's are: this is the link's thread of
+  // control and it drives nothing. Dropping them was a real bug -- "house light
+  // on at trial start" silently did nothing on a board -- and it survived the
+  // host tests because those call TrialRunner::start() and read the update
+  // themselves, so nothing ever asked whether the session passed it on.
+  const OutputUpdate entry_ops = runner_.start(armed_trial_id_, session_seed_, now_us);
+  pending_ops_.set_high = (pending_ops_.set_high | entry_ops.set_high) & ~entry_ops.set_low;
+  pending_ops_.set_low = (pending_ops_.set_low | entry_ops.set_low) & ~entry_ops.set_high;
   state_ = LinkState::Running;
 
   JsonWriter w(tx_, sizeof(tx_));
@@ -424,6 +433,17 @@ void HostLinkSession::on_state_request(uint16_t seq, Microseconds now_us) {
   // Nested rather than three more top-level members: a message is capped at
   // kJsonMaxMembers, and that cap is a RAM decision about JsonObject's stack
   // footprint rather than a formatting preference.
+  // The live pins, nested for the same reason `scan` is -- a message is capped
+  // at kJsonMaxMembers, and that cap bounds JsonObject's stack footprint.
+  //
+  // This is the only way anything outside the device can check that a graph's
+  // line numbers land on the pins somebody actually wired: there is no read-back
+  // path from a pin, and `out` is the engine's own shadow rather than a
+  // measurement. Under emulation it is what makes the pin map testable at all.
+  w.begin_object("io");
+  w.key_u32("in", last_word_);
+  w.key_u32("out", runner_.driven_levels());
+  w.end_object();
   w.begin_object("scan");
   w.key_u32("hz", scan_.hz);
   w.key_u32("overruns", scan_.overruns);
@@ -443,9 +463,22 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
   // reward -- falls due after the run has ended and the session is back to
   // Idle. Returning an empty update here would leave the valve open until the
   // next trial started.
-  if (state_ != LinkState::Running) return runner_.service_outputs(now_us);
+  last_word_ = word;
 
-  const OutputUpdate ops = runner_.advance(word, now_us);
+  // Anything a start() owed since the last scan.
+  const OutputUpdate owed = pending_ops_;
+  pending_ops_ = OutputUpdate{};
+
+  if (state_ != LinkState::Running) {
+    OutputUpdate idle = runner_.service_outputs(now_us);
+    idle.set_high = (owed.set_high | idle.set_high) & ~idle.set_low;
+    idle.set_low = (owed.set_low | idle.set_low) & ~idle.set_high;
+    return idle;
+  }
+
+  OutputUpdate ops = runner_.advance(word, now_us);
+  ops.set_high = (owed.set_high | ops.set_high) & ~ops.set_low;
+  ops.set_low = (owed.set_low | ops.set_low) & ~ops.set_high;
   if (!runner_.running()) {
     // The host learns of an outcome without having to ask for it. A trial that
     // ended silently would be indistinguishable from a hung one.

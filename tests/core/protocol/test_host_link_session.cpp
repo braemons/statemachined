@@ -651,3 +651,27 @@ TEST_CASE("state_report carries the scan health the board measured") {
   REQUIRE(type_of(r[0]) == "state_report");
   CHECK(r[0].find(R"("scan":{"hz":9871,"overruns":4,"worst_gap":2})") != std::string::npos);
 }
+
+TEST_CASE("the entry state's output actions reach the caller of advance_trial") {
+  // A regression, and it was found by an emulator rather than by anything here.
+  //
+  // The entry state's actions are returned by TrialRunner::start(), which the
+  // session calls from `start`. Only advance_trial() drives pins. The session
+  // used to drop the update on the floor, so "house light on at trial start"
+  // did nothing at all on a board -- and every test in this file passed,
+  // because they exercise the runner directly and read its update themselves.
+  // Nothing asked whether the session passed it on. This does.
+  Host h;
+  greet(h);
+  upload_minimal(h);  // raises line 2 on entering the first state
+  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":4,"graph_version":7)");
+  const auto started = h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":4)");
+  REQUIRE(type_of(started[0]) == "started");
+
+  const OutputUpdate first = h.device.advance_trial(0, 1000);
+  CHECK((first.set_high & (1u << 2)) != 0);
+
+  // And only once: the next scan owes nothing.
+  const OutputUpdate second = h.device.advance_trial(0, 2000);
+  CHECK((second.set_high & (1u << 2)) == 0);
+}

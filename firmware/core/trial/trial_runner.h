@@ -39,6 +39,10 @@ class TrialRunner {
   /// See StateMachine::service_outputs().
   OutputUpdate service_outputs(Microseconds now_us) { return machine_.service_outputs(now_us); }
 
+  /// What the engine believes the output lines are at. See
+  /// StateMachine::driven_levels().
+  LineBitmask driven_levels() const { return machine_.driven_levels(); }
+
   /// Seed the machine's shadow of the output levels, so the first Toggle goes
   /// the right way. See StateMachine::set_initial_levels().
   void set_initial_levels(LineBitmask levels) { machine_.set_initial_levels(levels); }

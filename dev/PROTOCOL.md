@@ -470,8 +470,15 @@ committed `graph_version`, the counts of dropped and unusable lines, and a
 nested `scan` object. Diagnosis, not control.
 
 ```jsonc
+"io":   {"in": 5, "out": 128},
 "scan": {"hz": 9871, "overruns": 4, "worst_gap": 2}
 ```
+
+`io.in` is the *conditioned* input word as of the last scan — after invert,
+enable and debounce — and `io.out` is the device's own record of the output
+levels, not a read-back: nothing can read a pin. Together they are the only way
+anything outside the device can check that a graph's line numbers reach the pins
+somebody wired.
 
 `hz` is what the device measured of itself at boot, not a declared figure — and
 it is a *floor*, covering reading and conditioning the pins but not evaluating

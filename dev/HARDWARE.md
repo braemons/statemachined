@@ -78,13 +78,13 @@ Built with the PlatformIO env `uno_r4_minima`, 2026-09-02.
 
 | | Bytes | |
 |---|---|---|
-| `HostLinkSession` (the whole device state) | 8888 | staged graph, live graph, trial runner, buffers, retry cache |
+| `HostLinkSession` (the whole device state) | 8896 | staged graph, live graph, trial runner, buffers, retry cache |
 | `InputConditioner` | 208 | |
 | USB CDC, tinyusb, FSP, core | ~2800 | not ours, not removable |
-| **`.data` + `.bss` + `.noinit`** | **11 920** | what `pio run` reports: 36.4% |
+| **`.data` + `.bss` + `.noinit`** | **11 928** | what `pio run` reports: 36.4% |
 | Framework heap (`BSP_CFG_HEAP_BYTES`) | 8192 | reserved by the variant. **fsmd never allocates** |
 | Main stack (`BSP_CFG_STACK_MAIN_BYTES`) | 1024 | declared; the physical gap below it is ~8.3 KB |
-| **Committed** | **21 136** | **64.5% of 32 KB** |
+| **Committed** | **21 144** | **64.5% of 32 KB** |
 
 Flash: 58 492 B, 22.3% of 256 KB.
 
@@ -110,6 +110,11 @@ to CI. The firmware measures the floor cost of a scan at boot and reports it in
 `scan.worst_gap`, so a rig that is missing scan periods says so rather than
 quietly measuring a response window on a clock that skipped. Fill this in from a
 board.
+
+**What *is* verified without a board:** the pin map above, the port-register
+reads and writes, the timer ISR, and a whole session over a real UART, all under
+Renode in CI. See `emulation/README.md` — and note that it proves the HAL
+correct and says nothing whatever about how long a scan takes.
 
 ### Flashing
 
