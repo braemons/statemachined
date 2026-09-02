@@ -68,6 +68,9 @@ CI runs the unit tests under gcc and clang, under sanitizers, at `-O0` and `-O3`
 (the cheapest way to catch a dependence on undefined behaviour), and compiles the
 firmware for the reference board.
 
+[`BUILD.md`](BUILD.md) has toolchain setup for Ubuntu 24.04, Fedora 44+ and WSL,
+and a devcontainer that pins the same versions CI uses.
+
 ## Target hardware
 
 | | |

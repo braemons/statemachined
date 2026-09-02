@@ -1,0 +1,47 @@
+{
+  "name": "fsmd",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+
+  // PlatformIO downloads a few hundred MB of board toolchain on the first
+  // `make firmware`. Keeping it in a named volume means a container rebuild
+  // costs seconds rather than that download again.
+  "mounts": [
+    "source=fsmd-platformio,target=/home/vscode/.platformio,type=volume"
+  ],
+  "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.platformio",
+
+  "containerEnv": {
+    "PLATFORMIO_CORE_DIR": "/home/vscode/.platformio"
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "llvm-vs-code-extensions.vscode-clangd",
+        "ms-vscode.cmake-tools",
+        "twxs.cmake",
+        "xaver.clang-format"
+      ],
+      "settings": {
+        // clangd over the Microsoft C/C++ extension: it reads the
+        // compile_commands.json that CMake already exports, so the editor sees
+        // exactly the flags the build does.
+        "C_Cpp.intelliSenseEngine": "disabled",
+        "clangd.arguments": ["--compile-commands-dir=${workspaceFolder}/build"],
+        "cmake.configureArgs": ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"],
+        "editor.formatOnSave": true,
+        "[cpp]": { "editor.defaultFormatter": "xaver.clang-format" }
+      }
+    }
+  },
+
+  // Uncomment to flash a board from inside the container. This is deliberately
+  // off by default: it needs the device present at container start, and a path
+  // that does not exist is a hard startup failure rather than a warning.
+  // "runArgs": ["--device=/dev/ttyACM0"],
+
+  "remoteUser": "vscode"
+}
