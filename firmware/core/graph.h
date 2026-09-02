@@ -91,8 +91,9 @@ enum class GraphError : uint8_t {
   TooManyActions,
   TooManyDistributions,
   BadEntry,
-  BadTarget,   ///< a transition to a state that does not exist
-  NoTerminal,  ///< no terminal state reachable from the entry state
+  BadTarget,      ///< a transition to a state that does not exist
+  BadOutputLine,  ///< an action on a line the board cannot represent
+  NoTerminal,     ///< no terminal state reachable from the entry state
   UnreachableState,
 };
 

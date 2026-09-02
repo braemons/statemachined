@@ -9,6 +9,14 @@ GraphError validate(const StateGraph& g) {
   if (g.n_distributions > kMaxDistributions) return GraphError::TooManyDistributions;
   if (g.entry >= g.n_states) return GraphError::BadEntry;
 
+  // Every action in the pool, not just the reachable ones: apply_actions()
+  // shifts by this line number, and a shift past the width of a LineBitmask is
+  // undefined behaviour. In practice it wraps, so line 40 silently drives line
+  // 8 -- a graph asking for a line that does not exist must be refused here,
+  // not quietly redirected onto a valve at trial 300.
+  for (uint8_t i = 0; i < g.n_actions; ++i)
+    if (g.actions[i].line >= kMaxOutputLines) return GraphError::BadOutputLine;
+
   for (uint8_t i = 0; i < g.n_states; ++i) {
     const State& s = g.states[i];
     if (s.trans_first + s.trans_count > g.n_transitions) return GraphError::TooManyTransitions;
@@ -73,6 +81,8 @@ const char* graph_error_str(GraphError e) {
       return "entry state does not exist";
     case GraphError::BadTarget:
       return "transition to a state that does not exist";
+    case GraphError::BadOutputLine:
+      return "an output action names a line the board does not have";
     case GraphError::NoTerminal:
       return "no terminal state is reachable from the entry state";
     case GraphError::UnreachableState:

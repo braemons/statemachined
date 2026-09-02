@@ -20,6 +20,9 @@
 #ifndef FSMD_MAX_LINES
 #define FSMD_MAX_LINES 32  // one uint32_t input word; widening is a type change
 #endif
+#ifndef FSMD_MAX_OUTPUT_LINES
+#define FSMD_MAX_OUTPUT_LINES 32  // one LineBitmask of outputs; a line at or
+#endif                            // past this cannot be represented at all
 #ifndef FSMD_MAX_PATH
 #define FSMD_MAX_PATH 64  // ring buffer: a graph may loop, and a long trial
 #endif                    // must degrade to a truncated path, never a corrupt one
@@ -30,6 +33,11 @@ constexpr uint8_t kMaxTransitions = FSMD_MAX_TRANSITIONS;
 constexpr uint8_t kMaxActions = FSMD_MAX_ACTIONS;
 constexpr uint8_t kMaxDistributions = FSMD_MAX_DISTRIBUTIONS;
 constexpr uint8_t kMaxLines = FSMD_MAX_LINES;
+
+/// Output lines are a separate index space from input lines and need their own
+/// bound: an action naming a line at or past this cannot be represented in a
+/// LineBitmask at all, and shifting by it is undefined behaviour.
+constexpr uint8_t kMaxOutputLines = FSMD_MAX_OUTPUT_LINES;
 constexpr uint8_t kMaxPath = FSMD_MAX_PATH;
 constexpr uint8_t kNoState = 0xFF;
 

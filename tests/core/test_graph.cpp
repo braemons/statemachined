@@ -89,6 +89,29 @@ TEST_CASE("a state with no timeout and no transitions is a dead end") {
   CHECK(validate(b.g) == GraphError::NoTerminal);
 }
 
+TEST_CASE("an output action on a line the board does not have is refused") {
+  // Regression: validate() bounded every list length but never the line number
+  // inside an action, and apply_actions() shifts by it. A shift past the width
+  // of a LineBitmask is undefined behaviour, and in practice it wraps -- line 40
+  // silently drove line 8. On a rig line 8 is somebody's valve.
+  Builder b;
+  const uint8_t wait = b.state();
+  const uint8_t hit = b.terminal(Outcome::Hit);
+  b.timeout(wait, b.fixed(10), hit);
+  b.g.entry = wait;
+  REQUIRE(validate(b.g) == GraphError::None);
+
+  b.on_entry(wait, Action{kMaxOutputLines, ActionKind::High, 0});
+  CHECK(validate(b.g) == GraphError::BadOutputLine);
+
+  b.g.actions[b.g.n_actions - 1].line = 40;
+  CHECK(validate(b.g) == GraphError::BadOutputLine);
+
+  // The last representable line is still fine.
+  b.g.actions[b.g.n_actions - 1].line = kMaxOutputLines - 1;
+  CHECK(validate(b.g) == GraphError::None);
+}
+
 TEST_CASE("every error has a message") {
   const GraphError every_error[] = {GraphError::None,
                                     GraphError::TooManyStates,
@@ -97,6 +120,7 @@ TEST_CASE("every error has a message") {
                                     GraphError::TooManyDistributions,
                                     GraphError::BadEntry,
                                     GraphError::BadTarget,
+                                    GraphError::BadOutputLine,
                                     GraphError::NoTerminal,
                                     GraphError::UnreachableState};
   for (GraphError e : every_error) {
