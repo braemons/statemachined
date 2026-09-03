@@ -135,18 +135,35 @@ OutputUpdate StateMachine::apply_actions(OutputActionIndex first, uint8_t count,
 
 void StateMachine::record_visit(StateExitCause cause, TransitionIndex fired,
                                 Microseconds now_us) {
+  StateVisit e;
+  e.state_index = current_;
+  e.cause = cause;
+  e.transition_index = fired;
+  e.drawn_ms = timeout_ms_;
+  e.entered_us = entered_us_;
+  e.duration_us = since(entered_us_, now_us);
+
+  // A ring, and it drops from the front. A graph may loop, and a long trial has
+  // to degrade to a truncated path rather than to a corrupt one -- but which
+  // half survives is a choice, and the end of a trial is where the response is.
+  // Keeping the first 255 visits and discarding everything after was the wrong
+  // half. `truncated` still says it happened, and total_visits says by how much.
+  const uint16_t next = static_cast<uint16_t>(record_.path_first) + record_.path_len;
+  const uint8_t slot = static_cast<uint8_t>(next < kMaxPath ? next : next - kMaxPath);
+  record_.path[slot] = e;
   if (record_.path_len < kMaxPath) {
-    StateVisit& e = record_.path[record_.path_len++];
-    e.state_index = current_;
-    e.cause = cause;
-    e.transition_index = fired;
-    e.drawn_ms = timeout_ms_;
-    e.entered_us = entered_us_;
-    e.duration_us = since(entered_us_, now_us);
+    ++record_.path_len;
   } else {
-    // A graph may loop. Truncate the path rather than corrupt it, and say so.
+    record_.path_first =
+        static_cast<uint8_t>(record_.path_first + 1 < kMaxPath ? record_.path_first + 1 : 0);
     record_.path_truncated = true;
   }
+
+  // After the record, never before: a sink that took a long time must not be
+  // able to leave the run's own account of itself half written. The seq is the
+  // visit's ordinal in the run, so a gap in the stream is detectable.
+  const uint32_t seq = record_.total_visits++;
+  if (visits_ != nullptr) visits_->on_visit(e, seq);
 }
 
 OutputUpdate StateMachine::leave(StateExitCause cause, TransitionIndex fired,

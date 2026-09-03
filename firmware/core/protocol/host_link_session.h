@@ -216,6 +216,25 @@ class HostLinkSession {
   void send_orphan_error(const char* code, const char* message, const char* context);
   void send_ack(uint16_t message_id);
   void emit_result();
+  void emit_visit(const StateVisit& v, uint32_t seq);
+
+  /// Points the runner's visit sink back here. Called wherever `runner_` is
+  /// rebuilt -- which is on every commit and every configure, because
+  /// TrialRunner is replaced rather than reset -- so that a stream cannot go
+  /// quiet because a graph was uploaded.
+  void rebind_runner();
+
+  /// The machine reports a visit; the session says whose trial it was. A
+  /// separate object rather than making the session a VisitSink, so that
+  /// `on_visit` is not part of what a caller can reach.
+  class VisitRelay : public VisitSink {
+   public:
+    explicit VisitRelay(HostLinkSession* s) : session_(s) {}
+    void on_visit(const StateVisit& v, uint32_t seq) override { session_->emit_visit(v, seq); }
+
+   private:
+    HostLinkSession* session_;
+  };
 
   /// Finish, frame and send whatever is in the transmit buffer, remembering it
   /// as the answer to `message_id` so a retry can be answered from the cache.
@@ -238,6 +257,7 @@ class HostLinkSession {
   uint16_t wiring_revision_ = 0;
 
   TrialRunner runner_;
+  VisitRelay visit_relay_{this};
   LinkState state_ = LinkState::Greeting;
 
   uint64_t session_seed_ = 0;

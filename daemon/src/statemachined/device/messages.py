@@ -66,6 +66,7 @@ class MsgType(StrEnum):
     LOG = "log"
     PONG = "pong"
     STATE_REPORT = "state_report"
+    VISIT = "visit"
 
 
 #: Device messages that answer nothing and may arrive at any time, so a reader
@@ -78,6 +79,7 @@ UNSOLICITED = frozenset(
         MsgType.RESULT_BEGIN,
         MsgType.RESULT_PATH,
         MsgType.RESULT_END,
+        MsgType.VISIT,
     }
 )
 

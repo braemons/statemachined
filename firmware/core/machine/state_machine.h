@@ -51,11 +51,43 @@ struct StateVisit {
   Microseconds duration_us = 0;
 };
 
+/// Somewhere for a completed visit to go the moment it happens, so that a host
+/// learns what the machine is doing while the trial is still running rather
+/// than only in the result at the end.
+///
+/// A sink passed in rather than a call to the link, because the machine must
+/// not learn that a link exists: it reads no clock, touches no pin, and this is
+/// the same rule. The native tests pass one that appends to a vector.
+class VisitSink {
+ public:
+  virtual ~VisitSink() = default;
+  /// `seq` counts visits within the run from 0, and is what makes a dropped
+  /// one detectable rather than a hole nobody notices.
+  virtual void on_visit(const StateVisit& v, uint32_t seq) = 0;
+};
+
 /// What the machine saw during one run, with no interpretation attached.
+///
+/// `path` is a genuine ring: when a looping graph overruns it, the OLDEST visit
+/// is dropped rather than the newest, because the interesting part of a trial
+/// is the response at the end. Read it through visit(), never by indexing
+/// `path` directly -- slot 0 is not visit 0 once it has wrapped.
 struct StateMachineRunRecord {
   StateVisit path[kMaxPath];
-  uint8_t path_len = 0;
+  uint8_t path_first = 0;     ///< slot the oldest surviving visit is in
+  uint8_t path_len = 0;       ///< how many are in the window, at most kMaxPath
+  uint32_t total_visits = 0;  ///< how many the run actually made
   bool path_truncated = false;
+
+  /// The i'th visit still held, oldest first. i < path_len.
+  const StateVisit& visit(uint8_t i) const {
+    const uint16_t slot = static_cast<uint16_t>(path_first) + i;
+    return path[slot < kMaxPath ? slot : slot - kMaxPath];
+  }
+
+  /// The `seq` of the oldest visit still held. Zero unless the ring wrapped,
+  /// and what tells a host which window of a truncated path it received.
+  uint32_t first_seq() const { return total_visits - path_len; }
   Microseconds total_us = 0;
   TerminalCode terminal_code = kNotTerminal;  ///< set if a terminal state was reached
   bool force_ended = false;                   ///< ended by force_end() rather than by the graph
@@ -150,6 +182,10 @@ class StateMachine {
   /// hang, so the cap stays regardless.
   void set_run_cap_ms(Milliseconds ms) { run_cap_ms_ = ms; }
 
+  /// Report every completed visit as it happens. Null by default: a machine
+  /// with no sink behaves exactly as it did before there was one.
+  void set_visit_sink(VisitSink* sink) { visits_ = sink; }
+
  private:
   void enter(StateIndex state, Microseconds now_us, LineBitmask word);
   OutputUpdate leave(StateExitCause cause, TransitionIndex fired, Microseconds now_us);
@@ -161,6 +197,7 @@ class StateMachine {
   void note(const OutputUpdate& ops);
 
   const StateGraph* graph_;
+  VisitSink* visits_ = nullptr;
   Rng rng_;
   StateMachineRunRecord record_;
   TransitionState trans_state_[kMaxTransitions];

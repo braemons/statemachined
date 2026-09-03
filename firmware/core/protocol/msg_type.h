@@ -57,6 +57,7 @@ enum class MsgType : uint8_t {
   Log,
   Pong,
   StateReport,
+  Visit,
 
   /// A `msg_type` this firmware does not know. Never written to the wire: it is
   /// what a name that matched nothing parses to, and it is answered with

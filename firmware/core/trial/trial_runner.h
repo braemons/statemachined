@@ -56,6 +56,12 @@ class TrialRunner {
 
   void set_trial_cap_ms(Milliseconds ms) { machine_.set_run_cap_ms(ms); }
 
+  /// Report every completed state visit as it happens. Passed straight down:
+  /// the trial layer adds the trial's identity to what the machine reports, but
+  /// it is the machine that knows when a visit ended. See
+  /// StateMachine::set_visit_sink().
+  void set_visit_sink(VisitSink* sink) { machine_.set_visit_sink(sink); }
+
  private:
   /// Read the run's ending, if it has one, and write down what it meant for the
   /// trial -- terminal code to TrialOutcome, or the wall-clock cap to

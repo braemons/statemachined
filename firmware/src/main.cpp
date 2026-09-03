@@ -214,10 +214,8 @@ bool g_link_was_up = false;
 // Costs ~4.6 KB of SRAM -- its own StateGraph and its own TrialRunner -- on a
 // board with 32 KB. That is worth it on a bench and worth nothing on a rig,
 // where a host greets within a second of boot, so a deployed build can drop it
-// with -DSTATEMACHINED_DEMO=0 and get the RAM back.
-#ifndef STATEMACHINED_DEMO
-#define STATEMACHINED_DEMO 1
-#endif
+// with -DSTATEMACHINED_DEMO=0 and get the RAM back. The switch itself lives in
+// firmware/core/config.h, with the capacities that depend on it.
 
 #if STATEMACHINED_DEMO
 StateGraph g_demo_graph;

@@ -1008,7 +1008,7 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 | | |
 |---|---|
 | **M4a** ✅ | **The move, and nothing else.** `tools/bringup/` → `daemon/`, `statemachined_bringup` → `statemachined` with the wire under `device/`, `wire.py` made standalone with golden vectors against the emulator's copy *and* against `crc16.cpp`. The graph upload and result reassembly left `tests/hardware/harness.py` for `device/upload.py` and `device/result.py`, so the hardware suite now tests the daemon's codec rather than a copy of it. `make bringup` and `make test-hardware` unchanged in behaviour; `make test-daemon` is new and is in `make ci` and CI |
-| **M4b** | **Wiring config and the `visit` stream, in the firmware** (§3.3, §3.6). Small. The wiring move plus a compile-time safe-level word closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships; the stream is a callback and a serialiser. They share a file and a protocol document, so they share a branch. **No data flash** — that is deferred to M7 |
+| **M4b** ✅ | **Wiring config and the `visit` stream, in the firmware** (§3.3, §3.6). The wiring move plus a compile-time safe-level word closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships; the stream is a callback and a serialiser. They share a file and a protocol document, so they share a branch. **No data flash** — that is deferred to M7 |
 | **M4c** | **The graph set, in the firmware** (§3.2, §3.3): shared pools, `GraphEntry`, `set_begin`/`set_end`, a slot in `configure`, `max_graphs` in `caps`. The larger of the two firmware milestones and the one this plan's trial loop rests on. Covered by the native core, the Renode session and `PROTOCOL.md` message by message, all of which exist |
 | **M4d** | `model/` and `compile.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4e** | `device/supervisor.py` and `clock.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core over a pty — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks |
@@ -1017,6 +1017,20 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 | **M5** | Packaging: nfpm, systemd, sysusers, udev, logrotate, the builder containers, `release.yml`, one line in `packages/sources.txt`. **Installed on the Pi 5 alongside vstimd and triald** |
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
 | **M7** | **Data flash** (§3.4): the `hal.h` addition, the RA4M1 implementation, a file-backed `native.cpp` stand-in, the boot-time read, and `persist`. Deferred deliberately: the compile-time safe levels of §3.4 hold the fail-safe hole shut without it, and this is easier to build once a daemon exists to exercise it. Renode covers the HAL addition |
+
+**What M4b cost, measured.** The 255-entry path is +3056 B, exactly as budgeted
+— but demo mode carries a *second* `TrialRunner`, so the bench image pays for it
+twice and does not fit. `caps.max_path` is therefore **255 on the rig image and
+64 on the bench one**, decided in `config.h` by `STATEMACHINED_DEMO`, which is
+what `caps` exists to let a host discover. The rig image is 15 984 B of 32 768,
+leaving ~7.5 KB once the framework's 8 KB heap and the stack are taken — which
+is the whole of what §3.2's graph set wants, and is why open question 10 is now
+the tightest one in this document rather than a note.
+
+`platformio.ini` also said `MAX_PATH=1024` for the Teensy and `512` for the
+ESP32, neither of which was ever possible: `path_len` is a `uint8_t`. A
+`static_assert` in `config.h` refuses it now instead of leaving it to be found
+on a board.
 
 **M4a is worth doing and merging on its own.** It is a move with no new
 behaviour, it makes the hardware suite test the daemon's codec instead of a copy

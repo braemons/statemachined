@@ -422,7 +422,7 @@ a debounce must not take the safe levels with it.
  "has_graph":true,"graph_version":7,"has_wiring":true,
  "caps":{"max_line":512,"max_states":32,"max_transitions":64,
          "max_output_actions":64,"max_distributions":32,
-         "max_choice_options":32,"max_path":64},"crc":"...."}
+         "max_choice_options":32,"max_path":255},"crc":"...."}
 ```
 
 `scan_hz` is **measured at boot, not declared**, so the host knows the timing
@@ -431,6 +431,11 @@ resolution it is actually getting rather than the one the design hoped for.
 `caps` holds the device's compile-time capacities. The bridge checks a graph
 against them before uploading, which turns "refused at `graph_end`" into
 "refused before the first byte" — a better error at no cost.
+
+They are **read, never assumed**, and `max_path` is the one where that already
+matters: the reference board ships two images, and the bench one — which carries
+demo mode, and therefore a second path buffer — has 64 where the rig image has
+255.
 
 They are **nested rather than flat**, and that is a memory decision rather than a
 stylistic one: a receiver's per-message member limit is what bounds how much
@@ -456,7 +461,13 @@ not skippable.
 
 ### 4.3 The result
 
-Chunked, for the same reason the upload is: a 64-entry path does not fit in a
+**The result is the record.** §4.4's `visit` stream reports the same visits as
+they happen and is a *preview*: a host reconciles what it streamed against what
+arrives here, and where the two disagree, this wins. The one case the stream is
+the only complete copy is a `truncated` result, and `first_seq` below is what
+lets a host say exactly which visits it is missing.
+
+Chunked, for the same reason the upload is: a full path does not fit in a
 512-byte line, and buffering one that did would cost the device a kilobyte it
 does not have.
 
@@ -468,7 +479,7 @@ result_end
 
 ```json
 {"msg_type":"result_begin","message_id":9,"trial_id":193,"outcome":1,"cancel_reason":0,
- "total_us":1483200,"path_len":5,"truncated":false,"crc":"...."}
+ "total_us":1483200,"path_len":5,"first_seq":0,"total_visits":5,"truncated":false,"crc":"...."}
 
 {"msg_type":"result_path","message_id":10,"trial_id":193,"from":0,
  "p":[[0,"timeout",255,500,0,500120],[1,"transition",2,0,500120,183044]],"crc":"...."}
@@ -496,13 +507,59 @@ documented once, here, and decoded once, in the bridge.
 
 `truncated` is set when the run visited more states than `max_path` holds. **A
 graph may loop, and a long trial degrades to a truncated path rather than to a
-corrupt one** — the record is a ring buffer with an overflow flag, and the flag
-is on the wire so the host never mistakes a truncated path for a complete one.
+corrupt one.** The record is a genuine ring and it drops from the **front**: the
+interesting part of a trial is the response at the end, so overflow costs the
+oldest visits, not the newest.
+
+| Field | Type | |
+|---|---|---|
+| `path_len` | `u8` | How many entries `p` will carry in total — the size of the window, not of the run |
+| `first_seq` | `u32` | The `seq` (§4.4) of the oldest visit still in that window. `0` unless the ring wrapped |
+| `total_visits` | `u32` | How many visits the run actually made. `total_visits > path_len` is what `truncated` means, and now it says by how much |
+
+`from` on a `result_path` chunk stays an offset into what is being **sent**, not
+into the run: chunk 0 starts at `first_seq`, whatever that is.
 
 `result_end`'s `checksum` accumulates over `result_begin` and every
 `result_path`, exactly as `graph_end`'s does, and catches a dropped chunk.
 
-### 4.4 `event`, `error`, `log`, `pong`, `state_report`
+### 4.4 `visit`
+
+One completed state visit, sent as it happens. Unsolicited, so it can arrive
+between a command and its reply and in the middle of a result.
+
+```json
+{"msg_type":"visit","message_id":57,"trial_id":193,"seq":2,
+ "v":[1,"transition",2,0,500120,183044],"crc":"...."}
+```
+
+`v` is **the same six-element array as a `result_path` entry**, in the same
+order and with the same types (§4.3). It is decoded by the same function on the
+host; two shapes for one fact is how the two drift apart.
+
+| Field | Type | |
+|---|---|---|
+| `trial_id` | `u32` | The id from `configure`. **`0` when there was no host-configured trial** — demo mode, the bench, a line-started run before anything assigned an id. The trace is still worth having; it simply joins to nothing |
+| `seq` | `u32` | The visit's ordinal within the run, from `0`. A gap is what makes a dropped visit **detectable** rather than a hole nobody notices |
+
+**Emitted when the state is left, not when it is entered**, because a visit's
+duration and exit cause do not exist before then. For a trace that is not a
+latency problem — what matters is the timestamp, and `entered_us` is exact — and
+for a live display it costs one state of lag on a trial's first state only:
+after that, each exit says both when the reported state ended and, via
+`transition_index` resolved against the graph the host holds, which state the
+machine is in now.
+
+It is called `visit` and not `transition` for two reasons. `transition` is
+already this wire's noun for an edge in a graph (`graph_transition`), and what
+is reported is a completed *visit* that happens to carry the transition which
+ended it.
+
+**Always on.** Unlike `event`, which can fire every scan, this fires a handful
+of times per trial, and there is no rig configuration in which one would rather
+not have the record. `state_report`'s `tx_stalls` is what would say otherwise.
+
+### 4.5 `event`, `error`, `log`, `pong`, `state_report`
 
 ```json
 {"msg_type":"event","message_id":13,"us":1483200,"word":6,"crc":"...."}

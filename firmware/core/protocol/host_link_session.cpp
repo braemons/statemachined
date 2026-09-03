@@ -66,7 +66,11 @@ void DuplicateCommandGuard::remember(uint16_t message_id, const char* line, size
 }
 
 HostLinkSession::HostLinkSession(ReplySink& out, const DeviceIdentity& identity)
-    : out_(out), identity_(identity), reader_(rx_, sizeof(rx_)), runner_(live_graph_) {}
+    : out_(out), identity_(identity), reader_(rx_, sizeof(rx_)), runner_(live_graph_) {
+  rebind_runner();
+}
+
+void HostLinkSession::rebind_runner() { runner_.set_visit_sink(&visit_relay_); }
 
 // ------------------------------------------------------------- receiving ---
 
@@ -186,6 +190,7 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
     case MsgType::Log:
     case MsgType::Pong:
     case MsgType::StateReport:
+    case MsgType::Visit:
     case MsgType::Unknown:
       break;
   }
@@ -363,6 +368,7 @@ void HostLinkSession::on_graph_message(const JsonObject& m, JsonSpan covered,
   live_graph_ = builder_.staged();
   have_graph_ = true;
   runner_ = TrialRunner(live_graph_);
+  rebind_runner();
 
   JsonWriter w(tx_, sizeof(tx_));
   w.begin(msg_type_name(MsgType::GraphOk), tx_message_id_);
@@ -423,6 +429,7 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
   }
 
   runner_ = TrialRunner(live_graph_);
+  rebind_runner();
   runner_.set_trial_cap_ms(cap_ms);
   armed_trial_id_ = trial_id;
   state_ = LinkState::Armed;
@@ -646,6 +653,33 @@ OutputUpdate HostLinkSession::fail_safe() {
   return ops;
 }
 
+void HostLinkSession::emit_visit(const StateVisit& v, uint32_t seq) {
+  // Emitted when the state is LEFT, not when it is entered: a visit's duration
+  // and exit cause do not exist before then. For a trace that is not a latency
+  // problem, because what matters is the timestamp and `entered_us` is exact --
+  // and each exit tells a host both when the state it reports ended and, via
+  // the transition it resolves against the graph, which state the machine is in
+  // now.
+  JsonWriter w(tx_, sizeof(tx_));
+  w.begin(msg_type_name(MsgType::Visit), tx_message_id_);
+  // Zero where there is no host-configured trial -- demo mode, the bench, a
+  // line-started run before anything assigned an id. The trace is still worth
+  // having; it simply joins to nothing.
+  w.key_u32("trial_id", (state_ == LinkState::Running) ? armed_trial_id_ : 0);
+  w.key_u32("seq", seq);
+  // The same six-element array as a result_path entry, decoded by the same
+  // function on the host. Two shapes for one fact is how the two drift apart.
+  w.begin_array("v");
+  w.elem_u32(v.state_index);
+  w.elem_str(cause_name(v.cause));
+  w.elem_u32(v.transition_index);
+  w.elem_i32(v.drawn_ms);
+  w.elem_u32(v.entered_us);
+  w.elem_u32(v.duration_us);
+  w.end_array();
+  send_unsolicited(w);
+}
+
 void HostLinkSession::emit_result() {
   const TrialRecord& r = runner_.result();
   const StateMachineRunRecord& run = runner_.run_record();
@@ -660,6 +694,12 @@ void HostLinkSession::emit_result() {
     w.key_u32("cancel_reason", static_cast<uint32_t>(r.cancel_reason));
     w.key_u32("total_us", run.total_us);
     w.key_u32("path_len", run.path_len);
+    // What the host needs to know which window it received. `truncated` says a
+    // path overflowed; these say by how much and where the surviving one
+    // starts, so a trace assembled from the visit stream can be reconciled
+    // against it rather than merely compared for length.
+    w.key_u32("first_seq", run.first_seq());
+    w.key_u32("total_visits", run.total_visits);
     w.key_bool("truncated", run.path_truncated);
     const size_t len = w.len();
     checksum = crc16_ccitt(tx_, len, checksum);
@@ -684,7 +724,9 @@ void HostLinkSession::emit_result() {
     constexpr size_t kTailBudget = 16;  // ],"crc":"XXXX"}\n
     uint8_t i = from;
     while (i < run.path_len && w.len() + kRowBudget + kTailBudget < sizeof(tx_)) {
-      const StateVisit& v = run.path[i];
+      // visit(), not path[i]: the ring drops from the front, so slot 0 is not
+      // visit 0 once it has wrapped. `from` stays an offset into what was sent.
+      const StateVisit& v = run.visit(i);
       w.begin_elem_array();
       w.elem_u32(v.state_index);
       w.elem_str(cause_name(v.cause));

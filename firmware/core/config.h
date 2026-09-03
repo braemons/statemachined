@@ -43,9 +43,32 @@
 #ifndef STATEMACHINED_SAFE_LEVELS
 #define STATEMACHINED_SAFE_LEVELS 0
 #endif
+// Demo mode: the graph a board runs before anybody greets it, so that a bench
+// board with a switch and a few LEDs does something you can watch. On by
+// default; `make firmware-rig` builds it out and gets its ~4.6 KB back. It is
+// here rather than in main.cpp because it is a capacity decision -- it costs a
+// second StateGraph and a second TrialRunner -- and the path length below now
+// depends on it.
+#ifndef STATEMACHINED_DEMO
+#define STATEMACHINED_DEMO 1
+#endif
+
+// The visit ring: a graph may loop, and a long trial must degrade to a
+// truncated path, never a corrupt one.
+//
+// 255 on a rig. The bench image cannot have it: demo mode carries a second
+// TrialRunner, so the path is paid for twice, and 2 x 4080 B on top of demo's
+// own graph runs the Uno R4 Minima into the framework's 8 KB heap at link time.
+// The bench image is the one where that trade is obviously right -- nothing
+// there is recording an experiment -- and `caps.max_path` in hello_ack is how a
+// host learns which build it is talking to, which is what that field is for.
 #ifndef STATEMACHINED_MAX_PATH
-#define STATEMACHINED_MAX_PATH 64  // ring buffer: a graph may loop, and a long trial
-#endif                             // must degrade to a truncated path, never a corrupt one
+#if STATEMACHINED_DEMO
+#define STATEMACHINED_MAX_PATH 64
+#else
+#define STATEMACHINED_MAX_PATH 255
+#endif
+#endif
 
 namespace statemachined {
 constexpr uint8_t kMaxStates = STATEMACHINED_MAX_STATES;
@@ -58,7 +81,17 @@ constexpr uint8_t kMaxLines = STATEMACHINED_MAX_LINES;
 /// bound: an action naming a line at or past this cannot be represented in a
 /// LineBitmask at all, and shifting by it is undefined behaviour.
 constexpr uint8_t kMaxOutputLines = STATEMACHINED_MAX_OUTPUT_LINES;
+/// 255 is not a compromise between two costs; it is where the type stops the
+/// count. `path_len` is a uint8_t, so 255 is the largest value record_visit's
+/// comparison still terminates on and 256 is the value that breaks it silently.
+/// Going past it means widening path_len, result_begin's path_len and the
+/// `from` index of every result_path chunk -- a protocol change for headroom
+/// nobody has asked for. At 16 B a StateVisit that is 4080 B, about 3 KB more
+/// than the 64 it used to be, which is the price of a trial whose path is
+/// complete rather than truncated. See dev/DAEMON.md 3.6.
 constexpr uint8_t kMaxPath = STATEMACHINED_MAX_PATH;
+static_assert(kMaxPath >= 1 && STATEMACHINED_MAX_PATH <= 255,
+              "path_len is a uint8_t; 256 breaks record_visit's comparison silently");
 
 /// The protocol's line budget, reported to the host in hello_ack. Every message
 /// is sized to fit inside it -- which is why the graph upload and the trial

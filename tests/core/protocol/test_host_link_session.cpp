@@ -97,6 +97,20 @@ std::string type_of(const std::string& line) {
   return std::string(t.p, t.n);
 }
 
+/// The lines that are not the `visit` stream.
+///
+/// A completed state visit is reported as it happens (dev/PROTOCOL.md 4.4), so
+/// it can land between a command and its reply and in the middle of a result.
+/// That is what "unsolicited" means and the bridge is required to cope with it;
+/// these tests are about everything else, so they drop them here rather than
+/// each growing an index.
+std::vector<std::string> without_visits(const std::vector<std::string>& lines) {
+  std::vector<std::string> out;
+  for (const auto& l : lines)
+    if (type_of(l) != "visit") out.push_back(l);
+  return out;
+}
+
 std::string field(const std::string& line, const char* key) {
   const std::string body = line.substr(0, line.size() - 1);
   JsonObject m(body.data(), body.size());
@@ -223,7 +237,8 @@ TEST_CASE("a whole trial: greet, upload, configure, start, run, result") {
 
   // The result arrives unasked: a trial that ended silently would be
   // indistinguishable from a hung one.
-  const std::vector<std::string> result(h.sink.lines.begin() + before, h.sink.lines.end());
+  const std::vector<std::string> result =
+      without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
   REQUIRE(result.size() >= 3);
   for (const auto& l : result) check_wire_valid(l);
   CHECK(type_of(result.front()) == "result_begin");
@@ -237,6 +252,99 @@ TEST_CASE("a whole trial: greet, upload, configure, start, run, result") {
   for (const auto& l : result)
     if (type_of(l) == "result_path") saw_path = true;
   CHECK(saw_path);
+}
+
+TEST_CASE("every state visit is reported as it happens") {
+  // The record at the end of a trial is authoritative and stays so. What it is
+  // not is a trace: something with a timestamp on it that arrives while the
+  // trial is still running and survives a truncated path. See dev/DAEMON.md 3.6.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":77,"graph_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":77)");
+
+  const size_t before = h.sink.lines.size();
+  for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
+    h.device.advance_trial(0, t);
+
+  std::vector<std::string> visits;
+  for (size_t i = before; i < h.sink.lines.size(); ++i)
+    if (type_of(h.sink.lines[i]) == "visit") visits.push_back(h.sink.lines[i]);
+
+  // upload_minimal is wait --(500 ms)--> Hit: one visit for leaving wait, one
+  // for entering the terminal state.
+  REQUIRE(visits.size() == 2);
+  for (const auto& l : visits) check_wire_valid(l);
+  CHECK(field(visits[0], "trial_id") == "77");
+  CHECK(field(visits[0], "seq") == "0");
+  CHECK(field(visits[1], "seq") == "1");
+
+  // `v` is the same flat six-element array as a result_path entry, decoded by
+  // the same function on the host. Two shapes for one fact is how the two drift
+  // apart, so this asserts the shape and not merely the contents.
+  const std::string body = visits[0].substr(0, visits[0].size() - 1);
+  JsonObject m(body.data(), body.size());
+  JsonArray row;
+  REQUIRE(m.array("v", &row));
+  int32_t state_index = -1, transition = -1, drawn = -1;
+  JsonSpan cause;
+  JsonType ty = JsonType::Missing;
+  REQUIRE(row.next_i32(&state_index));
+  REQUIRE(row.next(&cause, &ty));
+  REQUIRE(row.next_i32(&transition));
+  REQUIRE(row.next_i32(&drawn));
+  int32_t entered = -1, duration = -1;
+  REQUIRE(row.next_i32(&entered));
+  REQUIRE(row.next_i32(&duration));
+  CHECK(state_index == 0);  // it left the entry state
+  CHECK(std::string(cause.p, cause.n) == "timeout");
+  CHECK(drawn == 500);        // the fixed distribution
+  CHECK(duration >= 500000);  // and it actually took that long
+}
+
+TEST_CASE("a visit outside a trial carries trial_id 0") {
+  // Demo mode, the bench, a line-started run before anything assigned an id.
+  // The trace is still worth having; it simply joins to nothing.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":5,"graph_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":5)");
+  for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
+    h.device.advance_trial(0, t);
+  CHECK(h.device.state() == LinkState::Idle);
+
+  // Every visit of that trial named it.
+  size_t named = 0;
+  for (const auto& l : h.sink.lines)
+    if (type_of(l) == "visit" && field(l, "trial_id") == "5") ++named;
+  CHECK(named == 2);
+}
+
+TEST_CASE("result_begin says which window of the path it carries") {
+  // A path that overflowed drops its oldest visits, so `truncated` on its own
+  // leaves a host unable to say what it is missing. first_seq and total_visits
+  // are what make the stream reconcilable against the record.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":8,"graph_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":8)");
+  const size_t before = h.sink.lines.size();
+  for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
+    h.device.advance_trial(0, t);
+
+  const std::vector<std::string> result =
+      without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
+  REQUIRE(!result.empty());
+  CHECK(type_of(result.front()) == "result_begin");
+  CHECK(field(result.front(), "path_len") == "2");
+  CHECK(field(result.front(), "first_seq") == "0");
+  CHECK(field(result.front(), "total_visits") == "2");
 }
 
 TEST_CASE("the result's checksum covers every chunk") {
@@ -260,6 +368,11 @@ TEST_CASE("the result's checksum covers every chunk") {
       end = l;
       break;
     }
+    // The fold covers result_begin and its chunks and nothing else. A `visit`
+    // is a preview of the same facts, not part of the record, and folding one
+    // in would make the checksum depend on how much of the stream a host
+    // happened to see.
+    if (type_of(l) == "visit") continue;
     sum = crc16_ccitt(l.data(), l.size() - 15, sum);  // strip \n and the crc tail
   }
   REQUIRE(!end.empty());
@@ -404,8 +517,11 @@ TEST_CASE("cancel reports what actually happened") {
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":4)");
   h.device.advance_trial(0, 1000);
 
-  const auto r = h.send(R"({"msg_type":"cancel","message_id":)" + h.next_message_id() +
-                        R"(,"trial_id":4,"reason":"host")");
+  // The cancel's own state visit is reported before the reply to it, since
+  // force_end() records one on the way out.
+  const auto r =
+      without_visits(h.send(R"({"msg_type":"cancel","message_id":)" + h.next_message_id() +
+                            R"(,"trial_id":4,"reason":"host")"));
   REQUIRE(r.size() == 1);
   CHECK(type_of(r[0]) == "cancel_ack");
   CHECK(field(r[0], "outcome") == std::to_string(static_cast<int>(TrialOutcome::Cancelled)));
@@ -415,7 +531,8 @@ TEST_CASE("cancel reports what actually happened") {
   // to be explained.
   const size_t before = h.sink.lines.size();
   h.device.advance_trial(0, 2000);
-  const std::vector<std::string> result(h.sink.lines.begin() + before, h.sink.lines.end());
+  const std::vector<std::string> result =
+      without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
   REQUIRE(result.size() >= 3);
   CHECK(type_of(result.front()) == "result_begin");
   CHECK(field(result.front(), "outcome") ==

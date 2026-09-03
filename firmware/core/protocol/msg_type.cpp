@@ -17,7 +17,7 @@ const char* const kNames[] = {
 
     "hello_ack",    "ack",          "graph_ok",    "armed",        "started",
     "cancel_ack",   "result_begin", "result_path", "result_end",   "event",
-    "error",        "log",          "pong",        "state_report",
+    "error",        "log",          "pong",        "state_report", "visit",
 };
 
 constexpr uint8_t kKnown = static_cast<uint8_t>(MsgType::Unknown);
