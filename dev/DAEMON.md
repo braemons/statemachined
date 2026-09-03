@@ -93,7 +93,8 @@ statemachined/
 │   │   │   ├── upload.py            the chunked graph upload  ← tests/hardware/harness.py
 │   │   │   ├── result.py            result reassembly         ← tests/hardware/harness.py
 │   │   │   ├── supervisor.py        NEW: owns the port, reconnect, seed, watchdog
-│   │   │   └── clock.py             NEW: device µs ⇄ host clock
+│   │   │   ├── clock.py             NEW: device µs ⇄ host clock
+│   │   │   └── trace.py             NEW: the visit ring, and the NDJSON tail
 │   │   ├── model/                pydantic — the graph as a person authors it
 │   │   │   ├── graph.py             Graph, State, Transition, Action, Distribution
 │   │   │   ├── lines.py             LineMap: names, pins, invert/enable/safe/debounce
@@ -549,14 +550,27 @@ duration; a cycle a graph can go round on transitions alone is bounded by the
 scan rate, not by the timings, and for those the flag has to stay. Refusing them
 is not the daemon's call — warning, with the count, is.
 
-**Two things about that 3 KB.** It competes directly with §3.2's fallback graph
+**And make it an actual ring**, which `config.h:34` already claims it is:
+`record_visit` today keeps the **first** 255 visits and drops the rest, and for a
+trial whose interesting part is the response at the end that is the wrong half.
+Overflow should cost the oldest visits, not the newest. It is a head index and a
+count instead of a bare `path_len`, plus two fields on the wire so the host is
+never guessing which window it received:
+
+| | |
+|---|---|
+| `result_begin.first_seq` | `u32` — the `seq` of the oldest visit still in the window |
+| `result_begin.total_visits` | `u32` — how many the run actually made. `total_visits > path_len` is what `truncated` means, and now it says by how much |
+
+The chunker walks the ring in order, so `result_path.from` keeps meaning an
+offset into what was sent. This also makes the two layers the same shape — a ring
+on the device, a ring in the daemon (§4.6), one overflow rule to explain instead
+of two.
+
+**One thing about that 3 KB.** It competes directly with §3.2's fallback graph
 set, which needs about 7.5 KB: if the measurement in open question 4 comes back
 badly, the two together are 11.5 KB and the budget is genuinely tight rather than
-comfortable. And `config.h:34` describes the buffer as a *"ring buffer"* while
-`record_visit` keeps the **first** 255 visits and drops the rest — for a trial
-whose interesting part is the response at the end, that is the wrong half. Once
-sized it is moot, and the stream covers the overflow either way, so the fix is to
-correct the comment rather than to build the ring.
+comfortable.
 
 #### The clock, and the wrap
 
@@ -579,7 +593,9 @@ together is cheaper than sequencing them:
 | `machine/state_machine.cpp` | `record_visit()` gains an emit callback. The machine must not learn about the link, so it is a sink passed in, and `native` tests pass a vector |
 | `protocol/host_link_session.cpp` | serialise `visit`, queue it, never block on it |
 | `trial/trial_runner.cpp` | supplies `trial_id` to the sink; `0` when there is no trial |
-| `core/config.h` | `STATEMACHINED_MAX_PATH` 64 → 255, and the comment corrected to say what the code does |
+| `core/config.h` | `STATEMACHINED_MAX_PATH` 64 → 255 |
+| `machine/state_machine.cpp` | `record_visit()` becomes a real ring: overflow costs the oldest visit, not the newest, which is what `config.h:34` has always claimed |
+| `protocol/host_link_session.cpp` | `result_begin` gains `first_seq` and `total_visits`; the chunker walks the ring in order |
 | `dev/PROTOCOL.md` | §4 gains `visit`, and §4.3 gains the sentence that the result is authoritative and the stream is a preview |
 
 ---
@@ -682,8 +698,8 @@ record claiming a trial was cancelled when the animal had already responded.
 ### 4.4 Config
 
 `GET·PATCH /api/config`: the device target URL, the triald base URL, the seed
-policy, the line map, whether to arm automatically on connect. Backed by
-`/etc/braemons/statemachined.toml`.
+policy, the line map, whether to arm automatically on connect, and `trace_ring`
+(§4.6). Backed by `/etc/braemons/statemachined.toml`.
 
 ### 4.5 The clock
 
@@ -703,9 +719,31 @@ is labelled as one, with its uncertainty.
 `GET /api/trace` · `GET /api/trace/trial/{trial_id}` · `WS /api/trace/stream`
 
 `device/trace.py` decodes `visit`, unwraps the device clock, resolves indices to
-**names** against the graph the daemon holds, and appends one line per visit to
-`/var/lib/statemachined/trace/` — NDJSON, one file per day, rotated by the
-logrotate config §6.2 already installs.
+**names** against the graph the daemon holds, and puts the result in a
+**ring buffer in memory**. That ring is what every route above reads. Nothing in
+the API touches a file.
+
+**The ring, sized once.** A `collections.deque` with a `maxlen`, default
+**100 000 entries**. A normal session is a thousand trials of half a dozen visits
+— six thousand, so the default covers one fifteen times over; the pathological
+case is a looping paradigm at the device's 255-visit ceiling for a thousand
+trials, which is 255 000 and is what the `trace_ring` knob in §4.4 is for. At
+roughly 200 B per slotted entry the default costs about 20 MB, which on a Pi 5
+alongside vstimd is not a number worth optimising.
+
+Keeping the served copy in memory is what makes the rest of this section small.
+There is no "which file holds trial 193", no seek, no per-day file to select, no
+index. `?trial_id=` and `?since_seq=` are a scan of a deque, and the Trace view's
+tail is the deque's right end.
+
+**Written as it arrives, not as it evicts.** The ring is volatile and a
+`systemctl restart` during a package upgrade must not silently cost the morning's
+traces, so each entry is also appended to `/var/lib/statemachined/trace/` as
+NDJSON, one file per day, rotated by the logrotate config §6.2 already installs.
+The daemon **never reads it back**: it is the copy for the analysis that happens
+months later, not a second store with its own query path. Appending on arrival
+rather than on eviction is deliberate — a crash otherwise loses exactly the
+window that mattered most, which is everything still in the ring.
 
 ```jsonc
 {"kind":"visit","seq":2,"trial_id":193,"graph":"go-nogo","graph_version":7,
@@ -717,15 +755,15 @@ logrotate config §6.2 already installs.
 NDJSON rather than SQLite, for the same reason the wire is NDJSON: it is
 append-only, so a crash mid-write costs the last line and not the file; it is
 greppable on the rig at 2 a.m. with no tooling; and it copies. A database would
-buy indexed queries the daemon does not need — the API's queries are *by trial*
-and *recent*, and a session's worth of trace is a megabyte.
+buy indexed queries nothing needs — the ring answers every query the API has, and
+the file is never queried at all.
 
 **`kind` is there because the device is not the only thing worth timestamping.**
-The daemon logs its own events into the same file: `configure`, `start`, `cancel`
+The daemon puts its own events in the same ring, and the same file: `configure`, `start`, `cancel`
 and their host times, link loss and reconnection, a graph upload and what it
 cost, a `seq` gap that reconciliation could not fill. Aligning an external signal
 to trial 193 needs to know when trial 193 was armed, not only which states it
-visited, and splitting that across two files means joining them later.
+visited, and splitting that across two streams means joining them later.
 
 **This is not the `.tdr` and must not grow into one.** triald writes the trial
 record; this is a finer-grained trace, one line per state visit rather than one
@@ -743,8 +781,13 @@ never pushes it and never assumes anybody read it.
 `WS /api/trace/stream` is the one stream that is **not coalesced**, unlike
 `/api/state`'s: coalescing a state snapshot loses nothing, coalescing a trace
 loses records. A client that cannot keep up gets its socket closed with the last
-`seq` it received, and re-fetches from `?since_seq=`. Slow-consumer buffering is
-how a monitoring aid becomes the thing that fills the Pi's memory.
+`seq` it received and re-fetches from `?since_seq=` — served from the ring, and
+therefore only while the entry is still in it. A consumer slow enough to fall out
+of a 100 000-entry ring has genuinely lost data and must be **told so**, with the
+`seq` range that is gone, rather than handed a shorter answer that looks
+complete. That is the one place the ring's boundedness is visible from outside,
+and it is better than the alternative: buffering per client is how a monitoring
+aid becomes the thing that fills the Pi's memory.
 
 ---
 
@@ -942,13 +985,13 @@ diff.
 8. **The RA4M1 data-flash numbers** (§3.4): 8 KB and ~100 000 erase cycles are
    from memory, not from the datasheet. Cheap to confirm, and #12 depends on the
    second one being roughly right.
-9. **Trace retention on a rig nobody visits.** A session is about a megabyte,
-   so size is not the problem; rotating away a trace that no analysis has copied
-   yet is. logrotate with a generous keep is the mechanism; the policy question
-   is whether the daemon should refuse to rotate a file whose trials triald has
-   not fetched, which would make it stateful about a consumer it otherwise knows
-   nothing about. Leaning: no — rotate on time and size, and let §4.6's pull be
-   triald's job to actually do.
+9. **Trace retention.** Mostly answered by the ring: nothing in the daemon
+   depends on what logrotate deletes, because the API reads the ring and never
+   the file. What is left is how long the file is kept and by what rule, which is
+   a line in the logrotate config and a decision about the rig's disk rather than
+   a design question. The version worth arguing about is whether it is kept at
+   all — if the answer to #11 is that triald stows every trial's trace beside the
+   `.tdr`, the daemon's file is a duplicate and could go.
 10. **The SRAM budget, once both §3.2's fallback and a 255-visit path want it.**
    +3 KB for the path is affordable on its own and 7.5 KB for a graph set is
    affordable on its own; together they are 11.5 KB of 32 alongside a 2.6 KB
