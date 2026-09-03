@@ -46,7 +46,7 @@ jobs:
       - run: make sanitize
 
   daemon-tests:
-    name: the daemon's host-only tests
+    name: the daemon, and whole sessions against the native device
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -58,10 +58,11 @@ jobs:
         with:
           path: ~/.cache/uv
           key: uv-${{ runner.os }}-${{ hashFiles('daemon/uv.lock') }}
-      # Needs the checkout rather than only the package: test_wire.py asserts
-      # the daemon's framing against emulation/tests' copy of it, which is the
-      # whole point of that file.
-      - run: make test-daemon
+      # Needs the checkout rather than only the package: test_message_framing.py
+      # asserts the daemon's framing against emulation/tests' copy of it, and
+      # the integration tests drive whole sessions against the firmware built
+      # for this machine -- which `make test-integration` builds first.
+      - run: make test-integration
 
   reproducibility:
     name: golden vectors are byte-identical across compilers

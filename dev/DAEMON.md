@@ -77,7 +77,8 @@ appears. `firmware/` and `emulation/` do not move at all.
 
 ```
 statemachined/
-├── firmware/                  unchanged
+├── firmware/                  unchanged, apart from native/ below
+│   └── native/                the firmware on this machine, for integration tests
 ├── emulation/                 unchanged
 ├── daemon/                    the Python daemon — was bridge/
 │   ├── pyproject.toml            name = "statemachined", version sentinel 0.0.0
@@ -108,6 +109,7 @@ statemachined/
 │   │   └── web/                        index.html · app.js · style.css · elements/
 │   └── tests/
 │       ├── unit/                 host-only. Runs in `make ci`
+│       ├── integration/          whole sessions against the native device
 │       └── hardware/             needs a board    ← tools/bringup/tests/hardware
 ├── graphs/                    example graphs, and the reference rig's line map
 ├── packaging/                 see §6
@@ -1033,7 +1035,7 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 | **M4b** ✅ | **Wiring config and the `visit` stream, in the firmware** (§3.3, §3.6). The wiring move plus a compile-time safe-level word closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships; the stream is a callback and a serialiser. They share a file and a protocol document, so they share a branch. **No data flash** — that is deferred to M7 |
 | **M4c** ✅ | **The graph set, in the firmware** (§3.2, §3.3): shared pools, `GraphEntry`, `set_begin`/`set_end`, a slot in `configure`, `max_graphs` in `caps`. The larger of the two firmware milestones and the one this plan's trial loop rests on. Covered by the native core, the Renode session and `PROTOCOL.md` message by message, all of which exist |
 | **M4d** ✅ | `model/` and `graph_set_compiler.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
-| **M4e** | `device/supervisor.py` and `clock.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core over a pty — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks |
+| **M4e** ✅ | `device/device_supervisor.py` and `device_clock_correlation.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks. It needed a host-side entry point for the firmware, which is now `firmware/native/statemachined_native_device.cpp`, and a `socket://` transport rather than the pty this row used to say — see §7's note |
 | **M4f** | FastAPI: device, lines, graphs, trial, config, state/stream; the triald client; `statemachined serve`. `dev/API.md` written first, the way `PROTOCOL.md` was |
 | **M4g** | The web UI and the `/elements/` contract; mDNS |
 | **M5** | Packaging: nfpm, systemd, sysusers, udev, logrotate, the builder containers, `release.yml`, one line in `packages/sources.txt`. **Installed on the Pi 5 alongside vstimd and triald** |
@@ -1064,6 +1066,23 @@ and a real `.map` to argue from rather than an estimate — see open question 10
 ESP32, neither of which was ever possible: `path_len` is a `uint8_t`. A
 `static_assert` in `config.h` refuses it now instead of leaving it to be found
 on a board.
+
+**The integration tests talk to the firmware, not to a mock**, and that needed
+one new thing: `firmware/native/statemachined_native_device.cpp`, the same
+`HostLinkSession` and the same engine driven by an ordinary loop instead of by a
+timer ISR. What it buys is the class of bug a mock cannot have — a mock answers
+what the test author believed the protocol says, and this answers what
+`firmware/core/protocol` says, refuses what it refuses, and reassembles a result
+out of the same chunker.
+
+**Not over a pty, in the end.** The plan said pty and pty turns out to be the
+awkward choice: the native device takes its link on stdin and stdout, and
+pyserial opens a *path*, so the two ends of a pty pair cannot both be reached
+that way — the daemon side would have to bypass `SerialLink` and use the master
+file descriptor raw, which is exactly the code path a test should not skip. So
+the harness bridges a TCP socket to the child's pipes and the daemon connects
+with `socket://127.0.0.1:<port>`: a URL a rig genuinely uses, and one that keeps
+the transport under test the transport the daemon ships.
 
 **M4a is worth doing and merging on its own.** It is a move with no new
 behaviour, it makes the hardware suite test the daemon's codec instead of a copy

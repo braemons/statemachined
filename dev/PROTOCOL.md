@@ -623,12 +623,19 @@ not have the record. `state_report`'s `tx_stalls` is what would say otherwise.
 {"msg_type":"event","message_id":13,"us":1483200,"word":6,"crc":"...."}
 {"msg_type":"error","message_id":14,"in_reply_to":41,"code":"bad_graph","message":"...","context":"...","crc":"...."}
 {"msg_type":"log","message_id":15,"level":"warn","message":"...","crc":"...."}
-{"msg_type":"pong","message_id":16,"in_reply_to":44,"up_us":90210000,"crc":"...."}
+{"msg_type":"pong","message_id":16,"in_reply_to":44,"up_us":90210000,"us":1483200,"crc":"...."}
 ```
 
 `event` reports the conditioned input word on change. **Off by default and never
 in a trial's critical path**: it is a monitoring aid, and a link that cannot keep
 up drops events rather than delaying a scan.
+
+`pong` carries two clocks and they are not interchangeable. `up_us` counts from
+the first time anything asked the device the time, so its origin differs every
+session and it is for reading, not arithmetic. `us` is the **device clock
+itself**, raw and wrapping every ~71 minutes — the same clock a result's
+`entered_us` is in, which is what makes a `ping` round-trip usable to correlate
+the two clocks at all.
 
 `log` is free text, rate-limited, and never load-bearing. Nothing in the bridge
 may parse it.

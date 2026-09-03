@@ -106,6 +106,23 @@ rig is the line map (which pin `lever_left` is) and that board's `caps` (whether
 the set fits), and both of those meet the graph in `graph_set_compiler.py` rather than in
 the file.
 
+## Tests that need no board
+
+```sh
+make test-integration   # builds the native device, then drives whole sessions
+make test-daemon        # the same, skipping the integration half if unbuilt
+```
+
+`tests/unit/` is arithmetic and translation: the framing, the compiler checked
+message by message against `dev/PROTOCOL.md` §3.2, the clock's wrap.
+
+`tests/integration/` drives whole sessions -- greet, upload, configure, start,
+result, cancel races, link loss -- against `build/statemachined_native_device`,
+which is `firmware/core`'s own session and engine built for this machine. The
+far end is therefore not a mock: a mock answers what the test author believed
+the protocol says, and this answers what the firmware says. The transport is a
+real `socket://` URL through the daemon's own `serial_link.py`.
+
 ## The hardware test suite
 
 `tests/hardware/` is the automated half of BRINGUP.md §4 and §5 — everything

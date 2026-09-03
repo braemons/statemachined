@@ -68,3 +68,13 @@ add_subdirectory(tests)
 add_library(statemachined_hal_native firmware/hal/native.cpp)
 target_link_libraries(statemachined_hal_native PUBLIC statemachined_engine)
 target_compile_options(statemachined_hal_native PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+# The firmware, on this machine, speaking the real protocol down a pipe. It is
+# what the daemon's integration tests talk to, so that they exercise the
+# device's own refusals and the device's own result chunker rather than a mock
+# built from somebody's reading of the protocol document.
+add_executable(statemachined_native_device firmware/native/statemachined_native_device.cpp)
+target_link_libraries(statemachined_native_device
+  PRIVATE statemachined_core statemachined_hal_native)
+target_compile_options(statemachined_native_device
+  PRIVATE -Wall -Wextra -Wpedantic -Werror)

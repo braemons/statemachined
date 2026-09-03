@@ -17,7 +17,7 @@ from .serial_link import SerialLink
 from .message_vocabulary import UNSOLICITED, Field, MsgType
 from .message_framing import DeviceRefusedTheCommand, FramingError, command_line, parse_reply
 
-PROTO = 1
+PROTOCOL_VERSION = 1
 
 
 class NoReplyInTime(Exception):
@@ -147,7 +147,7 @@ class RequestResponseSession:
         point of the handover that a serial monitor cannot trigger it.
         """
         ack = self.request(
-            MsgType.HELLO, timeout=timeout, proto=PROTO, seed=seed or random_seed()
+            MsgType.HELLO, timeout=timeout, proto=PROTOCOL_VERSION, seed=seed or random_seed()
         )
         self.hello_ack = ack
         return ack

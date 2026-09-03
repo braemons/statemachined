@@ -558,6 +558,12 @@ void HostLinkSession::on_ping(uint16_t message_id, Microseconds now_us) {
   w.begin(msg_type_name(MsgType::Pong), tx_message_id_);
   w.in_reply_to(message_id);
   w.key_u32("up_us", since(booted_us_, now_us));
+  // The device clock itself, raw, wrapping every ~71 minutes. `up_us` counts
+  // from the first time anything asked, which is a different origin on every
+  // session and cannot be compared with the `entered_us` in a result. This is
+  // the value a host correlates against its own clock -- see dev/DAEMON.md 4.5,
+  // where that correlation is called load-bearing.
+  w.key_u32("us", now_us);
   send(w, message_id);
 }
 

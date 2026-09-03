@@ -96,12 +96,25 @@ test-hardware:              ## the suite that needs a board: make test-hardware 
 	uv run --project daemon --group test \
 	  pytest daemon/tests/hardware --target=$(TARGET) $(ARGS)
 
-# The daemon's host-only tests: no board, no emulator, part of `make ci`. What
-# they mostly guard is the framing, which now exists three times in this tree
-# (firmware, emulator tests, daemon) and would otherwise drift silently.
+# The daemon's tests that need no board, part of `make ci`.
+#
+# tests/unit is arithmetic and translation -- the framing, which now exists
+# three times in this tree and would otherwise drift silently, and the compiler,
+# checked message by message against dev/PROTOCOL.md.
+#
+# tests/integration drives whole sessions against build/statemachined_native_device,
+# which is the firmware's own session and engine built for this machine. It
+# skips itself when that binary is not there, so this target is safe to run
+# before `make test`; `make ci` runs `make test` first, so in CI it is always
+# built.
 .PHONY: test-daemon
-test-daemon:                ## the daemon's host-only tests
-	uv run --project daemon --group test pytest daemon/tests/unit $(ARGS)
+test-daemon:                ## the daemon's tests that need no board
+	uv run --project daemon --group test pytest daemon/tests/unit daemon/tests/integration $(ARGS)
+
+# The two together, in the order that makes the integration half actually run.
+.PHONY: test-integration
+test-integration: test      ## build the native device, then drive whole sessions against it
+	uv run --project daemon --group test pytest daemon/tests/integration $(ARGS)
 
 # Pinned to match .github/workflows/ci.yml. clang-format's output changes
 # between major versions, and `BasedOnStyle: Google` in .clang-format resolves

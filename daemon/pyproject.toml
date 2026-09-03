@@ -40,10 +40,12 @@ statemachined = "statemachined.command_line_interface:main"
 test = ["pytest>=8.0"]
 
 [tool.pytest.ini_options]
-# tests/unit is host-only and runs in `make ci`; tests/hardware needs a board
-# and deliberately does not. Naming only the former here means a bare `pytest`
-# in this directory cannot fail for want of hardware.
-testpaths = ["tests/unit"]
+# tests/unit is host-only. tests/integration needs the native device built --
+# `make test` does it -- and skips itself with instructions when it is not
+# there, so a bare `pytest` here never fails for want of a build. tests/hardware
+# needs a board and is deliberately not named: a target that fails on every
+# machine without hardware is a target people learn to ignore.
+testpaths = ["tests/unit", "tests/integration"]
 markers = [
     "loopback: needs output-to-input jumper wires; see tests/hardware/test_lines.py",
 ]
