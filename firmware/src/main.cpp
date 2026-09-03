@@ -35,9 +35,11 @@
 // a change to this file. Nothing in core/ moves.
 #include <Arduino.h>
 
+#include "demo/demo_graph.h"
 #include "hal.h"
 #include "io/input_conditioner.h"
 #include "protocol/host_link_session.h"
+#include "trial/trial_runner.h"
 
 using namespace fsmd;
 
@@ -118,6 +120,78 @@ HostLinkSession& session() {
 HostLinkSession* g_session = nullptr;
 bool g_link_was_up = false;
 
+// ---------------------------------------------------------------------------
+// Demo mode
+// ---------------------------------------------------------------------------
+//
+// Until a host says `hello`, this board holds no graph and nothing arms a
+// trial, so a board on a bench sits there doing nothing whatsoever. That is
+// correct for a rig -- a device that runs a paradigm nobody uploaded is a
+// hazard -- and it makes the first bring-up needlessly blind: you cannot tell a
+// working board from a dead one, or find out whether your LEDs are on the pins
+// you think they are, without writing a host first.
+//
+// So before the first `hello` the board runs demo::build()'s graph on its own
+// runner. It is the real engine on a real graph: the same TrialRunner, the same
+// validate(), the same conditioned input word. What it is not is a fallback
+// paradigm -- the first `hello` ends it permanently (until reset) and hands the
+// pins back through fail_safe(), so a rig cannot silently run the demo while
+// somebody believes it is running an experiment.
+// Costs ~4.6 KB of SRAM -- its own StateGraph and its own TrialRunner -- on a
+// board with 32 KB. That is worth it on a bench and worth nothing on a rig,
+// where a host greets within a second of boot, so a deployed build can drop it
+// with -DFSMD_DEMO=0 and get the RAM back.
+#ifndef FSMD_DEMO
+#define FSMD_DEMO 1
+#endif
+
+#if FSMD_DEMO
+StateGraph g_demo_graph;
+bool g_demo_active = false;
+uint32_t g_demo_trial_id = 0;
+Microseconds g_demo_start_at_us = 0;
+bool g_demo_waiting_to_start = false;
+bool g_demo_led = false;
+
+/// Fixed, so the bench replays: the demo draws no random timings today, but it
+/// runs through the code path that would.
+constexpr uint64_t kDemoSeed = 0xF5D0DE30F5D0DE30ULL;
+
+/// How long the outcome lamp stays lit before the next trial arms. A terminal
+/// state's entry actions run and nothing exits it, so the lamp is still on --
+/// this is the pause that makes it readable rather than a flicker.
+constexpr Microseconds kDemoRelightPauseUs = 1500u * 1000u;
+
+/// Constructed on first use so it binds to a graph that has been built. Holds a
+/// pointer to it, not a copy.
+TrialRunner& demo_runner() {
+  static TrialRunner r(g_demo_graph);
+  return r;
+}
+
+/// Wall-clock comparison that survives the microsecond counter wrapping every
+/// ~71 minutes. A bench board is left running for longer than that.
+bool reached(Microseconds now, Microseconds deadline) {
+  return static_cast<int32_t>(now - deadline) >= 0;
+}
+
+/// Defined below, next to the rest of demo mode; declared here because
+/// service_link() is what notices a host has arrived.
+void demo_end(Microseconds now);
+
+#else  // !FSMD_DEMO
+
+// Stubs, so the call sites read the same in both builds and the compiler drops
+// the branches rather than the reader having to.
+constexpr bool g_demo_active = false;
+inline void demo_begin(Microseconds) {}
+inline void demo_end(Microseconds) {}
+inline void demo_scan(LineBitmask, Microseconds) {}
+
+#endif  // FSMD_DEMO
+
+void apply_graph_input_config();
+
 void apply(const OutputUpdate& ops) {
   if ((ops.set_high | ops.set_low) != 0) hal::write_outputs(ops.set_high, ops.set_low);
 }
@@ -147,7 +221,106 @@ void service_link() {
 
   char buf[64];
   const size_t n = hal::link_read(buf, sizeof(buf));
-  if (n > 0) g_session->receive(buf, n, hal::micros_now());
+  if (n > 0) {
+    const Microseconds now = hal::micros_now();
+    g_session->receive(buf, n, now);
+    // The first `hello` takes the board out of demo mode for good. Checked
+    // after receive() rather than on link_up(), because opening the port is not
+    // the same as a host being there -- a serial monitor does the former.
+    if (g_demo_active && g_session->state() != LinkState::Greeting) demo_end(now);
+    apply_graph_input_config();
+  }
+}
+
+#if FSMD_DEMO
+
+/// The heartbeat on the board's own LED, which is deliberately NOT one of the
+/// eight output lines: D13 is excluded from the line map on purpose, so this
+/// cannot collide with anything a graph drives. A board blinking here is a
+/// board that booted, started its timer and is scanning -- visible with nothing
+/// wired to it at all.
+///
+/// Written only when it changes. digitalWrite() costs a microsecond or two on
+/// this core and this runs inside the scan.
+void demo_heartbeat(Microseconds now) {
+  const bool on = (now % 1000000u) < 60000u;
+  if (on == g_demo_led) return;
+  g_demo_led = on;
+  digitalWrite(LED_BUILTIN, on ? HIGH : LOW);
+}
+
+void demo_begin(Microseconds now) {
+  demo::build(g_demo_graph);
+  // The demo's debounce has to actually reach the conditioner, which is the
+  // same path a committed graph's input config takes below.
+  g_inputs.configure(g_demo_graph.inputs);
+  g_inputs.prime(hal::read_inputs());
+  pinMode(LED_BUILTIN, OUTPUT);
+  g_demo_active = true;
+  g_demo_waiting_to_start = true;
+  g_demo_start_at_us = now;
+}
+
+/// A host arrived. Stop, and give every line back.
+void demo_end(Microseconds now) {
+  if (!g_demo_active) return;
+  g_demo_active = false;
+  TrialRunner& r = demo_runner();
+  // Through the ordinary exit path, like any other cancel: whatever the current
+  // state raised comes down by the code that always lowers it.
+  if (r.running()) {
+    r.cancel(TrialCancelReason::Host, now);
+    apply(r.advance(g_inputs.word(), now));
+  }
+  g_demo_led = false;
+  digitalWrite(LED_BUILTIN, LOW);
+  // The session owns the pins from here, and it has no graph yet, so this is
+  // every output line low.
+  apply(g_session->fail_safe());
+}
+
+void demo_scan(LineBitmask word, Microseconds now) {
+  demo_heartbeat(now);
+  TrialRunner& r = demo_runner();
+
+  if (g_demo_waiting_to_start) {
+    // Pulses and other debts are still owed while nothing is running.
+    apply(r.service_outputs(now));
+    if (!reached(now, g_demo_start_at_us)) return;
+    g_demo_waiting_to_start = false;
+    apply(r.start(++g_demo_trial_id, kDemoSeed, now, word));
+    return;
+  }
+
+  apply(r.advance(word, now));
+  if (!r.running()) {
+    g_demo_waiting_to_start = true;
+    g_demo_start_at_us = now + kDemoRelightPauseUs;
+  }
+}
+
+/// Push a newly committed graph's input configuration into the conditioner.
+///
+/// A graph declares invert, enable and per-line debounce, and until this existed
+/// none of it reached the pins: the conditioner was default-constructed at boot
+/// and never told about any graph, so an opto-isolated active-low input read
+/// back inverted and every declared debounce was silently ignored. The
+/// conditioner is owned here rather than by the session, so this is where the
+/// two are joined.
+#endif  // FSMD_DEMO
+
+void apply_graph_input_config() {
+  static uint16_t applied_version = 0;
+  static bool have_applied = false;
+  if (!g_session->has_graph()) return;
+  const uint16_t v = g_session->graph_version();
+  if (have_applied && v == applied_version) return;
+  applied_version = v;
+  have_applied = true;
+  g_inputs.configure(g_session->graph().inputs);
+  // No previous level for the new polarity to be measured against, so adopt
+  // what is there rather than reporting every line as having just moved.
+  g_inputs.prime(hal::read_inputs());
 }
 
 }  // namespace
@@ -174,6 +347,11 @@ void setup() {
     for (;;) {
     }
   }
+
+  // Nothing has greeted us yet, so run the demo until something does. Last in
+  // setup() because it needs the timer: without a tick nothing would advance it
+  // and a lit ready lamp would be the whole show.
+  demo_begin(hal::micros_now());
 }
 
 void loop() {
@@ -189,7 +367,12 @@ void loop() {
       if (missed > g_health.worst_gap) g_health.worst_gap = missed;
       g_session->report_scan_health(g_health);
     }
-    scan();
+    if (g_demo_active) {
+      const Microseconds now = hal::micros_now();
+      demo_scan(g_inputs.apply(hal::read_inputs(), now), now);
+    } else {
+      scan();
+    }
   }
   service_link();
 }

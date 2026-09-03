@@ -9,6 +9,7 @@ set(FSMD_TESTS
   io/input_conditioner
   machine/state_machine
   trial/trial_runner
+  demo/demo_graph
   protocol/framing
   protocol/graph_builder
   protocol/host_link_session

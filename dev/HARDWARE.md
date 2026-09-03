@@ -42,6 +42,48 @@ not change shape per target. What this board can physically drive is the eight
 above, reported in `hello_ack` as `n_input_lines` / `n_output_lines`, and the
 bridge checks a graph against them before uploading a byte of it.
 
+
+### Demo mode — the bring-up wiring
+
+Before any host says `hello`, the board runs a built-in graph so that a bench
+board is visibly alive (`firmware/core/demo/demo_graph.cpp`; compile it out with
+`-DFSMD_DEMO=0`). It uses two inputs and six outputs, and it is the cheapest way
+to find out whether your wiring reaches the lines you think it does.
+
+| What | fsmd line | Pin | Wire it as |
+|---|---|---|---|
+| Start switch | input 0 | **D2** | switch to **5 V**, plus a **10 kΩ pull-down to GND** |
+| Abort switch | input 1 | **D3** | the same |
+| Step LEDs 1-5 | outputs 0-4 | **D10, D11, D12, A0, A1** | LED anode to pin, cathode through **220-330 Ω** to GND |
+| Ready / done lamp | output 7 | **A4** | the same |
+| Alive heartbeat | *not a line* | **D13** (on-board LED) | nothing — it is the LED already on the board |
+
+**The pull-downs are not optional.** `hal::init()` sets inputs to `INPUT`, not
+`INPUT_PULLUP` — deliberately, since a rig's TTL sources drive both ways and a
+pull-up fights them. A switch with nothing else on the pin therefore leaves it
+floating when open, and a floating input picks up enough noise to start and
+abort trials on its own. If you have no resistors to hand, the degenerate test
+is a jumper wire from 5 V touched to D2, which is bouncy but unambiguous.
+
+What you should see, with nothing attached at all: **D13 blinks** briefly once a
+second. That alone says the board booted, the `FspTimer` ISR is running and the
+scan loop is turning, which are the three things that fail first.
+
+With the LEDs and the start switch wired: the ready lamp on A4 is lit, and stays
+lit. Press the start switch and one LED walks D10 → D11 → D12 → A0 → A1, **500 ms
+each**, then the trial ends as `Hit` and A4 comes back on. Press the abort switch
+mid-walk and it stops immediately, leaving D10 lit as a `Cancelled` lamp. Either
+way the next trial arms 1.5 s later.
+
+Holding the start switch down does not re-trigger: a transition fires on its
+predicate's *rising edge*, so the switch has to be released and pressed again.
+That is the same rule that stops a lever the animal is already holding from
+ending a trial the instant it begins.
+
+The moment a host sends `hello`, demo mode ends for good (until reset) and every
+line goes to its safe level. A serial *monitor* opening the port is not enough —
+it is the greeting that hands over, not the connection.
+
 ### Electrical
 
 **Inputs are configured `INPUT`, not `INPUT_PULLUP`.** A rig's TTL sources drive

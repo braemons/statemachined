@@ -90,6 +90,12 @@ jobs:
           key: pio-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
       - run: pip install platformio
       - run: pio run -e ${{ matrix.env }}
+      # Demo mode is 4.6 KB of SRAM on a 32 KB board, so a rig build drops it.
+      # Compiled here too, or the #else half of that switch rots unnoticed.
+      - name: and again without demo mode
+        run: pio run -e ${{ matrix.env }}
+        env:
+          PLATFORMIO_BUILD_FLAGS: -DFSMD_DEMO=0
 
   emulation:
     name: the HAL runs on an emulated board

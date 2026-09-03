@@ -79,6 +79,30 @@ See [`emulation/README.md`](emulation/README.md).
 [`BUILD.md`](BUILD.md) has toolchain setup for Ubuntu 24.04, Fedora 44+ and WSL,
 and a devcontainer that pins the same versions CI uses.
 
+## Try it on a board
+
+You do not need the host bridge, or a host at all, to see this run. Flash it and
+the board runs a built-in demo graph until something greets it:
+
+```sh
+make upload
+```
+
+With **nothing wired**, the on-board LED on D13 blinks once a second — the board
+booted, the timer ISR fires, the scan loop turns. With two switches and six LEDs
+(wiring, including the pull-downs you do need, in
+[`dev/HARDWARE.md`](dev/HARDWARE.md)) the ready lamp lights, a press on the start
+switch walks one LED across five outputs at 500 ms a step, and the trial ends as
+a `Hit` — or as `Cancelled` if you press abort on the way past.
+
+It is the real engine on a real graph: the same `TrialRunner`, the same
+`validate()`, the same conditioned input word, built by
+`firmware/core/demo/demo_graph.cpp` and run on the host by its own test. It is
+**not** a fallback paradigm — the first `hello` ends it for good and hands every
+line back, so a rig cannot quietly run the demo while somebody believes it is
+running an experiment. A deployed build can drop it entirely with
+`-DFSMD_DEMO=0`, which is worth 4.6 KB of SRAM.
+
 ## Target hardware
 
 | | |
