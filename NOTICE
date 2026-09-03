@@ -1,9 +1,9 @@
 statemachined — the trial state machine
 Copyright © 2026 Joscha Schmiedt, University of Bremen.
 
-Licensed under the GNU General Public License v3.0 or later; the host bridge
-under the GNU Lesser General Public License v3.0 or later. See LICENSE,
-bridge/LICENSE, and the "Licensing" section of README.md.
+Licensed under the GNU General Public License v3.0 or later; the host daemon's
+importable library under the GNU Lesser General Public License v3.0 or later.
+See LICENSE, daemon/LICENSE, and the "Licensing" section of README.md.
 
 This file records what in this repository came from somewhere else.
 

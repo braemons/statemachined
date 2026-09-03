@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: LGPL-3.0-or-later
 """One command out, one reply back, and everything else handed to a sink.
 
 Strict request/response with a single command in flight, which is what the
@@ -83,32 +83,46 @@ class Session:
         answered eventually", and that is exactly the fact §5 is measuring.
         """
         message_id = self._next_message_id()
-        self.link.write_line(command_line(msg_type, message_id, **fields))
+        line = command_line(msg_type, message_id, **fields)
+        return self.request_line(line, message_id, timeout=timeout, what=str(msg_type))
+
+    def request_line(
+        self, line: str, message_id: int, timeout: float = 5.0, what: str = "the command"
+    ) -> dict:
+        """The same, for a command already framed by the caller.
+
+        A graph upload folds a rolling checksum over the exact bytes it sent
+        (PROTOCOL.md §3.2), so it has to build the line itself and cannot let
+        `request` build one it never sees. Everything below the framing --
+        matching on `in_reply_to`, routing the unsolicited aside, raising on a
+        refusal, not retrying -- is the same and is not re-decided there.
+        """
+        self.link.write_line(line)
         deadline = time.monotonic() + timeout
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise Timeout(
-                    f"no reply to {msg_type} (message_id {message_id}) within {timeout:g}s"
+                    f"no reply to {what} (message_id {message_id}) within {timeout:g}s"
                 )
-            line = self.link.read_line()
-            if line is None:
+            raw = self.link.read_line()
+            if raw is None:
                 continue
-            msg = self.receive(line)
+            msg = self.receive(raw)
             if msg is None:
                 continue
             if self._answers(msg, message_id):
                 if msg.get(Field.MSG_TYPE) == MsgType.ERROR:
                     if Field.IN_REPLY_TO not in msg:
                         self.on_junk(
-                            line, "an error naming no message_id; taken as the reply anyway"
+                            raw, "an error naming no message_id; taken as the reply anyway"
                         )
                     raise DeviceError(msg)
                 return msg
             # A reply to somebody else's command, or one whose id we already
             # gave up on. Worth seeing rather than swallowing.
             self.on_junk(
-                line,
+                raw,
                 f"reply to message_id {msg.get(Field.IN_REPLY_TO)}, expected {message_id}",
             )
 

@@ -1,16 +1,25 @@
-# statemachined-bringup
+# statemachined — the daemon
 
-The bench instrument [`dev/BRINGUP.md`](../../dev/BRINGUP.md) §4 and §5 ask for:
-one command out, one reply back, and the numbers M3 is waiting on printed in a
-shape somebody can paste into [`dev/HARDWARE.md`](../../dev/HARDWARE.md).
+> **Where this is going:** [`dev/DAEMON.md`](../dev/DAEMON.md) is the plan. This
+> directory was `tools/bringup/`, and M4a moved it here unchanged in behaviour —
+> so what is written below is still true, and still all there is. `serve`, the
+> graph model, the API and the web UI arrive at M4d–M4g.
 
-It is **not the bridge.** It knows nothing about paradigms, trials or graphs,
-and anything here that starts to look like it is running an experiment belongs
-in `bridge/` instead.
+What exists today is the bench instrument [`dev/BRINGUP.md`](../dev/BRINGUP.md)
+§4 and §5 ask for: one command out, one reply back, and the numbers M3 is
+waiting on printed in a shape somebody can paste into
+[`dev/HARDWARE.md`](../dev/HARDWARE.md).
+
+**The bench instrument is not the daemon**, and the split survives the move as a
+split between modules rather than between directories. `cli.py` sends one
+command and prints what came back; it knows nothing about paradigms, trials or
+graphs. `device/` is the wire, and it is what the daemon will be built out of —
+`upload.py` and `result.py` are already there, doing the *bridge's* job. Nothing
+that runs an experiment belongs in `cli.py`.
 
 ```sh
 make bringup ARGS="hello"                   # or, without the Makefile:
-uv run --project tools/bringup statemachined-bringup hello
+uv run --project daemon statemachined hello
 ```
 
 `uv` builds the environment on first use; nothing is installed into the system
@@ -60,7 +69,7 @@ The device, however, refuses everything but `hello` before a session exists
 is the trade, and it is the operator's to make, not this tool's:
 
 ```sh
-uv run --project tools/bringup statemachined-bringup --hello state
+uv run --project daemon statemachined --hello state
 ```
 
 `monitor` needs no session at all, since it sends nothing.
@@ -91,12 +100,13 @@ is a target people learn to ignore.
 | `test_scan_health.py` | what a command costs the scan, as a regression test on the ISR handoff |
 | `test_lines.py` | predicates over several real pins — **needs three jumper wires** |
 
-The tests share `Session` and its framing with the CLI, and add two things in
-`harness.py` that a bench instrument has no business having: a graph upload and
-a result reassembled against its rolling checksum. Both are the *bridge's* job
-by the rule at the top of this file, and both should move there when `bridge/`
-exists — at which point this suite tests the bridge's codec against real
-hardware, which is strictly better than testing a copy of it.
+The graph upload and the result reassembly this suite needs used to live in
+`harness.py`, with a note that they were the bridge's job and should move when
+`bridge/` existed. They have: they are `device/upload.py` and `device/result.py`,
+and the suite imports them. So it now tests the daemon's own codec against real
+hardware rather than a copy of it, which is the whole reason M4a went first.
+What is left in `harness.py` is what is genuinely test-only — raw-line access,
+deliberate refusals, and the enums a bench instrument has no use for.
 
 ### The loopback harness
 
@@ -123,8 +133,19 @@ those seven skip and name the wires.
 
 ## Framing
 
-Shared with the emulator tests (`emulation/tests/statemachined_protocol.py`)
-rather than written a third time. There are deliberately two implementations of
-the protocol — the firmware's and the tests' — and a third would not add a third
-opinion, only somewhere for the rules to drift. That is why this has to be run
-from a checkout.
+`device/wire.py` is the **third** implementation of the framing in this
+repository, after the firmware's and the emulator tests'. Until M4a it was not:
+it imported `emulation/tests/statemachined_protocol.py`, on the grounds that a
+third copy would not add a third opinion, only somewhere for the rules to drift.
+
+An installed package cannot do that — a `.deb` has no `emulation/` directory —
+so the rules are written out, and `tests/unit/test_wire.py` is what replaces the
+guarantee: a fixed set of lines with known CRCs, checked against both Python
+implementations in one run, and against a third set of bytes generated on the
+spot so the agreement is not just about five memorised lines. The CRCs in
+`wire_vectors.json` were verified against `firmware/core/protocol/crc16.cpp`, so
+they are the device's arithmetic rather than a host module's.
+
+```sh
+make test-daemon        # host-only; part of `make ci`
+```

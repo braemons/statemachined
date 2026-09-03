@@ -147,9 +147,11 @@ Also: **VStim** (Andreas Kreiter, Cognitive Neurophysiology Lab, Bremen), whose
 ## License
 
 **Firmware, core, tests and tools: [GPLv3-or-later](LICENSE).
-Host bridge: [LGPLv3-or-later](bridge/LICENSE)**, so an experiment importing the
-bridge is not placed under copyleft — the same split, and the same reason, as
-vstimd's client. Every source file carries an `SPDX-License-Identifier`.
+The daemon's library, `daemon/src/`: [LGPLv3-or-later](daemon/LICENSE)**, so an
+experiment importing it is not placed under copyleft — the same split, and the
+same reason, as vstimd's client. The split is by *what is importable*, not by
+directory: `daemon/tests/` is a test suite and stays GPL. Every source file
+carries an `SPDX-License-Identifier`.
 
 The GPL here is a *choice*, not an inheritance: no Bpod source is copied,
 translated or adapted anywhere in this repository — the references to it in the

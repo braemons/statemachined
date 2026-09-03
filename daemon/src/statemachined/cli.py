@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: LGPL-3.0-or-later
 """The command line, one subcommand per step of dev/BRINGUP.md.
 
 Nothing here sends a command the operator did not ask for. In particular no
@@ -18,10 +18,10 @@ import time
 
 from . import __version__
 from .board import high_lines, word_bits
-from .link import DEFAULT_BAUD, DEFAULT_TARGET, DEFAULT_TIMEOUT, Link
-from .messages import ErrorCode, Field, MsgType
-from .session import Session, Timeout, random_seed
-from .wire import DeviceError, WireError, parse_reply, statemachined_line
+from .device.link import DEFAULT_BAUD, DEFAULT_TARGET, DEFAULT_TIMEOUT, Link
+from .device.messages import ErrorCode, Field, MsgType
+from .device.session import Session, Timeout, random_seed
+from .device.wire import DeviceError, WireError, parse_reply, statemachined_line
 
 SCAN_HZ_TARGET = 10_000  # dev/PLAN.md M3, and the number §4 is waiting on.
 
@@ -234,7 +234,7 @@ def cmd_report(args, session: Session) -> int:
     gained = (scan.get("overruns", 0) or 0) - (before.get("scan", {}).get("overruns", 0) or 0)
     board, n_in, n_out = line_counts(session, args)
 
-    print(f"<!-- statemachined-bringup {__version__}, {board}, {args.target} -->")
+    print(f"<!-- statemachined {__version__}, {board}, {args.target} -->")
     print()
     print("| Measurement | Value | Against |")
     print("|---|---|---|")
@@ -305,7 +305,7 @@ def cmd_monitor(args, session: Session) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="statemachined-bringup",
+        prog="statemachined",
         description=(
             "Talk to a statemachined device. The steps are dev/BRINGUP.md; this is the "
             "instrument they ask for."

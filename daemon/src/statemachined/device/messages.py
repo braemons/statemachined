@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: LGPL-3.0-or-later
 """The protocol's vocabulary, as enums rather than string literals.
 
 The mirror of firmware/core/protocol/msg_type.h. `StrEnum` members *are* their

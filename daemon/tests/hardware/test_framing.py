@@ -14,8 +14,8 @@ nothing else -- no state change, no partial effect.
 
 from __future__ import annotations
 
-from statemachined_bringup.messages import ErrorCode, Field, MsgType
-from statemachined_bringup.wire import command_line, statemachined_line
+from statemachined.device.messages import ErrorCode, Field, MsgType
+from statemachined.device.wire import command_line, statemachined_line
 
 
 def test_a_corrupted_line_is_refused_and_counted(device):

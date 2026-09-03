@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: LGPL-3.0-or-later
 """The transport: one newline-delimited line in, one out.
 
 USB CDC is what the reference board offers and what dev/BRINGUP.md is written

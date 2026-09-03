@@ -773,7 +773,7 @@ the trial type store. **Open: which.**
 6. **License — settled and applied.** **Firmware GPLv3-or-later, bridge
    LGPLv3-or-later**, so an experiment importing the bridge is not placed under
    copyleft — the same split, and the same reason, as vstimd's client. `LICENSE`,
-   `bridge/LICENSE`, `NOTICE`, and an `SPDX-License-Identifier` on every source
+   `daemon/LICENSE`, `NOTICE`, and an `SPDX-License-Identifier` on every source
    file are in the tree.
 
    One correction to the reasoning this question was written with: it assumed

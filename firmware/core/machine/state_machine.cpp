@@ -230,7 +230,7 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   // predicate is already true at entry has no edge coming, and silently never
   // fired. That is exactly the case `level` exists for: "wait until held",
   // where the lever is already down and nothing is going to move. Found on
-  // hardware, by tools/bringup/tests/hardware/test_lines.py, because every host
+  // hardware, by daemon/tests/hardware/test_lines.py, because every host
   // test for `level` entered its state at start() -- where have_last_word_ is
   // false and the first scan therefore evaluated anyway.
   const bool word_changed = !have_last_word_ || word != last_word_;

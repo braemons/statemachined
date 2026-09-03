@@ -122,7 +122,7 @@ probe D2 and D10 together for input-to-output latency, and any step LED for the
 Every line carries a CRC-16/CCITT-FALSE, so typing JSON into a serial monitor
 gets no reply. Use the repository's own bench instrument, which frames commands
 with the same helper CI drives the emulated board with
-([`tools/bringup/`](../tools/bringup/README.md)):
+([`daemon/`](../daemon/README.md)):
 
 ```sh
 make bringup ARGS="hello"

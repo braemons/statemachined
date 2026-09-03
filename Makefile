@@ -69,7 +69,7 @@ upload:                     ## flash the reference board
 	pio run -e $(BOARD) -t upload
 
 # The bench instrument dev/BRINGUP.md §4 and §5 ask for. Its one dependency
-# (pyserial) lives in tools/bringup/pyproject.toml rather than in whichever
+# (pyserial) lives in daemon/pyproject.toml rather than in whichever
 # python3 is on PATH, so `uv run --project` builds an environment for it on
 # first use and neither renode-test's interpreter nor the uv-tool sandboxes
 # above notice. TARGET is a device path, a host:port, or any pyserial URL --
@@ -78,7 +78,7 @@ TARGET ?= /dev/ttyACM0
 
 .PHONY: bringup
 bringup:                    ## talk to a board: make bringup ARGS="state"
-	uv run --project tools/bringup statemachined-bringup -t $(TARGET) $(ARGS)
+	uv run --project daemon statemachined -t $(TARGET) $(ARGS)
 
 # The only tests in this repository that need hardware. Everything else -- the
 # core on the host, the HAL under Renode -- runs in CI with no board attached,
@@ -93,8 +93,15 @@ bringup:                    ## talk to a board: make bringup ARGS="state"
 # avoid: the greeting is what hands over.
 .PHONY: test-hardware
 test-hardware:              ## the suite that needs a board: make test-hardware TARGET=...
-	uv run --project tools/bringup --group test \
-	  pytest tools/bringup/tests/hardware --target=$(TARGET) $(ARGS)
+	uv run --project daemon --group test \
+	  pytest daemon/tests/hardware --target=$(TARGET) $(ARGS)
+
+# The daemon's host-only tests: no board, no emulator, part of `make ci`. What
+# they mostly guard is the framing, which now exists three times in this tree
+# (firmware, emulator tests, daemon) and would otherwise drift silently.
+.PHONY: test-daemon
+test-daemon:                ## the daemon's host-only tests
+	uv run --project daemon --group test pytest daemon/tests/unit $(ARGS)
 
 # Pinned to match .github/workflows/ci.yml. clang-format's output changes
 # between major versions, and `BasedOnStyle: Google` in .clang-format resolves
@@ -219,7 +226,7 @@ image:                      ## build both flashable images, with a manifest
 # Everything CI runs, in the order it runs it, minus the toolchain installs.
 # The point is that a red build can be reproduced with one command.
 .PHONY: ci
-ci: check-core test sanitize golden format-check firmware firmware-rig  ## everything CI runs, except emulation
+ci: check-core test sanitize golden format-check test-daemon firmware firmware-rig  ## everything CI runs, except emulation
 
 .PHONY: clean
 clean:

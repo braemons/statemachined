@@ -39,7 +39,7 @@ from __future__ import annotations
 
 import pytest
 from harness import GraphUpload, Outcome, read_result
-from statemachined_bringup.messages import Field, MsgType
+from statemachined.device.messages import Field, MsgType
 
 #: output line -> input line, as the jumpers above wire them.
 LOOPBACK = {0: 4, 1: 5, 2: 6}
@@ -66,7 +66,7 @@ def run_trial(device, graph, trial_id: int, cap_ms: int = 2000):
     assert armed[Field.MSG_TYPE] == MsgType.ARMED
     started = device.request(MsgType.START, trial_id=trial_id)
     assert started[Field.MSG_TYPE] == MsgType.STARTED
-    return read_result(device)
+    return read_result(device.session)
 
 
 def predicate_graph(device, version: int, raise_lines: list[int], **predicate):
@@ -78,7 +78,7 @@ def predicate_graph(device, version: int, raise_lines: list[int], **predicate):
     here distinguishes "the predicate fired" from "the predicate should not have
     fired" without waiting on a timeout it cannot tell apart from a hang.
     """
-    graph = GraphUpload(device, version=version)
+    graph = GraphUpload(device.session, version=version)
     graph.begin(n_states=2, entry=0)
     graph.state(0, terminal=None, timeout=None)
     for line in raise_lines:
@@ -124,7 +124,7 @@ def test_all_requires_every_line_named(device, loopback):
     fired on the first would be the classic bug of testing `w & all_high != 0`
     rather than `== all_high`, and only the two-line case can see it.
     """
-    graph = GraphUpload(device, version=12)
+    graph = GraphUpload(device.session, version=12)
     graph.begin(n_states=3, entry=0)
     # State 0 raises output A alone and moves on after 50 ms, whatever the
     # predicate thinks. If `all` were wrong, the trial would end here instead.
@@ -200,7 +200,7 @@ def test_a_predicate_already_true_on_entry_does_not_fire(device, loopback):
     pin it drives is only read on the *next* scan -- that is a rising edge one
     scan after entry, which is precisely the case that should fire.
     """
-    graph = GraphUpload(device, version=15)
+    graph = GraphUpload(device.session, version=15)
     graph.begin(n_states=3, entry=0)
     graph.dist(0, kind="fixed", a=50)
     # State 0 raises output A and holds it for 50 ms.
@@ -228,7 +228,7 @@ def test_level_makes_a_predicate_fire_on_entry(device, loopback):
     the flag and not the wiring: with `level` the already-true predicate fires
     immediately and the trial reaches HIT.
     """
-    graph = GraphUpload(device, version=16)
+    graph = GraphUpload(device.session, version=16)
     graph.begin(n_states=3, entry=0)
     graph.dist(0, kind="fixed", a=50)
     graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})

@@ -15,7 +15,7 @@ import time
 
 from conftest import TRIAL_OUTPUT_LINE
 from harness import CancelReason, GraphUpload, Outcome, read_result
-from statemachined_bringup.messages import ErrorCode, Field, MsgType
+from statemachined.device.messages import ErrorCode, Field, MsgType
 
 #: The `wait` state's fixed duration, and the tolerance it is held to.
 #:
@@ -41,7 +41,7 @@ def test_a_graph_whose_checksum_does_not_match_is_refused(device):
     wrong total is the only way to ask whether the device is really folding the
     bytes rather than accepting whatever arrives.
     """
-    graph = GraphUpload(device, version=2)
+    graph = GraphUpload(device.session, version=2)
     graph.begin(n_states=2, entry=0)
     graph.dist(0, kind="fixed", a=10)
     graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})
@@ -129,7 +129,7 @@ def test_a_trial_runs_and_reports_what_it_actually_did(device, two_state_graph):
         "the entry action did not reach the pins"
     )
 
-    result = read_result(device)
+    result = read_result(device.session)
     assert result.trial_id == 42
     assert result.outcome == Outcome.HIT, "the trial did not reach its terminal state"
     assert result.checksum_matches, (
@@ -159,7 +159,7 @@ def test_the_lines_a_trial_raised_come_down_when_it_ends(device, two_state_graph
         start="serial",
     )
     device.request(MsgType.START, trial_id=43)
-    read_result(device)
+    read_result(device.session)
 
     after = device.state()
     assert after["running"] is False
@@ -180,7 +180,7 @@ def test_cancel_stops_a_running_trial_and_says_why(device, two_state_graph):
     ack = device.request(MsgType.CANCEL, trial_id=44)
     assert ack[Field.MSG_TYPE] == MsgType.CANCEL_ACK
 
-    result = read_result(device)
+    result = read_result(device.session)
     assert result.outcome == Outcome.CANCELLED
     assert result.end.get("checksum") is not None
     assert result.begin["cancel_reason"] == CancelReason.HOST

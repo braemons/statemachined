@@ -28,10 +28,10 @@ from __future__ import annotations
 
 import pytest
 import serial
-from statemachined_bringup.link import DEFAULT_BAUD, DEFAULT_TARGET, Link
-from statemachined_bringup.messages import Field, MsgType
-from statemachined_bringup.session import Session, Timeout, random_seed
-from statemachined_bringup.wire import DeviceError
+from statemachined.device.link import DEFAULT_BAUD, DEFAULT_TARGET, Link
+from statemachined.device.messages import Field, MsgType
+from statemachined.device.session import Session, Timeout, random_seed
+from statemachined.device.wire import DeviceError
 
 from harness import Device, GraphUpload, LinkState
 
@@ -195,7 +195,7 @@ def two_state_graph(device):
     is the smallest thing that puts a real duration on a real clock and drives
     a real pin, which is the only part the host suite cannot reach.
     """
-    graph = GraphUpload(device, version=1)
+    graph = GraphUpload(device.session, version=1)
     graph.begin(n_states=2, entry=0)
     graph.dist(0, kind="fixed", a=500)
     graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})
@@ -222,7 +222,7 @@ def loopback(greeted) -> dict[int, int]:
     from test_lines import LOOPBACK
 
     device = greeted
-    graph = GraphUpload(device, version=99)
+    graph = GraphUpload(device.session, version=99)
     graph.begin(n_states=2, entry=0)
     graph.dist(0, kind="fixed", a=250)
     graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})

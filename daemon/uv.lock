@@ -73,8 +73,8 @@ wheels = [
 ]
 
 [[package]]
-name = "statemachined-bringup"
-version = "0.1.0"
+name = "statemachined"
+version = "0.0.0"
 source = { editable = "." }
 dependencies = [
     { name = "pyserial" },

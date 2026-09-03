@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: LGPL-3.0-or-later
 """Line number to pin label, for printing only.
 
 The map itself is a wire contract and it lives in dev/HARDWARE.md; this table

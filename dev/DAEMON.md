@@ -84,13 +84,14 @@ statemachined/
 │   ├── LICENSE                   LGPL-3.0-or-later, moved from bridge/
 │   ├── src/statemachined/
 │   │   ├── cli.py                `statemachined serve`, and the bench commands
+│   │   ├── board.py              pin labels per board, for what the CLI prints
 │   │   ├── config.py             /etc/braemons/statemachined.toml
 │   │   ├── device/               everything that touches the wire
 │   │   │   ├── link.py              pyserial transport        ← tools/bringup
 │   │   │   ├── wire.py              framing, CRC              ← tools/bringup
 │   │   │   ├── messages.py          MsgType/Field/ErrorCode   ← tools/bringup
 │   │   │   ├── session.py           request/response, retry   ← tools/bringup
-│   │   │   ├── upload.py            the chunked graph and set upload  ← tests/hardware/harness.py
+│   │   │   ├── upload.py            the chunked graph upload  ← tests/hardware/harness.py
 │   │   │   ├── result.py            result reassembly         ← tests/hardware/harness.py
 │   │   │   ├── supervisor.py        NEW: owns the port, reconnect, seed, watchdog
 │   │   │   ├── clock.py             NEW: device µs ⇄ host clock
@@ -113,12 +114,12 @@ statemachined/
 └── tools/check-core-purity.sh stays. It is the only thing left in tools/
 ```
 
-`tools/bringup/` disappears as a directory. Its README argues that the graph
+`tools/bringup/` disappears as a directory. Its README argued that the graph
 upload and result reassembly in `tests/hardware/harness.py` are *"the bridge's
 job and should move there when `bridge/` exists — at which point this suite
 tests the bridge's codec against real hardware, which is strictly better than
-testing a copy of it."* That is exactly what this move does, and it is the
-strongest single argument for doing it first and separately (§7, M4a).
+testing a copy of it."* That is exactly what the move does, and it was the
+strongest single argument for doing it first and separately (§7, M4a, done).
 
 ### What does not move: the second protocol implementation
 
@@ -629,10 +630,10 @@ offset into what was sent. This also makes the two layers the same shape — a r
 on the device, a ring in the daemon (§4.6), one overflow rule to explain instead
 of two.
 
-**One thing about that 3 KB.** It competes directly with §3.2's fallback graph
-set, which needs about 7.5 KB: if the measurement in open question 4 comes back
-badly, the two together are 11.5 KB and the budget is genuinely tight rather than
-comfortable.
+**One thing about that 3 KB.** It competes directly with §3.2's graph set, which
+needs about 7.5 KB and is no longer contingent on anything: together they are
+11.5 KB of 32, so the budget is tight rather than comfortable and open question
+10 says not to spend the two separately.
 
 #### The clock, and the wrap
 
@@ -1006,7 +1007,7 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 
 | | |
 |---|---|
-| **M4a** | **The move, and nothing else.** `tools/bringup/` → `daemon/`, package renamed, `wire.py` made standalone with golden vectors against the emulator's copy. `make bringup` and `make test-hardware` keep working, unchanged in behaviour. Reviewable as a pure move |
+| **M4a** ✅ | **The move, and nothing else.** `tools/bringup/` → `daemon/`, `statemachined_bringup` → `statemachined` with the wire under `device/`, `wire.py` made standalone with golden vectors against the emulator's copy *and* against `crc16.cpp`. The graph upload and result reassembly left `tests/hardware/harness.py` for `device/upload.py` and `device/result.py`, so the hardware suite now tests the daemon's codec rather than a copy of it. `make bringup` and `make test-hardware` unchanged in behaviour; `make test-daemon` is new and is in `make ci` and CI |
 | **M4b** | **Wiring config and the `visit` stream, in the firmware** (§3.3, §3.6). Small. The wiring move plus a compile-time safe-level word closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships; the stream is a callback and a serialiser. They share a file and a protocol document, so they share a branch. **No data flash** — that is deferred to M7 |
 | **M4c** | **The graph set, in the firmware** (§3.2, §3.3): shared pools, `GraphEntry`, `set_begin`/`set_end`, a slot in `configure`, `max_graphs` in `caps`. The larger of the two firmware milestones and the one this plan's trial loop rests on. Covered by the native core, the Renode session and `PROTOCOL.md` message by message, all of which exist |
 | **M4d** | `model/` and `compile.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
