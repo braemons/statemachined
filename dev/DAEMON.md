@@ -516,12 +516,47 @@ writes the trace live, and at `result_end` compares what it logged against the
 authoritative path. Missing entries are filled from the result; a `seq` gap the
 result does not fill is logged as an **error**, not passed over.
 
-This buys one thing back that the result cannot give. `result_begin` carries
-`truncated` for a run that visited more states than `kMaxPath` holds — *"a graph
-may loop, and a long trial degrades to a truncated path rather than to a corrupt
-one"*. **The live stream does not truncate.** For exactly the runs where the
-record is lossy, the trace is complete, which turns a looping graph from a
-recording problem into a normal one.
+The residual case is a result that arrives `truncated`, and there the trace is
+the only complete copy — the stream has no `kMaxPath`. That is a safety net, not
+a reason to build any of this: the buffer should be sized so it never fires.
+
+#### Size the buffer instead
+
+The device's path buffer is not a design decision waiting to be made. It exists,
+it is `StateVisit path[kMaxPath]` with a `path_truncated` flag, and the right
+answer to a graph that loops is to make it big enough rather than to build
+machinery around its overflowing.
+
+| | |
+|---|---|
+| `StateVisit` | 16 B — three `uint8_t`, a pad, `drawn_ms`, `entered_us`, `duration_us` |
+| `kMaxPath` today | 64, so 1 KB. `trial.h` already calls it *"about 1 KB on the reference board"* |
+| The ceiling | **255.** `path_len` is a `uint8_t`, so 255 is the largest value the comparison in `record_visit` still terminates on, and 256 is the value that breaks it silently |
+| At 255 | 4080 B, so **+3 KB** of the RA4M1's 32 |
+
+255 is the number to take. It is not a compromise between two costs; it is the
+point where the type stops the count, and going past it means widening
+`path_len`, `result_begin`'s `path_len`, and the `from` index of every
+`result_path` chunk — a protocol change for headroom nobody has asked for.
+
+**Whether 255 is "enough" is computable, and the daemon should compute it.** It
+holds the graph and it holds `cap_ms`, so the worst-case visit count of a trial
+is `cap_ms` divided by the shortest path around each cycle — a check that belongs
+next to the `caps` check `POST /api/session/graphs` already does, and one that
+turns "big enough" from a hope into a validated property with a number attached.
+It is only a real bound when every cycle in the graph has a positive minimum
+duration; a cycle a graph can go round on transitions alone is bounded by the
+scan rate, not by the timings, and for those the flag has to stay. Refusing them
+is not the daemon's call — warning, with the count, is.
+
+**Two things about that 3 KB.** It competes directly with §3.2's fallback graph
+set, which needs about 7.5 KB: if the measurement in open question 4 comes back
+badly, the two together are 11.5 KB and the budget is genuinely tight rather than
+comfortable. And `config.h:34` describes the buffer as a *"ring buffer"* while
+`record_visit` keeps the **first** 255 visits and drops the rest — for a trial
+whose interesting part is the response at the end, that is the wrong half. Once
+sized it is moot, and the stream covers the overflow either way, so the fix is to
+correct the comment rather than to build the ring.
 
 #### The clock, and the wrap
 
@@ -544,6 +579,7 @@ together is cheaper than sequencing them:
 | `machine/state_machine.cpp` | `record_visit()` gains an emit callback. The machine must not learn about the link, so it is a sink passed in, and `native` tests pass a vector |
 | `protocol/host_link_session.cpp` | serialise `visit`, queue it, never block on it |
 | `trial/trial_runner.cpp` | supplies `trial_id` to the sink; `0` when there is no trial |
+| `core/config.h` | `STATEMACHINED_MAX_PATH` 64 → 255, and the comment corrected to say what the code does |
 | `dev/PROTOCOL.md` | §4 gains `visit`, and §4.3 gains the sentence that the result is authoritative and the stream is a preview |
 
 ---
@@ -904,7 +940,7 @@ diff.
 7. **Who authors the console**, and when. §5 defers it; it should not stay
    deferred long, since it is most of what makes three daemons feel like one rig.
 8. **The RA4M1 data-flash numbers** (§3.4): 8 KB and ~100 000 erase cycles are
-   from memory, not from the datasheet. Cheap to confirm, and #11 depends on the
+   from memory, not from the datasheet. Cheap to confirm, and #12 depends on the
    second one being roughly right.
 9. **Trace retention on a rig nobody visits.** A session is about a megabyte,
    so size is not the problem; rotating away a trace that no analysis has copied
@@ -913,11 +949,17 @@ diff.
    not fetched, which would make it stateful about a consumer it otherwise knows
    nothing about. Leaning: no — rotate on time and size, and let §4.6's pull be
    triald's job to actually do.
-10. **Does triald stow the trace beside the `.tdr`?** §4.6 leaves it optional and
+10. **The SRAM budget, once both §3.2's fallback and a 255-visit path want it.**
+   +3 KB for the path is affordable on its own and 7.5 KB for a graph set is
+   affordable on its own; together they are 11.5 KB of 32 alongside a 2.6 KB
+   graph and the framework's 8 KB heap. Nothing here needs deciding until #4
+   answers, but the two should not be budgeted separately as though the other
+   were not asking.
+11. **Does triald stow the trace beside the `.tdr`?** §4.6 leaves it optional and
    that is right for the daemon, but "optional" across two daemons usually means
    "nobody did it". If the answer is yes it is a triald change, and it lands with
    the amendments in #3 and #5.
-11. **Who is allowed to call `persist`, and how often.** "Explicit, never on
+12. **Who is allowed to call `persist`, and how often.** "Explicit, never on
    `graph_end`" is the rule that protects the part, and a rule enforced only by
    the daemon's good manners is one a future caller breaks. Worth a write counter
    in `state_report`, so the budget is observable rather than trusted — the same
