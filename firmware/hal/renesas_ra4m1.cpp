@@ -205,6 +205,21 @@ size_t link_read(char* dst, size_t max) {
 }
 
 size_t link_write_some(const char* src, size_t n) {
+#if defined(STATEMACHINED_LINK_UART)
+  // The core's UART does not override availableForWrite(), so it inherits
+  // Print's, which answers 0 for ever. Asking it how much room the port has
+  // therefore takes every reply and sends none of it: the queue fills, the
+  // board goes silent, and the first symptom is a `hello` that draws no
+  // `hello_ack`. Which is exactly how this shipped -- the USB build overrides
+  // the call and the bench was on USB, so only the emulator saw it.
+  //
+  // So write the whole chunk and say so. The core's UART write() does wait for
+  // the transmitter, but waiting costs the scan nothing on this build: the scan
+  // is in the timer ISR and preempts a spin in the foreground the same as it
+  // preempts anything else. The queue above stays useful regardless -- it is
+  // what lets a reply be produced from interrupt context.
+  return STATEMACHINED_LINK.write(src, n);
+#else
   // availableForWrite() is what makes this non-blocking. The core's write()
   // spins until the endpoint has accepted every byte it was given -- for USB
   // CDC that means waiting on the host's next poll -- so it is only ever handed
@@ -214,6 +229,7 @@ size_t link_write_some(const char* src, size_t n) {
   if (space <= 0) return 0;
   const size_t take = (static_cast<size_t>(space) < n) ? static_cast<size_t>(space) : n;
   return STATEMACHINED_LINK.write(src, take);
+#endif
 }
 
 bool link_up() {
