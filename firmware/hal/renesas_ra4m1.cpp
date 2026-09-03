@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The Uno R4 Minima. Renesas RA4M1 at 48 MHz, 32 KB SRAM, native USB CDC.
 //
 // The reference target, and the one that sets the design: everything here is

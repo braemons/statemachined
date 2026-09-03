@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The graph: states, their transitions, their output actions, and the codes
 // terminal states report.
 //

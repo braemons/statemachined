@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Board entry point. Deliberately thin: everything with a decision in it is in
 // core/, which knows nothing about Arduino and is tested on the host.
 //

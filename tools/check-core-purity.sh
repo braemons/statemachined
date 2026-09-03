@@ -1,4 +1,5 @@
 #!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
 # The portable core's constraints, enforced rather than remembered.
 #
 # firmware/core/ is plain C++17 with no Arduino.h, no dynamic allocation and no

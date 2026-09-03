@@ -746,12 +746,22 @@ the trial type store. **Open: which.**
    every state change, 2 free-runs at 10 Hz. Mode 1 makes the whole state path
    recoverable from the ephys recording alone, which is stronger than anything
    this plan had. Confirm mode 1 is what Bremen's rigs want as the default.
-6. **License — settled, pending your agreement.** Bpod's firmware is GPLv3, so
-   borrowing from it makes fsmd's firmware GPLv3. That was already the proposal.
-   **Firmware GPLv3, bridge LGPLv3** so an experiment importing the bridge is not
-   placed under copyleft — the same split, and the same reason, as vstimd's
-   client. Every file we derive from Bpod carries its Sanworks copyright line
-   alongside ours; a `NOTICE` file records what came from where.
+6. **License — settled and applied.** **Firmware GPLv3-or-later, bridge
+   LGPLv3-or-later**, so an experiment importing the bridge is not placed under
+   copyleft — the same split, and the same reason, as vstimd's client. `LICENSE`,
+   `bridge/LICENSE`, `NOTICE`, and an `SPDX-License-Identifier` on every source
+   file are in the tree.
+
+   One correction to the reasoning this question was written with: it assumed
+   "Bpod's firmware is GPLv3, so borrowing from it makes fsmd's firmware GPLv3."
+   **Nothing was in fact borrowed.** Every mention of Bpod in these sources is a
+   comment comparing our design to theirs, usually to explain a divergence; no
+   Sanworks code is copied, translated or adapted, and no file carries a Sanworks
+   copyright line. GPLv3 was therefore not compelled and is a deliberate choice
+   to stay compatible with the system we take our ideas from. If Bpod source is
+   ever incorporated, that file takes the Sanworks notice alongside ours and
+   `NOTICE` says which file and what was taken.
+
 7. **`start_source`.** Proposed as a per-trial field taking `ttl`, `serial` or
    `either` — TTL on the rig so reaction times need no clock sync, serial as the
    desk-testing path. Confirm.

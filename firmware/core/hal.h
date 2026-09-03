@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The whole hardware surface, and it is deliberately this small.
 //
 // Free functions rather than a virtual interface: read_inputs() and

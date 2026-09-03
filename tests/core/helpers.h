@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // A tiny builder, so a test reads as the paradigm it describes rather than as
 // struct initialisation.
 #pragma once

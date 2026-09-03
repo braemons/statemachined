@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The engine is a pure function of (graph, seed, input word, time), which is
 // what lets these tests drive whole trials with no board, no clock and no I/O.
 #include "doctest.h"

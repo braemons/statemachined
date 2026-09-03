@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The trial layer: a StateMachine plus the things that make a run a trial.
 //
 // This is the add-on, and the dependency runs one way only. The machine below

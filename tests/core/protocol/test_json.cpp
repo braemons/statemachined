@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The JSON layer. It is the front door for untrusted input -- everything the
 // host sends arrives through here -- so these tests spend most of their effort
 // on what it must refuse, not on what it must accept.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Compile-time capacities. Sized per board: the Uno R4 Minima (32 KB SRAM) is
 // the reference target, so these defaults are its numbers. A graph exceeding
 // any of them is refused at upload with a message naming what overflowed --

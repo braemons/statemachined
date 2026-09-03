@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The trial layer's vocabulary. None of this is known to the state machine.
 //
 // fsmd is the *timing* authority and triald is the *decision* authority: what

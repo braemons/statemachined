@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The device's side of the conversation with the host bridge.
 //
 // A *session* is everything that persists between messages: `hello` opens one,

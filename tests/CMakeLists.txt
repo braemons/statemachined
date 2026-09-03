@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 add_library(doctest_main STATIC doctest_main.cpp)
 target_include_directories(doctest_main PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third_party)
 

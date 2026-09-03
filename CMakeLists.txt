@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Host build of the portable core, for unit tests in CI.
 #
 # The core is plain C++17 with no Arduino.h, so it compiles here exactly as it

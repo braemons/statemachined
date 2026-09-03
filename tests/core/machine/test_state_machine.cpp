@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The state machine on its own, with no trial vocabulary anywhere in the file.
 //
 // That is the point of these tests as much as what they assert: if the machine

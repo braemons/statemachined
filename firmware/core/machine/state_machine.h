@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The scan loop: transitions, timers, output actions, and the record of a run.
 //
 // Deterministic in (graph, seed, input word, time): given the same sequence of

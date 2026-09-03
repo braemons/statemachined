@@ -103,9 +103,15 @@ Also: **VStim** (Andreas Kreiter, Cognitive Neurophysiology Lab, Bremen), whose
 
 ## License
 
-Not yet chosen — see *Open questions* §6 in the plan. The proposal is **GPLv3 for
-the firmware** (Bpod's firmware is GPLv3, so borrowing from it decides this) and
-**LGPLv3 for the host bridge**, so an experiment importing the bridge is not
-placed under copyleft — the same split, and the same reason, as vstimd's client.
+**Firmware, core, tests and tools: [GPLv3-or-later](LICENSE).
+Host bridge: [LGPLv3-or-later](bridge/LICENSE)**, so an experiment importing the
+bridge is not placed under copyleft — the same split, and the same reason, as
+vstimd's client. Every source file carries an `SPDX-License-Identifier`.
+
+The GPL here is a *choice*, not an inheritance: no Bpod source is copied,
+translated or adapted anywhere in this repository — the references to it in the
+code are comments comparing designs. We take the licence its authors chose
+because we take their ideas. [`NOTICE`](NOTICE) records that, and the one piece
+of third-party code in the tree (doctest, MIT, test-only).
 
 Copyright © 2026 Joscha Schmiedt, University of Bremen.

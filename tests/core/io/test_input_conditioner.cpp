@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Debounce, polarity and enable. All three run before the state machine sees a
 // bit, and all three are tested here rather than four times over in four HALs.
 #include "doctest.h"

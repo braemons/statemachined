@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // CRC-16/CCITT-FALSE, the check on every protocol line and the accumulator
 // behind graph_end's and result_end's checksums.
 //
