@@ -274,6 +274,17 @@ void demo_end(Microseconds now) {
   }
   g_demo_led = false;
   digitalWrite(LED_BUILTIN, LOW);
+
+  // The demo's input configuration must not outlive it. The conditioner is
+  // shared with the session, so leaving the demo's 20 ms debounce installed
+  // means a host that has uploaded no graph is silently reading lines 0 and 1
+  // through the demo's idea of them -- which is not what a board reports
+  // before a graph arrives, and is a difference nothing on the host can see.
+  // Back to neutral, and re-primed because the accepted levels were reached
+  // under the old configuration.
+  g_inputs.configure(InputConfig{});
+  g_inputs.prime(hal::read_inputs());
+
   // The session owns the pins from here, and it has no graph yet, so this is
   // every output line low.
   apply(g_session->fail_safe());
