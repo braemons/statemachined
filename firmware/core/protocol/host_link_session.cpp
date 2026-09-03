@@ -152,6 +152,8 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
       return on_ping(message_id, now_us);
     case MsgType::State:
       return on_state_request(message_id, now_us);
+    case MsgType::Wiring:
+      return on_wiring(m, message_id);
     case MsgType::Configure:
       return on_configure(m, message_id);
     case MsgType::Start:
@@ -242,7 +244,75 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id) {
   w.end_object();
   w.key_bool("has_graph", have_graph_);
   w.key_u32("graph_version", have_graph_ ? live_graph_.version : 0);
+  // Whether anybody has told this board what it is wired to. False means it is
+  // running the compile-time defaults, which a daemon needs to know before it
+  // decides whether to push a wiring or to trust the one that is there.
+  w.key_bool("has_wiring", have_wiring_);
   send(w, message_id);
+}
+
+void HostLinkSession::set_wiring(const DeviceWiring& w, bool from_host) {
+  wiring_ = w;
+  if (from_host) have_wiring_ = true;
+  ++wiring_revision_;
+}
+
+void HostLinkSession::on_wiring(const JsonObject& m, uint16_t message_id) {
+  // Refused mid-trial for the reason a graph upload is: the conditioning it
+  // changes is read by the scan, and changing a debounce under a running trial
+  // would move a timing nobody could account for afterwards.
+  if (state_ == LinkState::Armed || state_ == LinkState::Running) {
+    send_error(message_id, "busy", "a trial is armed or running", "wiring");
+    return;
+  }
+
+  // Read into a copy and install it whole, so a message that turns out to be
+  // malformed halfway through leaves the board wired the way it was.
+  DeviceWiring next = wiring_;
+  uint32_t v = 0;
+  if (m.type_of("invert") != JsonType::Missing) {
+    if (!m.u32("invert", &v)) {
+      send_error(message_id, "bad_json", "invert must be a mask", "invert");
+      return;
+    }
+    next.inputs.invert_mask = v;
+  }
+  if (m.type_of("enable") != JsonType::Missing) {
+    if (!m.u32("enable", &v)) {
+      send_error(message_id, "bad_json", "enable must be a mask", "enable");
+      return;
+    }
+    next.inputs.enable_mask = v;
+  }
+  if (m.type_of("safe") != JsonType::Missing) {
+    if (!m.u32("safe", &v)) {
+      send_error(message_id, "bad_json", "safe must be a mask", "safe");
+      return;
+    }
+    next.output_safe_levels = v;
+  }
+  if (m.type_of("debounce_ms") != JsonType::Missing) {
+    JsonArray a;
+    if (!m.array("debounce_ms", &a)) {
+      send_error(message_id, "bad_json", "debounce_ms must be an array", "debounce_ms");
+      return;
+    }
+    // Every line, not only the ones the array names: a shorter array means the
+    // rest are zero, so that removing a debounce is possible at all.
+    for (uint8_t i = 0; i < kMaxLines; ++i) next.inputs.debounce_ms[i] = 0;
+    for (uint8_t i = 0; i < kMaxLines; ++i) {
+      int32_t ms = 0;
+      if (!a.next_i32(&ms)) break;
+      if (ms < 0 || ms > UINT16_MAX) {
+        send_error(message_id, "bad_json", "a debounce is out of range", "debounce_ms");
+        return;
+      }
+      next.inputs.debounce_ms[i] = static_cast<NarrowMilliseconds>(ms);
+    }
+  }
+
+  set_wiring(next, /*from_host=*/true);
+  send_ack(message_id);
 }
 
 void HostLinkSession::on_graph_message(const JsonObject& m, JsonSpan covered,
@@ -467,6 +537,7 @@ void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us)
   w.key_u32("link_state", static_cast<uint32_t>(state_));
   w.key_bool("has_graph", have_graph_);
   w.key_u32("graph_version", have_graph_ ? live_graph_.version : 0);
+  w.key_bool("has_wiring", have_wiring_);
   w.key_u32("trial_id", armed_trial_id_);
   w.key_bool("running", runner_.running());
   w.key_u32("current_state", runner_.current_state());
@@ -558,7 +629,10 @@ OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
 OutputUpdate HostLinkSession::fail_safe() {
   OutputUpdate ops;
   pending_ops_ = OutputUpdate{};
-  const LineBitmask safe = have_graph_ ? live_graph_.output_safe_levels : 0;
+  // The wiring's, not a graph's, and applied whether or not a graph exists --
+  // which is the whole point of the move. A rig image holds no graph at reset,
+  // and this is the call main.cpp makes before the first scan.
+  const LineBitmask safe = wiring_.output_safe_levels;
   ops.set_high = safe;
   // Every line the board has, not only the ones some state raised: this runs
   // when the graph may be the thing that is wrong.

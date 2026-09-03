@@ -106,12 +106,16 @@ void build(StateGraph& g) {
   // is not it.
   f.raise_on_entry(done, kReadyOutput);
   f.raise_on_entry(aborted, static_cast<LineIndex>(kFirstStepOutput));
+}
 
-  // Debounce every input the demo uses. A bench switch bounces for a few
-  // milliseconds and an undebounced one would fire the chase several times.
-  g.inputs.debounce_ms[kStartInput] = 20;
-  g.inputs.debounce_ms[kAbortInput] = 20;
-  g.output_safe_levels = 0;
+DeviceWiring wiring() {
+  DeviceWiring w;
+  w.inputs.debounce_ms[kStartInput] = 20;
+  w.inputs.debounce_ms[kAbortInput] = 20;
+  // Not the compiled-in levels: the demo drives LEDs on a bench, and every
+  // output low is what "off" means there. A rig image builds the demo out.
+  w.output_safe_levels = 0;
+  return w;
 }
 
 }  // namespace demo

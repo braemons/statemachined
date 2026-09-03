@@ -32,8 +32,8 @@
     },
     {
       "why": "masks are numbers and arrays nest, so the CRC covers a body with both",
-      "body": "{\"msg_type\":\"graph_begin\",\"message_id\":1,\"graph_version\":7,\"n_states\":4,\"entry\":0,\"invert\":0,\"enable\":4294967295,\"safe\":0,\"debounce_ms\":[0,2,2,0]",
-      "line": "{\"msg_type\":\"graph_begin\",\"message_id\":1,\"graph_version\":7,\"n_states\":4,\"entry\":0,\"invert\":0,\"enable\":4294967295,\"safe\":0,\"debounce_ms\":[0,2,2,0],\"crc\":\"FC3D\"}"
+      "body": "{\"msg_type\":\"wiring\",\"message_id\":9,\"invert\":0,\"enable\":4294967295,\"safe\":0,\"debounce_ms\":[0,2,2,0]",
+      "line": "{\"msg_type\":\"wiring\",\"message_id\":9,\"invert\":0,\"enable\":4294967295,\"safe\":0,\"debounce_ms\":[0,2,2,0],\"crc\":\"25A5\"}"
     }
   ],
   "rolling": {
@@ -42,6 +42,6 @@
       0,
       4
     ],
-    "checksum": "DF77"
+    "checksum": "3BA3"
   }
 }

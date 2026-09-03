@@ -9,6 +9,11 @@
 // evaluating only the *current* state's transitions and by skipping evaluation
 // entirely when the input word has not changed.
 //
+// The wiring -- invert, enable, debounce, the output safe levels -- is
+// deliberately NOT in here. It describes the box, not the paradigm, and it
+// lives in io/wiring.h at device scope; see the comment there for why that is a
+// fail-safe fix rather than tidiness.
+//
 // See dev/PLAN.md, "Fitting on 32 KB".
 #pragma once
 #include <cstdint>
@@ -20,16 +25,6 @@
 #include "random/random_distribution.h"
 
 namespace statemachined {
-
-/// Per-line input conditioning, applied when the word is assembled so that every
-/// predicate above sees clean, polarity-normalised bits and no transition logic
-/// has a special case. `invert` is Bpod's logicHigh/logicLow: opto-isolated
-/// inputs are routinely active-low.
-struct InputConfig {
-  LineBitmask invert_mask = 0;
-  LineBitmask enable_mask = 0xFFFFFFFF;
-  NarrowMilliseconds debounce_ms[kMaxLines] = {0};
-};
 
 struct StateGraph {
   uint16_t version = 0;
@@ -52,12 +47,6 @@ struct StateGraph {
   /// validate() checks that they exist rather than where they live.
   Milliseconds choice_options[kMaxChoiceOptions] = {0};
   uint16_t choice_weights[kMaxChoiceOptions] = {0};
-
-  InputConfig inputs;
-
-  /// Levels outputs are driven to on watchdog timeout, reset, link loss or a
-  /// refused graph. Per line, because "off" is not always "low".
-  LineBitmask output_safe_levels = 0;
 
   StateGraph() = default;
 

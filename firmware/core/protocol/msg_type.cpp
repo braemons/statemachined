@@ -13,7 +13,7 @@ namespace {
 const char* const kNames[] = {
     "hello",        "graph_begin",  "graph_dist",  "graph_state",  "graph_transition",
     "graph_action", "graph_end",    "configure",   "start",        "cancel",
-    "ping",         "state",
+    "ping",         "state",        "wiring",
 
     "hello_ack",    "ack",          "graph_ok",    "armed",        "started",
     "cancel_ack",   "result_begin", "result_path", "result_end",   "event",

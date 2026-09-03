@@ -91,24 +91,12 @@ UploadError GraphBuilder::begin(const JsonObject& m, JsonSpan covered) {
   if (n_states > kMaxStates) return fail(UploadError::TooMany, "max_states");
   if (entry >= n_states) return fail(UploadError::BadField, "entry");
 
-  bool bad = false;
-  uint32_t v = 0;
-  if (opt_u32(m, "invert", &v, &bad)) g_.inputs.invert_mask = v;
-  if (opt_u32(m, "enable", &v, &bad)) g_.inputs.enable_mask = v;
-  if (opt_u32(m, "safe", &v, &bad)) g_.output_safe_levels = v;
-  if (bad) return fail(UploadError::BadField, "invert/enable/safe");
-
-  if (m.type_of("debounce_ms") != JsonType::Missing) {
-    JsonArray a;
-    if (!m.array("debounce_ms", &a)) return fail(UploadError::BadField, "debounce_ms");
-    // May be shorter than the line count; missing entries stay 0.
-    for (uint8_t i = 0; i < kMaxLines; ++i) {
-      int32_t ms = 0;
-      if (!a.next_i32(&ms)) break;
-      if (ms < 0 || ms > UINT16_MAX) return fail(UploadError::BadField, "debounce_ms");
-      g_.inputs.debounce_ms[i] = static_cast<NarrowMilliseconds>(ms);
-    }
-  }
+  // `invert`, `enable`, `safe` and `debounce_ms` used to be read here. They
+  // describe the wiring rather than the paradigm and now arrive in their own
+  // `wiring` command (dev/PROTOCOL.md 3.5), so a graph upload no longer carries
+  // them and no longer overwrites what a rig was configured with. A host that
+  // still sends them is not refused -- unknown members are ignored everywhere
+  // in this protocol -- but they do nothing.
 
   g_.version = version;
   g_.entry = entry;

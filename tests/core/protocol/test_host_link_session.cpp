@@ -562,12 +562,99 @@ TEST_CASE("fail_safe drives every line to its configured level") {
   Host h(eight_lines);
   greet(h);
   const OutputUpdate before = h.device.fail_safe();
-  CHECK(before.set_high == 0);
-  CHECK(before.set_low == 0xFF);
+  CHECK(before.set_high == kCompiledSafeLevels);
+  CHECK(before.set_low == (0xFFu & ~kCompiledSafeLevels));
+
+  const auto r =
+      h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() + R"(,"safe":5)");
+  REQUIRE(r.size() == 1);
+  CHECK(type_of(r[0]) == "ack");
+
+  const OutputUpdate after = h.device.fail_safe();
+  CHECK(after.set_high == 5);           // lines 0 and 2 are safe high
+  CHECK(after.set_low == (0xFF & ~5));  // everything else low
+}
+
+TEST_CASE("a board fails safe correctly before it holds a graph") {
+  // The reason the wiring left StateGraph. A rig image boots into no graph at
+  // all, and main.cpp's first act is this call -- so if the safe levels lived
+  // in a graph there would be nothing to read, every output would go low, and
+  // an active-low valve driver would be opened by every power cycle.
+  DeviceIdentity eight_lines;
+  eight_lines.output_line_count = 8;
+  Host h(eight_lines);
+  greet(h);
+  h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() + R"(,"safe":9)");
+  CHECK(h.device.has_graph() == false);
+  const OutputUpdate ops = h.device.fail_safe();
+  CHECK(ops.set_high == 9);
+  CHECK(ops.set_low == (0xFF & ~9));
+}
+
+TEST_CASE("hello_ack says whether the board has been given a wiring") {
+  // So a daemon never has to guess whether the board came up configured. False
+  // means it is running the compile-time defaults.
+  Host h;
+  auto r = h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
+                  R"(,"proto":1,"seed":"0123456789ABCDEF")");
+  REQUIRE(type_of(r[0]) == "hello_ack");
+  // Asserted on the bytes: field() reads strings and numbers, and this is a
+  // bool.
+  CHECK(r[0].find(R"("has_wiring":false)") != std::string::npos);
+
+  h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() + R"(,"invert":3)");
+  r = h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
+             R"(,"proto":1,"seed":"0123456789ABCDEF")");
+  CHECK(r[0].find(R"("has_wiring":true)") != std::string::npos);
+}
+
+TEST_CASE("a wiring is refused while a trial is armed") {
+  // Same guard as a graph upload, and for a sharper reason: the conditioning it
+  // changes is read by the scan, so a debounce edited under a running trial
+  // would move a timing nobody could account for afterwards.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":4,"graph_version":7)");
+  const auto r =
+      h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() + R"(,"safe":1)");
+  REQUIRE(r.size() == 1);
+  CHECK(type_of(r[0]) == "error");
+  CHECK(field(r[0], "code") == "busy");
+  CHECK(field(r[0], "context") == "wiring");
+}
+
+TEST_CASE("a malformed wiring changes nothing") {
+  // Read into a copy and installed whole. A message that turns out to be bad
+  // halfway through must leave the board wired the way it was, or a typo in a
+  // debounce would take the safe levels with it.
+  DeviceIdentity eight_lines;
+  eight_lines.output_line_count = 8;
+  Host h(eight_lines);
+  greet(h);
+  h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() + R"(,"safe":6)");
+
+  const auto r = h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() +
+                        R"(,"safe":1,"debounce_ms":[2,-5])");
+  REQUIRE(type_of(r[0]) == "error");
+  CHECK(field(r[0], "context") == "debounce_ms");
+  CHECK(h.device.fail_safe().set_high == 6);  // the earlier one, not the refused one
+}
+
+TEST_CASE("a graph upload no longer carries the wiring") {
+  // The members are ignored rather than refused -- unknown members are ignored
+  // everywhere in this protocol -- but they must not reach anything. Uploading
+  // a paradigm silently re-conditioning the inputs is what the move fixed.
+  DeviceIdentity eight_lines;
+  eight_lines.output_line_count = 8;
+  Host h(eight_lines);
+  greet(h);
+  h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() + R"(,"safe":6)");
 
   h.graph_checksum = 0xFFFF;
   h.send(R"({"msg_type":"graph_begin","message_id":)" + h.next_message_id() +
-             R"(,"graph_version":3,"n_states":2,"entry":0,"safe":5)",
+             R"(,"graph_version":3,"n_states":2,"entry":0,"safe":5,"invert":255)",
          true);
   h.send(R"({"msg_type":"graph_dist","message_id":)" + h.next_message_id() +
              R"(,"i":0,"kind":"fixed","a":10)",
@@ -581,9 +668,9 @@ TEST_CASE("fail_safe drives every line to its configured level") {
   h.send(R"({"msg_type":"graph_end","message_id":)" + h.next_message_id() +
          R"(,"n_transitions":0,"n_output_actions":0,"checksum":")" + h.checksum_hex() + R"(")");
 
-  const OutputUpdate after = h.device.fail_safe();
-  CHECK(after.set_high == 5);           // lines 0 and 2 are safe high
-  CHECK(after.set_low == (0xFF & ~5));  // everything else low
+  CHECK(h.device.has_graph() == true);
+  CHECK(h.device.fail_safe().set_high == 6);         // the wiring's, not the graph's
+  CHECK(h.device.wiring().inputs.invert_mask == 0);  // likewise
 }
 
 TEST_CASE("every reply is a line the bridge can parse") {

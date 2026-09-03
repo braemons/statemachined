@@ -22,6 +22,7 @@
 
 #include "config.h"
 #include "graph/state_graph.h"
+#include "io/wiring.h"
 
 namespace statemachined {
 namespace demo {
@@ -64,6 +65,13 @@ constexpr Milliseconds kStepMs = 500;
 /// Cancelled. A terminal state's entry actions run and nothing exits it, so its
 /// LED stays lit as a result lamp until the next trial starts.
 void build(StateGraph& g);
+
+/// The wiring the demo needs: 20 ms of debounce on both of its inputs, because
+/// a bench switch bounces for a few milliseconds and an undebounced one fires
+/// the chase several times. Separate from build() since M4b, when the wiring
+/// stopped being part of a graph -- and main.cpp installs it for as long as the
+/// demo owns the pins, then puts back what the session had.
+DeviceWiring wiring();
 
 }  // namespace demo
 }  // namespace statemachined

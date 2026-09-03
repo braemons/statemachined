@@ -15,7 +15,7 @@
 #include <cstdint>
 
 #include "config.h"
-#include "graph/state_graph.h"
+#include "io/wiring.h"
 
 namespace statemachined {
 

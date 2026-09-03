@@ -21,6 +21,7 @@
 
 #include "config.h"
 #include "graph/state_graph.h"
+#include "io/wiring.h"
 #include "protocol/framing.h"
 #include "protocol/graph_builder.h"
 #include "protocol/json.h"
@@ -138,6 +139,25 @@ class HostLinkSession {
   /// after a fail-safe goes the right way. Nothing can read a pin back.
   OutputUpdate fail_safe();
 
+  /// This board's wiring, and whether anybody has set it. Until a `wiring`
+  /// command arrives it is the compile-time default (config.h,
+  /// STATEMACHINED_SAFE_LEVELS), which is what makes the fail_safe() before the
+  /// first scan correct on a rig nobody has greeted yet.
+  const DeviceWiring& wiring() const { return wiring_; }
+  bool has_wiring() const { return have_wiring_; }
+
+  /// Bumped every time the wiring changes, so whoever owns the InputConditioner
+  /// can tell that it needs reconfiguring without comparing 72 bytes every
+  /// scan. The session cannot reach the conditioner itself: it touches no pin.
+  uint16_t wiring_revision() const { return wiring_revision_; }
+
+  /// Install a wiring from inside the firmware rather than from the host --
+  /// what main.cpp's demo uses to get its debounce, and what M7's boot-time
+  /// data-flash read will use. Counts as "has_wiring" only if `from_host`,
+  /// since hello_ack's job is to tell the daemon whether the board was
+  /// configured, not whether a default was applied.
+  void set_wiring(const DeviceWiring& w, bool from_host = false);
+
   LinkState state() const { return state_; }
   bool has_graph() const { return have_graph_; }
   uint16_t graph_version() const { return live_graph_.version; }
@@ -174,6 +194,7 @@ class HostLinkSession {
   void on_start(const JsonObject& m, uint16_t message_id, Microseconds now_us);
   void on_cancel(const JsonObject& m, uint16_t message_id, Microseconds now_us);
   void on_ping(uint16_t message_id, Microseconds now_us);
+  void on_wiring(const JsonObject& m, uint16_t message_id);
   void on_state_request(uint16_t message_id, Microseconds now_us);
 
   /// A refusal of a command whose `message_id` was read: carries
@@ -211,6 +232,10 @@ class HostLinkSession {
   GraphBuilder builder_;
   StateGraph live_graph_;
   bool have_graph_ = false;
+
+  DeviceWiring wiring_;
+  bool have_wiring_ = false;
+  uint16_t wiring_revision_ = 0;
 
   TrialRunner runner_;
   LinkState state_ = LinkState::Greeting;

@@ -183,8 +183,7 @@ paradigm it was already running.
 #### `graph_begin`
 
 ```json
-{"msg_type":"graph_begin","message_id":1,"graph_version":7,"n_states":4,"entry":0,
- "invert":0,"enable":4294967295,"safe":0,"debounce_ms":[0,2,2,0],"crc":"...."}
+{"msg_type":"graph_begin","message_id":1,"graph_version":7,"n_states":4,"entry":0,"crc":"...."}
 ```
 
 | Field | Type | |
@@ -192,10 +191,13 @@ paradigm it was already running.
 | `graph_version` | `u16` | The host's identifier for this graph. Echoed in `armed` and checked by `configure` |
 | `n_states` | `u8` | Declared up front so an oversize graph is refused before the first state is sent, not after the last |
 | `entry` | `u8` | State index the machine starts in |
-| `invert` | `mask` | Lines read active-low. Opto-isolated inputs routinely are |
-| `enable` | `mask` | Lines that participate at all. Default all ones |
-| `safe` | `mask` | Output levels on watchdog timeout, reset, link loss or a refused graph. Per line, because "off" is not always "low" |
-| `debounce_ms` | array of `u16` | Optional. Per input line, index = line. May be shorter than the line count; missing entries are 0 |
+
+> **`invert`, `enable`, `safe` and `debounce_ms` used to be here.** They describe
+> the *wiring* rather than the paradigm, and carrying them on `graph_begin` made
+> "change the debounce" mean "re-upload the graph" — and, worse, left a board
+> with no graph unable to fail safe correctly. They are now §3.5's `wiring`
+> command. A device that receives them here ignores them, as it ignores any
+> unknown member; it does not refuse the upload.
 
 #### `graph_dist`
 
@@ -370,6 +372,44 @@ trial was cancelled when the animal had already responded.
 `ping` arms the link-loss watchdog. `state` asks for `state_report` and is for
 inspection only — it is never in a trial's critical path.
 
+### 3.5 `wiring`
+
+What is *wired to the box*, as opposed to what a paradigm does with it. Sent
+when a rig is wired and then not again for a year.
+
+```json
+{"msg_type":"wiring","message_id":9,"invert":0,"enable":4294967295,
+ "safe":0,"debounce_ms":[0,2,2,0],"crc":"...."}
+```
+
+| Field | Type | |
+|---|---|---|
+| `invert` | `mask` | Lines read active-low. Opto-isolated inputs routinely are |
+| `enable` | `mask` | Lines that participate at all. Default all ones |
+| `safe` | `mask` | Output levels on watchdog timeout, reset, link loss or a refused graph. Per line, because "off" is not always "low" |
+| `debounce_ms` | array of `u16` | Per input line, index = line. May be shorter than the line count; **lines it does not name are set to 0**, so a debounce can be removed |
+
+Every member is optional and an absent one leaves that setting alone —
+`{"safe":5}` changes the safe levels and nothing else. `debounce_ms` is the
+exception to "leaves it alone" only in the sense above: sending the array at all
+replaces the whole table.
+
+Answered with `ack`, or `error`. **Refused with `busy` while a trial is armed or
+running**, like a graph upload and for a sharper reason: the conditioning it
+changes is read by the scan, so a debounce edited under a running trial would
+move a timing nobody could account for afterwards.
+
+The wiring is read into a copy and installed whole, so a message that turns out
+to be malformed halfway through leaves the board wired the way it was. A typo in
+a debounce must not take the safe levels with it.
+
+> **It does not survive a power cycle yet.** Until the data flash lands
+> (dev/DAEMON.md §3.4, M7) a reset returns the board to its compile-time
+> defaults — `STATEMACHINED_SAFE_LEVELS`, which `make firmware-rig` is where a
+> real rig's belongs. That constant is what makes the `fail_safe()` before the
+> first scan correct on a board nobody has greeted, and `hello_ack`'s
+> `has_wiring` is how a host tells the two apart.
+
 ---
 
 ## 4. Device → host
@@ -379,7 +419,7 @@ inspection only — it is never in a trial's critical path.
 ```json
 {"msg_type":"hello_ack","message_id":0,"in_reply_to":0,"proto":1,"board":"uno_r4_minima",
  "fw":"0.1.0","n_input_lines":8,"n_output_lines":8,"scan_hz":10000,
- "has_graph":true,"graph_version":7,
+ "has_graph":true,"graph_version":7,"has_wiring":true,
  "caps":{"max_line":512,"max_states":32,"max_transitions":64,
          "max_output_actions":64,"max_distributions":32,
          "max_choice_options":32,"max_path":64},"crc":"...."}
@@ -396,6 +436,11 @@ They are **nested rather than flat**, and that is a memory decision rather than 
 stylistic one: a receiver's per-message member limit is what bounds how much
 stack a parse costs, and flattening these would push the largest message in the
 protocol past a limit that every other parse would then pay for.
+
+`has_wiring` says whether anybody has sent §3.5's `wiring`. **False means the
+board is running its compile-time defaults**, which is a different thing from
+"wired the way this rig needs" and is exactly what a host must not have to
+guess.
 
 `has_graph` and `graph_version` say whether a graph survived the reconnect, so a
 bridge that dropped its link knows whether it has to re-upload.
@@ -474,8 +519,8 @@ up drops events rather than delaying a scan.
 may parse it.
 
 `state_report` answers `state` with the current state index, uptime, the
-committed `graph_version`, the counts of dropped and unusable lines, and a
-nested `scan` object. Diagnosis, not control.
+committed `graph_version`, `has_wiring` as in §4.1, the counts of dropped and
+unusable lines, and a nested `scan` object. Diagnosis, not control.
 
 ```jsonc
 "io":   {"in": 5, "out": 128},

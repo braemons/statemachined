@@ -49,6 +49,7 @@ class MsgType(StrEnum):
     CANCEL = "cancel"
     PING = "ping"
     STATE = "state"
+    WIRING = "wiring"
 
     # Device -> host.
     HELLO_ACK = "hello_ack"

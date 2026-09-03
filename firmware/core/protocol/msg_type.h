@@ -40,6 +40,7 @@ enum class MsgType : uint8_t {
   Cancel,
   Ping,
   State,
+  Wiring,
 
   // Device -> host.
   HelloAck,

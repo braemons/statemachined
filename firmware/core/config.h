@@ -30,6 +30,19 @@
 #ifndef STATEMACHINED_MAX_LINE
 #define STATEMACHINED_MAX_LINE 512  // one protocol line, newline included. The largest
 #endif                              // single message is one state's worth of graph
+// The levels a rig's outputs are safe at, as a bitmask, compiled in. Zero --
+// every line low -- is right for a bench and wrong for any rig with an
+// active-low driver on it, which is why `make firmware-rig` is where a real one
+// belongs: -DSTATEMACHINED_SAFE_LEVELS=0x...
+//
+// It is the *default*, not the truth: a `wiring` command replaces it, and
+// dev/DAEMON.md M7 will persist that to data flash. Until then this is the only
+// thing that makes the fail_safe() before the first scan correct on a board
+// nobody has greeted yet, and it must stay so -- a mitigation that depends on
+// the daemon being up is not one.
+#ifndef STATEMACHINED_SAFE_LEVELS
+#define STATEMACHINED_SAFE_LEVELS 0
+#endif
 #ifndef STATEMACHINED_MAX_PATH
 #define STATEMACHINED_MAX_PATH 64  // ring buffer: a graph may loop, and a long trial
 #endif                             // must degrade to a truncated path, never a corrupt one
@@ -71,6 +84,11 @@ constexpr StateIndex kNoState = 0xFF;
 /// indistinguishable from a duration or a count, and the masks, the input word,
 /// the output updates and the safe levels are all this and nothing else.
 using LineBitmask = uint32_t;
+
+/// The output safe levels this binary was built with. See
+/// STATEMACHINED_SAFE_LEVELS above: it is what a board fails safe to before
+/// anything has told it anything.
+constexpr LineBitmask kCompiledSafeLevels = STATEMACHINED_SAFE_LEVELS;
 
 /// Index into StateGraph::distributions. Timeouts and holds are drawn from the
 /// shared pool rather than stored inline, so a graph can reuse one distribution

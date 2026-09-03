@@ -264,7 +264,7 @@ inline void demo_scan(LineBitmask, Microseconds) {}
 
 #endif  // STATEMACHINED_DEMO
 
-void apply_graph_input_config();
+void apply_wiring();
 
 void apply(const OutputUpdate& ops) {
   if ((ops.set_high | ops.set_low) != 0) hal::write_outputs(ops.set_high, ops.set_low);
@@ -382,7 +382,7 @@ void service_link() {
     // after receive() rather than on link_up(), because opening the port is not
     // the same as a host being there -- a serial monitor does the former.
     if (g_demo_active && g_session->state() != LinkState::Greeting) demo_end(now);
-    apply_graph_input_config();
+    apply_wiring();
   }
 }
 
@@ -406,8 +406,10 @@ void demo_heartbeat(Microseconds now) {
 void demo_begin(Microseconds now) {
   demo::build(g_demo_graph);
   // The demo's debounce has to actually reach the conditioner, which is the
-  // same path a committed graph's input config takes below.
-  g_inputs.configure(g_demo_graph.inputs);
+  // same path a `wiring` command's takes below. It is the demo's own wiring and
+  // not the session's: a bench board has whatever is clipped to it, not a rig.
+  const DeviceWiring demo_wiring = demo::wiring();
+  g_inputs.configure(demo_wiring.inputs);
   g_inputs.prime(hal::read_inputs());
   pinMode(LED_BUILTIN, OUTPUT);
   g_demo_active = true;
@@ -431,12 +433,12 @@ void demo_end(Microseconds now) {
 
   // The demo's input configuration must not outlive it. The conditioner is
   // shared with the session, so leaving the demo's 20 ms debounce installed
-  // means a host that has uploaded no graph is silently reading lines 0 and 1
-  // through the demo's idea of them -- which is not what a board reports
-  // before a graph arrives, and is a difference nothing on the host can see.
-  // Back to neutral, and re-primed because the accepted levels were reached
-  // under the old configuration.
-  g_inputs.configure(InputConfig{});
+  // means a host is silently reading lines 0 and 1 through the demo's idea of
+  // them -- a difference nothing on the host can see. Back to the session's
+  // wiring, which is the compile-time default until a `wiring` command has
+  // arrived, and re-primed because the accepted levels were reached under the
+  // old configuration.
+  g_inputs.configure(g_session->wiring().inputs);
   g_inputs.prime(hal::read_inputs());
 
   // The session owns the pins from here, and it has no graph yet, so this is
@@ -474,15 +476,21 @@ void demo_scan(LineBitmask word, Microseconds now) {
 /// two are joined.
 #endif  // STATEMACHINED_DEMO
 
-void apply_graph_input_config() {
-  static uint16_t applied_version = 0;
-  static bool have_applied = false;
-  if (!g_session->has_graph()) return;
-  const uint16_t v = g_session->graph_version();
-  if (have_applied && v == applied_version) return;
-  applied_version = v;
-  have_applied = true;
-  g_inputs.configure(g_session->graph().inputs);
+/// Push a changed wiring into the conditioner. Keyed on the session's
+/// revision counter rather than on the graph version, which is the whole
+/// difference M4b made: conditioning is a property of the box, so changing a
+/// debounce no longer means re-uploading a paradigm, and uploading a paradigm
+/// no longer silently re-conditions the inputs.
+void apply_wiring() {
+  static uint16_t applied = 0;
+  const uint16_t revision = g_session->wiring_revision();
+  if (revision == applied) return;
+  applied = revision;
+  // The demo owns the conditioner while it runs, and puts the session's wiring
+  // back when it ends. Installing it underneath would give a bench board a
+  // debounce it is not expecting mid-chase.
+  if (g_demo_active) return;
+  g_inputs.configure(g_session->wiring().inputs);
   // No previous level for the new polarity to be measured against, so adopt
   // what is there rather than reporting every line as having just moved.
   g_inputs.prime(hal::read_inputs());

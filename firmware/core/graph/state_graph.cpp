@@ -40,8 +40,6 @@ void StateGraph::assign(const StateGraph& other) {
   n_output_actions = other.n_output_actions;
   n_distributions = other.n_distributions;
   n_choice_options = other.n_choice_options;
-  inputs = other.inputs;
-  output_safe_levels = other.output_safe_levels;
 
   for (uint8_t i = 0; i < n_states; ++i) states[i] = other.states[i];
   for (uint8_t i = 0; i < n_transitions; ++i) transitions[i] = other.transitions[i];
