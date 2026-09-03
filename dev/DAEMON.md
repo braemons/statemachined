@@ -57,8 +57,10 @@ the fourth is what makes the difference on a bench at 2 a.m.
 triald collects them — not this. The daemon reports what the device measured and
 sets no veto field. See §4.3.
 
-**Not the trial-type authority.** The firmware never learns the trial type, and
-neither does the daemon. A graph is a paradigm, not a condition.
+**Not the trial-type authority.** triald chooses the trial type and therefore
+chooses the graph; the daemon is told which graph, by name, and never holds a
+copy of the trial-type table. What the *wire* never carries is the trial type
+itself — see §3.1, which is where the distinction actually matters.
 
 **Not a timing authority.** Python on a Pi is nowhere near the 10 kHz scan. Every
 number the daemon reports about a trial came off the device's clock.
@@ -190,6 +192,62 @@ land cannot leave the device confidently running the old paradigm.
 > types from carrying N copies of a paradigm, and it puts the graph next to the
 > only process that can validate it against a real device's `caps`.
 
+### 3.1 Trial type → graph, and where the map lives
+
+**triald holds the map, as a `graph` name on `TrialType`.** Its own `PLAN.md`
+argues this before we do: *"It is a state machine that configures itself from the
+trial type… Choosing a trial type and choosing a state machine are one act. That
+is why the trial type is the join key."* Selecting a trial type therefore selects
+a graph, and triald is the only process that selects trial types.
+
+It is a **name**, not an index, and that too is triald's own conclusion about the
+field this replaces — `TrialType.time_sequence`, an integer today: *"edit
+sequence 3 and every trial type pointing at it silently changes meaning. Sets
+were cured by naming them; time sequences want the same cure."* A graph name is
+that cure, and the store in `/var/lib/statemachined/graphs/` is what it points
+into.
+
+So three different things, and only the first is a real constraint:
+
+| | |
+|---|---|
+| The **wire** never carries a trial type | `configure` is `{trial_id, graph_version, cap_ms, start, patch}`. The moment firmware can branch on trial type it becomes paradigm-specific, and *"firmware stable while paradigms change"* — the property both plans exist to protect — is gone |
+| The **daemon** never holds the trial-type table | A second copy would be a second selection authority, the same mistake as merging the veto fields |
+| The **daemon** is told which graph, per trial | By name, in `configure`. It must act on it — see §4.3 |
+
+#### The cost this exposes: switching graphs in the ITI
+
+Every ordering in triald's API.md except a degenerate one draws **without
+replacement from a bag**, so the trial type — and therefore the graph — changes
+on most trials. A graph upload is not free: it is chunked, strictly
+request/response with one command in flight, and *"every host command gets
+exactly one reply"*. A ten-state graph is roughly fifty messages each way, which
+at 115 200 baud is on the order of a second of wire time before Python's
+per-message latency. ITIs are often not much longer than that. **This is the one
+place where "switch the graph per trial" could fail on a rig**, and it is worth
+designing against rather than discovering.
+
+Three answers, in the order they should be reached for:
+
+1. **Don't re-upload — `patch` it.** `PROTOCOL.md` §3.3 is explicit that `patch`
+   exists *"so the graph does not have to be re-uploaded when only the timings
+   change, which is the common case."* Trial types differing only in a
+   foreperiod, a window, a reward duration or a staircase level share **one
+   graph** and cost nothing per trial. A great many sets are entirely this.
+2. **One graph per set, not per trial type**, where the types differ in which
+   lines are correct rather than in structure. `enable`, the three masks and
+   `params` cover more than they look like they do. Bounded by 32 states on the
+   R4, which is the real limit.
+3. **Upload in the ITI, and say what it cost.** Where the structures genuinely
+   differ, the daemon uploads on `configure` and reports the elapsed time in the
+   reply, so a rig that is running out of ITI learns it from a number rather than
+   from a trial that armed late.
+
+A device-side cache of several graphs is *not* an answer here: the R4 already
+holds two — the live graph and the one an upload is staging, which is what makes
+a failed upload leave the running paradigm intact — and the RAM measurement in
+`PLAN.md` leaves no room for a third. It would also be a protocol change.
+
 ---
 
 ## 4. The API
@@ -229,10 +287,21 @@ triald drives; statemachined reports.
 
 | | |
 |---|---|
-| `POST /api/trial/configure` | `{trial_id, graph, cap_ms, start, patch}` → armed |
+| `POST /api/trial/configure` | `{trial_id, graph, cap_ms, start, patch}` → armed. **`graph` is a name**; the daemon commits it if it is not already the live one, then arms. See below |
 | `POST /api/trial/start` | when `start` admits serial |
 | `POST /api/trial/cancel` | `{trial_id, reason:"host"}` |
 | `GET /api/state` · `WS /api/stream` | snapshot, and coalesced frames — triald's convention, and for the same reason: a slow browser tab must not hold up a session |
+
+**`configure` is one call, not two, and that is deliberate.** triald names the
+graph it wants for this trial; the daemon compares it against the committed
+`graph_version`, uploads only if they differ, and arms. Splitting it into
+`upload` then `configure` would put "has this graph already been uploaded?" in
+triald — bookkeeping about a device it does not own, and a cache to get wrong.
+The reply carries `uploaded: bool` and the elapsed milliseconds, so the ITI cost
+of §3.1 is visible per trial instead of inferred.
+
+`POST /api/graphs/{name}/upload` stays, for the UI and for pre-warming a graph
+before a session starts. It is the same code path.
 
 Outbound, one call: `POST {triald}/api/trial/outcome` with an `OutcomeReport`
 carrying `outcome`, `manipulandum`, `reaction_time_ms`, `terminating_interval`,
@@ -451,8 +520,15 @@ diff.
    template with a config per instance. Confirm that is far enough off to defer.
 3. **triald's "pull, not push".** §4.3 flags a genuine contradiction with
    triald's `dev/API.md`. Someone has to decide which document changes.
-4. **Global timers** (`PLAN.md` open question 3, still open) are the one feature
+4. **The ITI budget for a graph switch** (§3.1). Unknown until measured, and
+   measurable as soon as M4c can upload against a board — a `graph_switch_ms`
+   number on the real R4 belongs in `HARDWARE.md` next to the scan rate. If it
+   lands above a realistic ITI, mitigation 2 stops being an optimisation and
+   becomes the design. **This is the question most likely to change the plan.**
+5. **`TrialType.graph` is triald's field to add**, alongside or replacing
+   `time_sequence`. Same amendment as #3, and probably the same patch.
+6. **Global timers** (`PLAN.md` open question 3, still open) are the one feature
    likely to change `model/graph.py`'s shape. Not in v1, but the model should be
    written so they are an addition rather than a rewrite.
-5. **Who authors the console**, and when. §5 defers it; it should not stay
+7. **Who authors the console**, and when. §5 defers it; it should not stay
    deferred long, since it is most of what makes three daemons feel like one rig.
