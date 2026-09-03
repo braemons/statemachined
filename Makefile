@@ -66,7 +66,7 @@ emulate:                    ## run the firmware under Renode, in Robot tests
 
 .PHONY: upload
 upload:                     ## flash the reference board
-	pio run -e uno_r4_minima -t upload
+	pio run -e $(BOARD) -t upload
 
 # Pinned to match .github/workflows/ci.yml. clang-format's output changes
 # between major versions, and `BasedOnStyle: Google` in .clang-format resolves

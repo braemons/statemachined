@@ -117,7 +117,10 @@ TEST_CASE("the abort switch ends the trial mid-chase") {
 
   CHECK_FALSE(r.running());
   CHECK(r.result().outcome == TrialOutcome::Cancelled);
-  // No step LED is left on but the abort lamp, so a board that stopped looks
-  // different from a board still running.
-  CHECK((r.driven_levels() & bit(demo::kFirstStepOutput)) != 0);
+  // The abort lamp (the first step output) is the only step LED left on, so a
+  // board that stopped looks different from a board still running -- and a
+  // chase LED stuck high from the step it was aborted in would fail this.
+  LineBitmask steps = 0;
+  for (uint8_t k = 0; k < demo::kStepCount; ++k) steps |= bit(demo::kFirstStepOutput + k);
+  CHECK((r.driven_levels() & steps) == bit(demo::kFirstStepOutput));
 }
