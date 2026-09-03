@@ -3,9 +3,8 @@
 // of thing that rots: nobody notices it is broken until they have a board in
 // one hand and a jumper wire in the other. So it is run here, on the host, at
 // host speed, through the same TrialRunner the board uses.
-#include "demo/demo_graph.h"
-
 #include "../helpers.h"
+#include "demo/demo_graph.h"
 #include "doctest.h"
 #include "trial/trial_runner.h"
 

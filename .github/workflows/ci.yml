@@ -1,3 +1,11 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Every job here calls a Makefile target. That is deliberate: a command CI runs
+# and the Makefile does not is a command nobody can reproduce locally, and a
+# version pinned in both places is a version that drifts. What is left in this
+# file is the things only CI has -- the matrix, the caches, the artifacts.
+#
+# To reproduce a red build: `make ci` (add `make emulate` for the Renode job).
 name: CI
 
 on:
@@ -11,10 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # No Arduino.h, no allocation, no std containers, no float. Cheap to
-      # check and expensive to discover on a board at trial 300, and it is
-      # exactly the kind of rule that erodes one convenient include at a time.
-      - run: ./tools/check-core-purity.sh
+      - run: make check-core
 
   core-tests:
     name: core unit tests
@@ -25,49 +30,27 @@ jobs:
         compiler: [gcc, clang]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Configure
+      - name: Test
         env:
           CC: ${{ matrix.compiler == 'gcc' && 'gcc' || 'clang' }}
           CXX: ${{ matrix.compiler == 'gcc' && 'g++' || 'clang++' }}
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-
-      - name: Build
-        run: cmake --build build -j
-
-      - name: Test
-        run: ctest --test-dir build --output-on-failure
+        run: make test
 
   sanitizers:
     name: core unit tests (ASan + UBSan)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DFSMD_SANITIZE=ON
-      - run: cmake --build build-san -j
-      - name: Test
-        env:
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-          ASAN_OPTIONS: detect_leaks=1
-        run: ctest --test-dir build-san --output-on-failure
+      # The sanitizer options are set in the Makefile, so a local run fails the
+      # same way this one does.
+      - run: make sanitize
 
   reproducibility:
     name: golden vectors are byte-identical across compilers
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # The reproducibility claim is that a seed gives the same durations
-      # everywhere. Optimisation level is the cheapest way to catch a
-      # dependence on undefined behaviour or on float; the boards are checked
-      # on hardware at M3 and M6.
-      - name: Build at -O0 and -O3
-        run: |
-          for opt in -O0 -O3; do
-            cmake -S . -B build$opt -DCMAKE_BUILD_TYPE=Debug \
-                  -DCMAKE_CXX_FLAGS="$opt"
-            cmake --build build$opt -j
-            ctest --test-dir build$opt --output-on-failure
-          done
+      - run: make golden
 
   firmware-build:
     name: firmware compiles for ${{ matrix.env }}
@@ -88,14 +71,11 @@ jobs:
             ~/.platformio
             ~/.cache/pip
           key: pio-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
-      - run: pip install platformio
-      - run: pio run -e ${{ matrix.env }}
+      - run: make install-pio
+      - run: make firmware BOARD=${{ matrix.env }}
       # Demo mode is 4.6 KB of SRAM on a 32 KB board, so a rig build drops it.
       # Compiled here too, or the #else half of that switch rots unnoticed.
-      - name: and again without demo mode
-        run: pio run -e ${{ matrix.env }}
-        env:
-          PLATFORMIO_BUILD_FLAGS: -DFSMD_DEMO=0
+      - run: make firmware-rig BOARD=${{ matrix.env }}
 
   emulation:
     name: the HAL runs on an emulated board
@@ -112,22 +92,16 @@ jobs:
             ~/.platformio
             ~/.cache/pip
           key: pio-uno_r4_minima_sci-${{ hashFiles('platformio.ini') }}
-      # Pinned to the devcontainer's version. The Robot keyword library ships
-      # inside Renode, so a different Renode is a different set of keywords.
-      - name: Install Renode
-        run: |
-          curl -fsSL https://github.com/renode/renode/releases/download/v1.16.1/renode-1.16.1.linux-portable-dotnet.tar.gz -o /tmp/renode.tar.gz
-          mkdir -p /opt/renode
-          sudo tar xzf /tmp/renode.tar.gz -C /opt/renode --strip-components=1
-          sudo ln -s /opt/renode/renode-test /usr/local/bin/renode-test
-          pip install -r /opt/renode/tests/requirements.txt
-      - run: pip install platformio
-      - run: pio run -e uno_r4_minima_sci
-      # This covers what the host build cannot compile: the pin map, the port
+      - run: make install-pio
+      # Renode's version is pinned in the Makefile: the Robot keyword library
+      # ships inside Renode, so a different Renode is a different set of
+      # keywords.
+      - run: make install-renode
+      # Covers what the host build cannot compile: the pin map, the port
       # registers, the timer ISR, and the protocol over a real UART. It asserts
       # nothing about timing -- Renode's virtual time makes that meaningless.
       # See emulation/README.md.
-      - run: renode-test emulation/tests/fsmd.robot
+      - run: make emulate
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -145,10 +119,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      # Pinned: clang-format's output differs between major versions, so an
-      # unpinned one turns a formatting check into a version lottery. The
-      # Makefile pins the same version and refuses to run against any other, so
-      # if these two ever drift apart the guard fails here rather than silently
-      # checking against something no contributor has.
-      - run: pip install clang-format==23.1.0
+      # The version is pinned in the Makefile, which also refuses to run
+      # against any other, so the two cannot drift apart.
+      - run: make install-clang-format
       - run: make format-check

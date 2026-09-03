@@ -62,10 +62,18 @@ That is the fastest feedback loop in the repo and it needs no board attached.
 ```sh
 make test        # build and run the core unit tests
 make sanitize    # the same, under ASan and UBSan
+make golden      # the tests at -O0 and -O3, for reproducibility
 make firmware    # build for the Uno R4 Minima
 make upload      # flash it
+make emulate     # run the firmware under Renode
 make format      # clang-format in place
+make ci          # everything CI runs, except emulation
+make help        # the full list
 ```
+
+**The Makefile is the task runner, and CI calls these same targets** — versions
+and flags are pinned in one place, so a job that goes red can be reproduced with
+`make ci` rather than by reading a workflow file and retyping it.
 
 CI runs the unit tests under gcc and clang, under sanitizers, at `-O0` and `-O3`
 (the cheapest way to catch a dependence on undefined behaviour), compiles the
