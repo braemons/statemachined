@@ -1,6 +1,12 @@
 # fsmd — the plan
 
-> **Status:** design only. Nothing is implemented. This document is for review.
+> **Status:** M0-M3 implemented. The portable core, the wire protocol and the
+> Uno R4 Minima HAL are written, unit-tested on the host (10 suites, green under
+> gcc/clang, ASan/UBSan and at `-O0`/`-O3`) and exercised on an emulated board
+> under Renode. **No physical board has run this yet**, so the 10 kHz scan rate
+> remains a claim; the RAM figure has been measured against a real link step and
+> is recorded below. Next up is **M4, the bridge to triald** — `bridge/` and
+> `graphs/` are still empty. Milestones and their state are at the end.
 
 ## What fsmd is
 
@@ -624,7 +630,7 @@ graphs first. None of that touches the trial loop.
 
 **A Raspberry Pi fsmd would be a fifth HAL, not a second project.** Everything in
 `firmware/core/` is plain C++17 with no `Arduino.h`, and the entire hardware
-surface is four functions. A Linux backend reads the input word from a gpiochip
+surface is seven functions. A Linux backend reads the input word from a gpiochip
 line-request, writes outputs the same way, and takes `clock_gettime` for micros —
 `native.cpp` is most of the way there already. Same graph format, same protocol,
 same bridge, same golden vectors. The one real difference is that a Pi cannot
@@ -754,18 +760,16 @@ the trial type store. **Open: which.**
 
 ## Milestones
 
-| | |
-|---|---|
-| | |
-|---|---|
-| **M0** | Repo, `platformio.ini` with `native` + `uno_r4_minima`, `dev/PROTOCOL.md`, a native build that compiles and does nothing |
-| **M1** | Core engine — conditions, timers, RNG, the four distributions — unit-tested on native. No serial, no hardware |
-| **M2** | Protocol codec: chunked graph upload, `configure`/`armed`/`result`/`cancel` over a pty against the native core |
-| **M3** | **Uno R4 Minima HAL** — direct RA4M1 port-register reads, `FspTimer` ISR at 10 kHz, real pins. Measure the achieved scan rate and the RAM high-water mark and put both in this document. *Built and linking; RAM measured (see above and `dev/HARDWARE.md`). The scan rate needs a board* |
-| **M4** | Bridge to triald: a whole session on the R4, with `triald sim`'s simulated subject replaced by the real board |
-| **M5** | Example graphs, `dev/HARDWARE.md` with R4 pinout and wiring, virtual events and output overrides, sync line |
-| **M6** | Teensy 4.1 and ESP32 HALs; the golden reproducibility test green on all three boards |
-| **M7** | Packaging |
+| | | |
+|---|---|---|
+| **M0** | ✅ | Repo, `platformio.ini` with `native` + `uno_r4_minima`, `dev/PROTOCOL.md`, a native build that compiles and does nothing |
+| **M1** | ✅ | Core engine — conditions, timers, RNG, the four distributions — unit-tested on native. No serial, no hardware |
+| **M2** | ✅ | Protocol codec: chunked graph upload, `configure`/`armed`/`result`/`cancel`. Covered in-process by `test_host_link_session`, and end-to-end over a real UART peripheral under Renode rather than the pty this milestone first imagined |
+| **M3** | 🔶 | **Uno R4 Minima HAL** — direct RA4M1 port-register reads, `FspTimer` ISR at 10 kHz, real pins. Builds, links and runs emulated; RAM measured — 11 928 B static, 21 144 B committed, see above and `dev/HARDWARE.md`. **The achieved scan rate still needs a board** |
+| **M4** | ▶️ | Bridge to triald: a whole session on the R4, with `triald sim`'s simulated subject replaced by the real board. `bridge/` is empty |
+| **M5** | ☐ | Example graphs, `dev/HARDWARE.md` with R4 pinout and wiring, virtual events and output overrides, sync line. `graphs/` is empty; `dev/HARDWARE.md` has the R4 line map already |
+| **M6** | ☐ | Teensy 4.1 and ESP32 HALs; the golden reproducibility test green on all three boards |
+| **M7** | ☐ | Packaging |
 
 ### Emulation, and what it can and cannot settle
 

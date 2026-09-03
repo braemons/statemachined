@@ -1,8 +1,11 @@
 # fsmd — the trial state machine
 
-> **Status:** design only. Nothing is implemented yet. Read
-> [`dev/PLAN.md`](dev/PLAN.md) — it is the whole project so far, and it is meant
-> to be argued with.
+> **Status:** the portable core, the wire protocol and the Uno R4 Minima HAL are
+> implemented and tested — on the host, and on an emulated board under Renode.
+> **No physical board has run this yet:** the RAM budget is measured, the 10 kHz
+> scan rate is not. The host bridge to triald is next and does not exist yet.
+> [`dev/PLAN.md`](dev/PLAN.md) is still the argument for all of it, milestones
+> at the end, and it is meant to be argued with.
 
 **fsmd** is the part of a braemons rig that runs the *within-trial* state machine
 on a microcontroller: it steps through a finite set of states, each with a map of
@@ -48,7 +51,7 @@ the trial type.**
   every output a state raised is lowered by the same code that lowers it on any
   other transition. A valve cannot be left open by a graph that forgot something.
 - **Portable core.** The engine, codec and protocol are plain C++17 with no
-  `Arduino.h`; hardware is four functions behind a HAL. The same code runs on the
+  `Arduino.h`; hardware is seven functions behind a HAL. The same code runs on the
   host, which is what makes the tests real.
 
 ## Build & test
@@ -65,8 +68,13 @@ make format      # clang-format in place
 ```
 
 CI runs the unit tests under gcc and clang, under sanitizers, at `-O0` and `-O3`
-(the cheapest way to catch a dependence on undefined behaviour), and compiles the
-firmware for the reference board.
+(the cheapest way to catch a dependence on undefined behaviour), compiles the
+firmware for the reference board, checks the portable core has not reached for
+`Arduino.h`, and boots the firmware on an **emulated** Uno R4 Minima under Renode
+so that `firmware/hal/` is covered too — the pin map, the port registers, the
+timer ISR and a whole session over a real UART peripheral. Emulation runs on
+virtual time, so it makes the HAL correct; only a board makes the timing true.
+See [`emulation/README.md`](emulation/README.md).
 
 [`BUILD.md`](BUILD.md) has toolchain setup for Ubuntu 24.04, Fedora 44+ and WSL,
 and a devcontainer that pins the same versions CI uses.
