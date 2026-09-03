@@ -479,7 +479,7 @@ nested `scan` object. Diagnosis, not control.
 
 ```jsonc
 "io":   {"in": 5, "out": 128},
-"scan": {"hz": 9871, "overruns": 4, "worst_gap": 2}
+"scan": {"hz": 9871, "overruns": 4, "worst_gap": 2, "tx_stalls": 0}
 ```
 
 `io.in` is the *conditioned* input word as of the last scan — after invert,
@@ -492,6 +492,12 @@ somebody wired.
 it is a *floor*, covering reading and conditioning the pins but not evaluating
 a graph's transitions. `overruns` counts scan periods that went by with no scan
 in them since boot, and `worst_gap` is the most ever missed in a row.
+
+`tx_stalls` counts the times a reply had to wait for the wire because the
+device's outbound queue was full. Replies are queued and the link drained
+without blocking, so this is the one remaining way the link itself can cost the
+device a scan; a non-zero count means a burst outgrew the queue, which on the
+reference board means the result chunks that end a long trial.
 
 **A non-zero `overruns` means the reported timings were taken on a clock that
 skipped.** It is counted rather than absorbed for exactly that reason: a board

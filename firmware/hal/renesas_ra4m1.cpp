@@ -204,7 +204,17 @@ size_t link_read(char* dst, size_t max) {
   return n;
 }
 
-void link_write(const char* src, size_t n) { STATEMACHINED_LINK.write(src, n); }
+size_t link_write_some(const char* src, size_t n) {
+  // availableForWrite() is what makes this non-blocking. The core's write()
+  // spins until the endpoint has accepted every byte it was given -- for USB
+  // CDC that means waiting on the host's next poll -- so it is only ever handed
+  // an amount the fifo has already said it has room for, and it returns without
+  // waiting for anything.
+  const int space = STATEMACHINED_LINK.availableForWrite();
+  if (space <= 0) return 0;
+  const size_t take = (static_cast<size_t>(space) < n) ? static_cast<size_t>(space) : n;
+  return STATEMACHINED_LINK.write(src, take);
+}
 
 bool link_up() {
 #if defined(STATEMACHINED_LINK_UART)

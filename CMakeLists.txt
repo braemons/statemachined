@@ -41,6 +41,7 @@ target_include_directories(statemachined_engine PUBLIC firmware/core)
 target_compile_options(statemachined_engine PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_library(statemachined_core
+  firmware/core/io/reply_queue.cpp
   firmware/core/protocol/crc16.cpp
   firmware/core/protocol/framing.cpp
   firmware/core/protocol/graph_builder.cpp

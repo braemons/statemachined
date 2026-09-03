@@ -5,39 +5,69 @@
 // What is decided *here*, and nowhere else, is what runs in the interrupt.
 //
 // ---------------------------------------------------------------------------
-// The timer is a tick source, not the scan.
+// The scan runs in the timer ISR, and the foreground stands aside for it.
 // ---------------------------------------------------------------------------
 //
-// The obvious design -- and Bpod's -- runs the state machine inside the timer
-// ISR. We do not, and the reason is that this firmware parses JSON in the
-// foreground. An ISR that advances the trial while loop() is halfway through
-// HostLinkSession::receive() shares the runner, the graph and the reply buffer
-// with it, on a single core with no lock worth the name at 100 us. The fixes
-// are a critical section around every command (which stalls the scan for as
-// long as a parse takes, which is the thing we were protecting) or a lock-free
-// handoff of every command the ISR must apply (which is real, and is a rewrite
-// of the session).
+// It did not always. The first design had the ISR increment a counter and
+// loop() do the scan, which is correct by construction -- nothing is shared,
+// because only one context ever touches the engine -- and it cost jitter rather
+// than rate. The bet was that the foreground would be quick enough between
+// scans. On hardware it was not, and the numbers say why:
 //
-// So the ISR increments a counter and returns, and loop() does the scan. That
-// makes the firmware correct by construction on day one and keeps the engine
-// byte-identical to what the host tests exercise, which is the entire argument
-// for the portable core.
+//   per command, at 10 kHz, while a bridge was talking
+//     draining the link   1240 us      <- vendor USB stack
+//     reading the link     754 us      <- vendor USB stack
+//     tud_task()           533 us      <- vendor USB stack, via link_up()
+//     HostLinkSession      372 us      <- ours
+//     the scan itself        7 us
 //
-// What it costs is jitter, not rate: if a link burst takes 300 us, three
-// periods pass and one scan happens. That is a real cost and it is *counted*
-// rather than absorbed -- ScanHealth::overruns and worst_gap go out in every
-// state_report, so a rig that is stuttering says so instead of quietly
-// measuring a response window on a clock that skipped. A design that fails
-// loudly is worth more here than one that is faster and silent.
+// About 2.5 ms of every command goes into TinyUSB, and the scan was queued
+// behind it: ~10 missed periods per command, climbing for as long as the host
+// kept talking. The reply path was rewritten to queue rather than block first
+// (see core/io/reply_queue.h) and it changed nothing measurable, which is what
+// finally located the problem: it is not that the foreground *blocks*, it is
+// that the foreground has milliseconds of USB work to do at all. No amount of
+// making our own code polite fixes a scan that has to wait its turn behind a
+// vendor stack.
 //
-// If measurement on the board says the link stalls the scan too often, the
-// known fix is to move the scan into the ISR behind a command handoff. That is
-// a change to this file. Nothing in core/ moves.
+// So the scan moved into the ISR, where it preempts all of that and keeps its
+// period whatever the link is doing. The concurrency this creates is real but
+// it is small, and the same measurement is what bounds it: of the ~3 ms a
+// command costs, only the 372 us inside HostLinkSession touches anything the
+// scan touches. So the foreground raises a flag around exactly that window and
+// the ISR defers while it is up, scanning on the next tick instead. Everything
+// expensive -- the USB milliseconds -- runs with the flag down and is preempted
+// normally.
+//
+// Measured again afterwards, on the same board and the same traffic:
+//
+//                        before        after
+//     overruns/command     9.9          3.0     (ping)
+//                         16.0          9.1     (state_report)
+//     worst_gap            103            9
+//
+// And the residue is no longer a mystery: 3.0 periods is 300 us, against the
+// 374 us the hold measures for a ping, and 9.1 against 973 us for a state. The
+// scan now loses *exactly* the time the foreground spends inside the session
+// and not one period more. Shrinking it further means splitting `receive()` so
+// that framing and parsing happen outside the hold and only dispatch is inside
+// -- a change to core/, worth doing when a rig's traffic makes it worth doing,
+// and not before.
+//
+// What is left is counted, not absorbed: a scan deferred by that window is an
+// overrun like any other, and ScanHealth::overruns and worst_gap go out in
+// every state_report. A rig that is stuttering says so rather than quietly
+// measuring a response window on a clock that skipped.
+//
+// The engine itself is untouched by any of this. Nothing in core/ knows which
+// context calls it, the host tests still exercise byte-identical code, and the
+// whole handoff is the flag below and the two places that raise it.
 #include <Arduino.h>
 
 #include "demo/demo_graph.h"
 #include "hal.h"
 #include "io/input_conditioner.h"
+#include "io/reply_queue.h"
 #include "protocol/host_link_session.h"
 #include "trial/trial_runner.h"
 
@@ -62,22 +92,66 @@ constexpr uint32_t kScanHz = 10000;
 constexpr uint8_t kBoardInputLines = 8;
 constexpr uint8_t kBoardOutputLines = 8;
 
+InputConditioner g_inputs;
+/// Health the board measures about itself and hands to the session for
+/// state_report. Declared before the reply sink, which counts its stalls here.
+ScanHealth g_health;
+
+ReplyQueue g_tx;
+
+/// Hand the link as much as it will take, and not one byte more.
+///
+/// Costs the scan only what the endpoint accepts immediately, which is the
+/// whole point: what is left waits here rather than in a write() that spins.
+void drain_tx() {
+  const char* p = nullptr;
+  size_t n = 0;
+  while ((n = g_tx.peek(&p)) > 0) {
+    const size_t wrote = hal::link_write_some(p, n);
+    g_tx.consume(wrote);
+    if (wrote < n) return;  // the link is full for now; the rest goes next pass
+  }
+}
+
 class SerialReplySink : public ReplySink {
  public:
-  void send_line(const char* bytes, size_t n) override { hal::link_write(bytes, n); }
+  void send_line(const char* bytes, size_t n) override {
+    if (g_tx.push(bytes, n)) return;
+
+    // The queue is full and this line has nowhere to go. That means a burst
+    // bigger than the queue -- in practice the result chunks that end a trial,
+    // which is when the trial is already over and jitter costs nothing. Waiting
+    // here is still the only remaining way the link can stall the scan, so it
+    // is counted rather than absorbed, exactly like an overrun.
+    ++g_health.tx_stalls;
+    while (!g_tx.push(bytes, n)) {
+      if (!hal::link_up()) {
+        // Nobody is going to read any of this. Dropping it is what link loss
+        // means; spinning here would hang the board on an absent host.
+        g_tx.clear();
+        return;
+      }
+      drain_tx();
+    }
+  }
 };
 
 SerialReplySink g_sink;
-InputConditioner g_inputs;
-ScanHealth g_health;
 
 /// Ticks since boot, written by the ISR and read by loop(). A single aligned
 /// 32-bit load on this core, so it needs no critical section -- and it is only
 /// ever compared against our own count, never used as a clock.
 volatile uint32_t g_ticks = 0;
-uint32_t g_consumed = 0;
+volatile uint32_t g_consumed = 0;
 
-void on_tick() { ++g_ticks; }
+/// Raised while the foreground is inside the engine or the session, which is
+/// the only window in which the ISR must not scan.
+///
+/// It is deliberately not "while the foreground is busy": the expensive part of
+/// a command is the USB stack, and that shares nothing with a scan, so it runs
+/// with this down and gets preempted like any other work. Measured at ~372 us
+/// per command up, against ~2.5 ms down.
+volatile bool g_engine_held = false;
 
 /// The fixed cost of a scan, measured rather than declared, so the host learns
 /// the timing resolution it is actually getting.
@@ -202,6 +276,75 @@ void scan() {
   apply(g_session->advance_trial(word, now));
 }
 
+#if STATEMACHINED_DEMO
+/// Defined below with the rest of demo mode; the scan has to be able to choose
+/// between it and the session's before either is in scope.
+void demo_scan(LineBitmask word, Microseconds now);
+#endif
+
+/// One scan, wherever it is called from. Both callers hold the engine.
+void scan_once() {
+#if STATEMACHINED_DEMO
+  if (g_demo_active) {
+    const Microseconds now = hal::micros_now();
+    demo_scan(g_inputs.apply(hal::read_inputs(), now), now);
+    return;
+  }
+#endif
+  scan();
+}
+
+/// Account for periods that went by with no scan in them, and remember the
+/// worst run of them. Counted, never absorbed: a board that quietly misses
+/// scans looks exactly like a board that is fine.
+void note_missed(uint32_t missed) {
+  if (missed == 0) return;
+  g_health.overruns += missed;
+  if (missed > g_health.worst_gap) g_health.worst_gap = missed;
+}
+
+/// The timer. Scans unless the foreground is inside the engine, in which case
+/// it leaves the tick outstanding and loop() catches up the moment it is out.
+void on_tick() {
+  ++g_ticks;
+  if (g_engine_held) return;
+  const uint32_t ticks = g_ticks;
+  note_missed(ticks - g_consumed - 1);
+  g_consumed = ticks;
+  scan_once();
+}
+
+/// Take the engine away from the ISR for the duration of a scope.
+///
+/// Interrupts are disabled only long enough to raise the flag, never for the
+/// work itself. That is what makes the handoff airtight rather than hopeful: if
+/// the ISR is mid-scan when this runs, noInterrupts() waits for it to finish --
+/// an ISR cannot be preempted by the foreground -- and once the flag is up the
+/// next tick defers instead of entering. So the two can never be inside the
+/// engine at once, and the cost is a couple of microseconds rather than a
+/// parse's worth of deaf timer.
+class EngineHold {
+ public:
+  EngineHold() {
+    noInterrupts();
+    g_engine_held = true;
+    interrupts();
+  }
+  ~EngineHold() {
+    // Whatever the ISR could not do while we held it, do now, so a command does
+    // not leave the trial a scan behind.
+    const uint32_t ticks = g_ticks;
+    if (ticks != g_consumed) {
+      note_missed(ticks - g_consumed - 1);
+      g_consumed = ticks;
+      scan_once();
+    }
+    g_engine_held = false;
+  }
+  EngineHold(const EngineHold&) = delete;
+  EngineHold& operator=(const EngineHold&) = delete;
+};
+
 void service_link() {
   const bool up = hal::link_up();
   if (!up) {
@@ -211,8 +354,14 @@ void service_link() {
       // is nobody to report to, which is precisely why the outputs cannot be
       // left for the host to sort out.
       const Microseconds now = hal::micros_now();
+      const EngineHold hold;
       apply(g_session->link_lost(now));
       apply(g_session->fail_safe());
+      // Whatever was still queued was for a host that is gone. Keeping it would
+      // mean answering, after the port reopens, a message_id from a session
+      // that no longer exists. Inside the hold, because clear() is the one
+      // queue operation that moves both ends.
+      g_tx.clear();
       g_link_was_up = false;
     }
     return;
@@ -223,6 +372,11 @@ void service_link() {
   const size_t n = hal::link_read(buf, sizeof(buf));
   if (n > 0) {
     const Microseconds now = hal::micros_now();
+    // The hold covers the parse, the demo handover and the graph's input
+    // configuration -- everything that touches the session, the runner or the
+    // conditioner, and nothing else. Reading those bytes off USB, above, cost
+    // twice as long and needed no hold at all.
+    const EngineHold hold;
     g_session->receive(buf, n, now);
     // The first `hello` takes the board out of demo mode for good. Checked
     // after receive() rather than on link_up(), because opening the port is not
@@ -366,24 +520,17 @@ void setup() {
 }
 
 void loop() {
-  const uint32_t ticks = g_ticks;
-  if (ticks != g_consumed) {
-    const uint32_t elapsed = ticks - g_consumed;
-    g_consumed = ticks;
-    if (elapsed > 1) {
-      // Periods that went by with no scan in them. Counted, never absorbed: a
-      // board that quietly misses scans looks exactly like a board that is fine.
-      const uint32_t missed = elapsed - 1;
-      g_health.overruns += missed;
-      if (missed > g_health.worst_gap) g_health.worst_gap = missed;
-      g_session->report_scan_health(g_health);
-    }
-    if (g_demo_active) {
-      const Microseconds now = hal::micros_now();
-      demo_scan(g_inputs.apply(hal::read_inputs(), now), now);
-    } else {
-      scan();
-    }
-  }
+  // The ISR keeps these; the session only ever reads them, when a state_report
+  // is built. Handing them over here rather than from the ISR keeps the
+  // interrupt to the scan and nothing else -- and a diagnostic counter read one
+  // pass late is still the truth about a board that skipped.
+  g_session->report_scan_health(g_health);
+
+  // No scan here any more: the timer does it, on time, whatever this is doing.
+  // What is left is the link -- milliseconds of vendor USB stack that share
+  // nothing with the engine and are preempted rather than waited for.
   service_link();
+  // Last, so a reply produced by the command just serviced starts moving in
+  // this same pass instead of waiting for the next one.
+  drain_tx();
 }

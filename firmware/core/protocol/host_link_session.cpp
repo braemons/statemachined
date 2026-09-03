@@ -493,6 +493,7 @@ void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us)
   w.key_u32("hz", scan_.hz);
   w.key_u32("overruns", scan_.overruns);
   w.key_u32("worst_gap", scan_.worst_gap);
+  w.key_u32("tx_stalls", scan_.tx_stalls);
   w.end_object();
   send(w, message_id);
 }

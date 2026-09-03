@@ -77,7 +77,8 @@ def print_state(report: dict, board: str | None, n_in: int, n_out: int) -> None:
     field("current_state", report.get("current_state"))
     field("up", seconds(report.get("up_us")))
     field("scan", f"{scan.get('hz')} Hz   overruns {scan.get('overruns')}"
-                  f"   worst_gap {scan.get('worst_gap')}")
+                  f"   worst_gap {scan.get('worst_gap')}"
+                  f"   tx_stalls {scan.get('tx_stalls')}")
     field("lines", f"dropped {report.get('dropped_lines')}   bad {report.get('bad_lines')}")
     for direction, count in (("in", n_in), ("out", n_out)):
         word = io.get(direction, 0)
@@ -241,6 +242,7 @@ def cmd_report(args, session: Session) -> int:
     print(f"| `scan.overruns` after {args.count} pings | {scan.get('overruns')} "
           f"({gained:+d} during load) | zero |")
     print(f"| `scan.worst_gap` | {scan.get('worst_gap')} | zero |")
+    print(f"| `scan.tx_stalls` | {scan.get('tx_stalls')} | zero |")
     print(f"| Link errors | dropped {after.get('dropped_lines')}, "
           f"bad {after.get('bad_lines')} | zero |")
     print(f"| Firmware | `{ack.get('fw')}` | the commit you believe you flashed |")

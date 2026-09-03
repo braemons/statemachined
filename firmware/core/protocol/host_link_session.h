@@ -61,6 +61,12 @@ struct ScanHealth {
   uint32_t hz = 0;         ///< measured at boot, not declared
   uint32_t overruns = 0;   ///< scan periods that elapsed with no scan in them
   uint32_t worst_gap = 0;  ///< the most periods ever missed in a row
+  /// Times the reply queue was full and the foreground had to wait for the link
+  /// before it could hand over a line. Replies are queued and drained without
+  /// blocking, so this is the one remaining way the link can cost the scan its
+  /// periods -- and a burst big enough to do it means the queue is smaller than
+  /// this board's traffic, which is a number rather than a guess.
+  uint32_t tx_stalls = 0;
 };
 
 /// Makes a retried command idempotent.

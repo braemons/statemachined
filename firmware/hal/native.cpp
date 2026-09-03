@@ -66,9 +66,14 @@ size_t link_read(char* dst, size_t max) {
   return n > 0 ? static_cast<size_t>(n) : 0;
 }
 
-void link_write(const char* src, size_t n) {
-  std::fwrite(src, 1, n, stdout);
+size_t link_write_some(const char* src, size_t n) {
+  // stdout, so "as much as the link will take right now" is all of it. A pipe
+  // whose reader has stopped can still block here; on the host there is no
+  // timer whose periods that would cost, and a native runner that hangs on a
+  // full pipe is a visible failure rather than a silent one.
+  const size_t wrote = std::fwrite(src, 1, n, stdout);
   std::fflush(stdout);
+  return wrote;
 }
 
 bool link_up() { return true; }

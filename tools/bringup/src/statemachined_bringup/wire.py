@@ -71,8 +71,11 @@ def command_line(msg_type: str, message_id: int, **fields) -> str:
     """
     body = f'{{"{Field.MSG_TYPE}":"{msg_type}","{Field.MESSAGE_ID}":{message_id}'
     for key, value in fields.items():
-        if value is None:
-            continue
+        # None becomes `null`, and is not dropped: this protocol distinguishes
+        # the two. `terminal` must be present on every graph_state, as an
+        # outcome code or as null for a state that is not terminal, and a
+        # device that silently accepted the member's absence would be guessing
+        # which a graph meant. Omit a field by not passing it.
         body += f',"{key}":{json.dumps(value, separators=(",", ":"))}'
     return statemachined_line(body)
 

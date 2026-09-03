@@ -191,13 +191,18 @@ went by with no scan in them, counted rather than absorbed. `ARGS="load"` reads
 them, sends 200 pings back to back, and reads them again; it exits non-zero if
 the count moved.
 
-> **If overruns climb under link traffic, that is a finding.**
+> **If overruns climb steeply under link traffic, that is a finding.**
 
-It is the direct test of this design's central bet: the timer ISR only counts and
-`loop()` does the scan, which buys correctness-by-construction at the price of
-jitter. If a board says the link stalls the scan too often, the known fix is a
-command handoff in `firmware/src/main.cpp` and nothing in `core/` moves. The
-reasoning is written out at the top of that file.
+They did, on the reference board, and the fix is in: the scan runs in the timer
+ISR and the foreground holds the engine only while it is parsing a command. What
+remains is that hold — about **3 periods per command** on an Uno R4 Minima,
+against 9.9 before — and it is bounded by our own parse rather than by whatever
+the USB stack is doing. The measurement, and the reasoning, are at the top of
+`firmware/src/main.cpp`; the numbers are in [`HARDWARE.md`](HARDWARE.md).
+
+A board reporting *far* more than that, or a `worst_gap` in the hundreds, is
+still a finding. So is any non-zero `scan.tx_stalls`, which means a reply had to
+wait for the wire because the outbound queue was full.
 
 ---
 

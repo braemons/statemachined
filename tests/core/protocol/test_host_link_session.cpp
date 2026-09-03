@@ -731,12 +731,16 @@ TEST_CASE("state_report carries the scan health the board measured") {
   sh.hz = 9871;
   sh.overruns = 4;
   sh.worst_gap = 2;
+  // The link's own contribution to a stuttering scan: how often a reply had to
+  // wait for the wire because the queue in front of it was full.
+  sh.tx_stalls = 3;
   h.device.report_scan_health(sh);
 
   const auto r = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
   REQUIRE(r.size() == 1);
   REQUIRE(type_of(r[0]) == "state_report");
-  CHECK(r[0].find(R"("scan":{"hz":9871,"overruns":4,"worst_gap":2})") != std::string::npos);
+  CHECK(r[0].find(R"("scan":{"hz":9871,"overruns":4,"worst_gap":2,"tx_stalls":3})") !=
+        std::string::npos);
 }
 
 TEST_CASE("the entry state's output actions reach the caller of advance_trial") {
