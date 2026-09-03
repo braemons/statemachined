@@ -215,17 +215,74 @@ So three different things, and only the first is a real constraint:
 | The **daemon** never holds the trial-type table | A second copy would be a second selection authority, the same mistake as merging the veto fields |
 | The **daemon** resolves name → slot | triald says `"go-nogo"`; the daemon knows it is slot 3 of the committed set, because the daemon built the set |
 
-### 3.2 The graph set: upload once, switch by index
+### 3.2 Switching graphs: wait for the trial to end, and measure before optimising
 
-**The device holds every graph a session will use, and `configure` switches
-between them by index.** No upload happens inside an ITI, ever.
+**The graph changes between trials, so the upload happens between trials.** The
+daemon uploads on `configure`, `armed` comes back when it is done, and triald —
+which is pull-based and asks for a trial when it is ready — simply gets its
+answer a little later. No firmware change, and the device's existing
+double-buffering does exactly what `PLAN.md` built it for: a failed upload leaves
+the running paradigm intact.
 
-This is a change to `PROTOCOL.md`, not to anyone's intent — that document
-specifies a single committed graph, `configure` names a `graph_version` rather
-than a slot, and the firmware built at M2/M3 holds exactly two graph buffers.
-The intent predates the spec; the spec has to catch up. §3.3 lists what moves.
+This is the design until a board says otherwise. What follows is why that is very
+likely enough, and what to do if it is not.
 
-#### Why the naive version does not fit, and what does
+#### What an upload actually costs
+
+Not what an earlier draft of this section claimed. It reasoned from 115 200 baud
+and got about a second, which is wrong on the reference board: the link is USB
+CDC, where the baud rate is nominal and the transport is 12 Mbit/s full-speed
+USB. Throughput was never the constraint.
+
+The real cost is **per command**, and commit `79d50e4` measured it on hardware
+while chasing a climbing overrun count:
+
+| | |
+|---|---|
+| draining the link (TinyUSB) | 1240 µs |
+| reading the link (TinyUSB) | 754 µs |
+| `tud_task()`, via `link_up()` | 533 µs |
+| `HostLinkSession` — ours | 372 µs |
+| the scan itself | 7 µs |
+
+≈ **2.5 ms per command, almost all of it vendor USB stack.** A ten-state graph is
+roughly fifty messages, so **≈ 125 ms device-side**, call it 200–400 ms once the
+host's round-trips are counted. That fits inside any ITI worth having, and it is
+the number the whole question turns on.
+
+**It is different on a UART rig.** `uno_r4_minima_sci` puts the host on SCI2,
+where 115 200 baud is real and ~15 kB of upload traffic *is* about 1.3 s. So the
+answer is per transport, and `HARDWARE.md` should carry both.
+
+#### The one thing to design against
+
+An upload that happens only when the trial type *changes* makes the ITI
+systematically longer on exactly those trials — a timing difference **correlated
+with the variable under study**, which is a confound rather than an
+inconvenience. Every ordering triald offers draws without replacement, so type
+changes are frequent and irregular.
+
+The fix is cheap and should be in from the start: **pad to a constant**. The
+daemon reports what the switch cost, triald holds the ITI to a fixed floor above
+it, and the animal sees no difference between a repeat and a switch. At 200 ms
+that floor is not a real constraint.
+
+#### The measurement that decides
+
+`graph_switch_ms` on a real R4, for both transports, next to the scan rate in
+`HARDWARE.md`. The harness for it already exists — `test_scan_health.py` measures
+what a command costs the scan, and this is the same question asked of fifty of
+them. It is answerable the day M4c can upload against a board.
+
+Two ways it could come back badly: the per-command cost is worse under a long
+burst than the single-command figure suggests, or a rig wants an ITI shorter than
+the floor. Then, and only then:
+
+#### If the measurement says no: the graph set
+
+**Hold every graph the session uses and switch by index**, so no upload happens
+between trials at all. Sketched here because the arithmetic is the interesting
+part and it is better done before it is needed than under pressure.
 
 Twenty independent `StateGraph`s is **52 KB** against the R4's 32 KB. Measured,
 on the structs as they stand:
@@ -239,79 +296,65 @@ on the structs as they stand:
 | `InputConfig` | 72 B | — |
 | **one `StateGraph`** | **≈ 2.6 KB** | |
 
-So graphs share one set of pools, and it is **the mechanism the firmware already
-uses one level down**: a `State` addresses its transitions and actions as
-`(first_transition, transition_count)` slices of flat pools. A graph is the same
-thing one level up, and costs three bytes:
+So graphs would share one set of pools — **the mechanism the firmware already
+uses one level down**, where a `State` addresses its transitions and actions as
+`(first, count)` slices. A graph is the same thing one level up, at three bytes:
 
 ```c
 struct GraphEntry { StateIndex entry, first_state; uint8_t n_states; };
 ```
 
-Twenty of those is 60 B. `InputConfig` stops being per-graph in the same move:
-invert, enable and debounce describe **the wiring**, not the paradigm, so one
-copy per device is both 72 bytes cheaper and more nearly true than what is there
-now.
+Twenty of those is 60 B. `InputConfig` would stop being per-graph in the same
+move: invert, enable and debounce describe **the wiring**, not the paradigm, so
+one copy per device is both cheaper and more nearly true than what is there now.
+That part is worth doing whether or not the rest is.
 
-#### The ceiling is `uint8_t`, not RAM
+**The ceiling is `uint8_t`, not RAM.** `StateIndex`, `TransitionIndex`,
+`OutputActionIndex` and `RandomDistributionIndex` all use `0xFF` as a sentinel,
+so 255 is a hard limit per pool across the whole set, and widening one is a type
+change reaching every struct and the wire format. Twenty graphs would budget ~160
+states, ~240 transitions, ~200 actions — about **8 states and 12 transitions
+each**, in ≈ 7.5 KB against ~11.6 KB unclaimed. Two sets would not fit without
+reclaiming the framework's 8 KB heap, so the device would hold one, invalid until
+committed: a failed upload leaves *no* graph rather than the previous one, which
+fails safe and is visible where the alternative failure was silent.
 
-`StateIndex`, `TransitionIndex`, `OutputActionIndex` and
-`RandomDistributionIndex` are all `uint8_t` with `0xFF` as the sentinel. **255 is
-a hard ceiling on each pool across the whole set**, and widening one is a type
-change reaching every struct and the wire format. That, not the SRAM, is what
-bounds the design. At twenty graphs it budgets:
+Teensy 4.1 and ESP32 have none of these problems. The R4 sets the design, as
+`PLAN.md` intends.
 
-| | Across the set | Per graph |
-|---|---|---|
-| States | 160 | 8 |
-| Transitions | 240 | 12 |
-| Output actions | 200 | 10 |
-| Distributions | 48 | shared and reused |
+#### The variant not to reach for first
 
-≈ **7.5 KB for the whole set** — against ~11.6 KB unclaimed on the R4, and
-better than today's 5.2 KB for *two* graphs. Teensy 4.1 and ESP32 have neither
-problem; the R4 sets the design, as `PLAN.md` intends.
+Uploading *during* a trial, into the staging buffer, and committing when the
+trial ends — near-zero ITI cost. It is refused today
+(`host_link_session.cpp:251`, `busy` / `"a trial is armed or running"` / context
+`"graph upload"`) and relaxing that is a small change, since staging is already a
+separate buffer.
 
-**No per-graph limit.** One graph may take thirty states if its neighbours are
-small. `hello_ack` reports the pool sizes, and the daemon refuses an oversize set
-before sending a byte, naming which pool overran and by how much — the same
-"refused before the upload starts" the caps check already gives.
-
-#### One set, not two: what is given up and why it is affordable
-
-Two full sets is ~15 KB, which needs the framework's 8 KB heap reclaimed
-(`BSP_CFG_HEAP_BYTES`, a patch to the Arduino variant the build has so far
-avoided). So the device holds **one** set, marked invalid until `graphset_end`
-commits it.
-
-That gives up `PLAN.md`'s *"a failed upload leaves the device running the
-paradigm it was already running"*. The replacement is weaker but safe: a failed
-upload leaves **no** graph — outputs go to their safe levels, `has_graph` goes
-false, and the daemon sees it on the next reply rather than inferring it. It
-fails safe and it is detectable, where the failure double-buffering guarded
-against was silent.
-
-And it is affordable now for a reason that did not exist before this section:
-**uploads happen between sessions.** The property was urgent when an upload could
-land in an ITI mid-session; it is a re-upload at setup time now.
+But it trades ITI time for ~2.5 ms of USB stack, fifty times, **during the trial
+being timed**. `79d50e4` moved the scan into the timer ISR so the link no longer
+costs scan periods, which makes this thinkable where it was not before — and
+"thinkable" is as far as it should go until `graph_switch_ms` and a fresh
+`overruns` count under load say more. Jitter on the trial you are measuring is a
+worse failure than a longer ITI, and it is harder to see.
 
 ### 3.3 What this changes below the daemon
 
-This is no longer a daemon-only plan. Named so the firmware work is visible
-rather than discovered at M4b:
+**Nothing, on the current plan.** The per-trial upload uses the protocol and the
+firmware exactly as they stand, which is the strongest argument for doing it that
+way first. `dev/PROTOCOL.md` is unchanged and M2/M3 stay closed.
 
-| | |
-|---|---|
-| `firmware/core/config.h` | pools resized; `kMaxGraphs`; the `uint8_t` ceiling documented where it is set, not here |
-| `graph/state_graph.h` | `GraphEntry` table; `InputConfig` and `output_safe_levels` move out of the per-graph struct to device scope; `validate()` runs per graph over its own slice |
-| `protocol/graph_builder.cpp` | builds a set, appending into shared pools; the commit flag |
-| `protocol/host_link_session.cpp` | the upload state machine; `configure` resolves a slot |
-| `dev/PROTOCOL.md` | §3.2 gains `graphset_begin`/`graphset_end` around the existing per-graph messages; §3.3 `configure` takes `graph` (slot) alongside a set-level `graph_version`; §4.1 `hello_ack` caps gain `max_graphs` and the pool sizes; §4.2 `armed` echoes the slot |
-| `dev/PLAN.md` | the RAM table, the "two graphs" note in the M3 measurement, and M4 |
+The one exception worth taking regardless of the measurement is moving
+`InputConfig` and `output_safe_levels` out of `StateGraph` to device scope: they
+describe the wiring rather than the paradigm, and re-sending them with every
+graph is what makes "change the debounce" read as "re-upload the graph" in §4.1.
+Small, and it stands alone.
 
-`proto` stays **1**. `PROTOCOL.md` set that precedent at M3 for the `seq` →
-`message_id` rename with the argument that applies here unchanged: no bridge has
-shipped, so there is no deployed peer to keep compatible.
+Should the graph set be needed, it is `config.h`, `graph/state_graph.h`,
+`protocol/graph_builder.cpp`, `protocol/host_link_session.cpp`, `PROTOCOL.md`
+§3.2/§3.3/§4.1/§4.2, and the Renode session — a milestone of its own, and not a
+Python one. `proto` would stay **1** on the precedent `PROTOCOL.md` set at M3 for
+the `seq` → `message_id` rename: no bridge has shipped, so there is no deployed
+peer to keep compatible.
 
 ### 3.4 Randomised durations: already the design, and a contradiction
 
@@ -365,8 +408,8 @@ daemon's alone and never reach the wire.
 |---|---|
 | `GET /api/graphs`, `GET·PUT·DELETE /api/graphs/{name}` | the store |
 | `POST /api/graphs/{name}/validate` | every rule, plus this device's `caps`. Changes nothing |
-| `POST /api/graphs/set` | compile a named list into one set, check it against the pool budget, upload, commit. → the set's `graph_version` and the slot each name got |
-| `GET /api/graphs/set` | what is committed on the device right now, name by slot |
+| `POST /api/graphs/{name}/upload` | compile, upload, commit. → `graph_version`. Used by `configure`, by the UI, and to pre-warm before a session |
+| `POST /api/session/graphs` | the names a session will use. Validated and *not* uploaded — see §4.3 |
 
 ### 4.3 The trial loop
 
@@ -374,7 +417,7 @@ triald drives; statemachined reports.
 
 | | |
 |---|---|
-| `POST /api/trial/configure` | `{trial_id, graph, cap_ms, start, patch}` → armed. **`graph` is a name**; the daemon resolves it to a slot in the committed set and arms. No upload. See below |
+| `POST /api/trial/configure` | `{trial_id, graph, cap_ms, start, patch}` → armed. **`graph` is a name**; the daemon uploads it if it is not the committed one, then arms. See below |
 | `POST /api/trial/start` | when `start` admits serial |
 | `POST /api/trial/cancel` | `{trial_id, reason:"host"}` |
 | `GET /api/state` · `WS /api/stream` | snapshot, and coalesced frames — triald's convention, and for the same reason: a slow browser tab must not hold up a session |
@@ -386,17 +429,20 @@ the committed set is **refused**, not uploaded on demand: an upload mid-session
 is exactly what the set exists to prevent, and silently doing one would hide a
 misconfigured trial type behind a trial that armed late.
 
-The set is therefore a **session-scoped** object. `POST /api/graphs/set`
-assembles the graphs a session needs, validates the whole thing against the pool
-budget, uploads and commits — at setup, from the UI or from triald. Which graphs
-go in it is a question the daemon cannot answer on its own: it is the union of
-what the loaded sets' trial types reference, which only triald knows. Two ways to
-supply it, and both should work:
+**`configure` is one call, not two, and that is deliberate.** triald names the
+graph it wants; the daemon compares it against the committed `graph_version`,
+uploads only if they differ, and arms. Splitting it into `upload` then
+`configure` would put "has this graph already been uploaded?" in triald —
+bookkeeping about a device it does not own, and a cache to get wrong. The reply
+carries `uploaded: bool` and the elapsed milliseconds, so §3.2's cost is a number
+per trial rather than an inference from a trial that armed late.
 
-| | |
-|---|---|
-| **triald declares it** | `POST /api/graphs/set {graphs: ["go-nogo", "catch", …]}` when a session starts. Explicit, and triald already knows the answer |
-| **the daemon is told the names** and refuses at session start if any is missing, rather than at trial 40 | The check belongs before an animal is in the booth |
+**`POST /api/session/graphs` is the failure this prevents.** triald declares the
+names a session will use — the union of what its loaded sets' trial types
+reference, which only triald knows — and the daemon validates every one against
+the device's `caps` **before an animal is in the booth**. It uploads nothing. The
+alternative is discovering at trial 40 that one trial type names a graph with 40
+states on a 32-state board, and losing the session to it.
 
 Outbound, one call: `POST {triald}/api/trial/outcome` with an `OutcomeReport`
 carrying `outcome`, `manipulandum`, `reaction_time_ms`, `terminating_interval`,
@@ -587,8 +633,7 @@ M4a–M4e; its M5–M7 shift down and need renumbering in that document.
 | | |
 |---|---|
 | **M4a** | **The move, and nothing else.** `tools/bringup/` → `daemon/`, package renamed, `wire.py` made standalone with golden vectors against the emulator's copy. `make bringup` and `make test-hardware` keep working, unchanged in behaviour. Reviewable as a pure move |
-| **M4b′** | **The graph set, in the firmware** (§3.2, §3.3). `PROTOCOL.md` amended first, then `config.h`, `state_graph.h`, `graph_builder`, `host_link_session`; host tests and the Renode session updated. Reopens M2/M3 work and is the one milestone here that is not Python. Ends with the RAM figure re-measured on a board |
-| **M4b** | `model/` and `compile.py`: the pydantic graph, the line map, names → wire, and the set with its pool budget. Host tests against the amended `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 — **and is what tests open question 4** |
+| **M4b** | `model/` and `compile.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4c** | `device/supervisor.py` and `clock.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core over a pty — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks |
 | **M4d** | FastAPI: device, lines, graphs, trial, config, state/stream; the triald client; `statemachined serve`. `dev/API.md` written first, the way `PROTOCOL.md` was |
 | **M4e** | The web UI and the `/elements/` contract; mDNS |
@@ -616,13 +661,13 @@ diff.
    template with a config per instance. Confirm that is far enough off to defer.
 3. **triald's "pull, not push".** §4.3 flags a genuine contradiction with
    triald's `dev/API.md`. Someone has to decide which document changes.
-4. **The pool budget at twenty graphs** (§3.2). 160 states / 240 transitions /
-   200 actions is arithmetic against a `uint8_t` ceiling, not against real
-   paradigms. Authoring the `graphs/` examples at M4b is what tests it, and it is
-   cheap to find out then. If twelve transitions per graph proves too few, the
-   answer is a `uint16_t` index — a type change through every struct and the wire
-   format, and much better decided at M4b than at M6.
-   **This is the question most likely to change the plan.**
+4. **`graph_switch_ms` on a board** (§3.2), for USB CDC and for the SCI2 UART.
+   Everything in this plan's handling of graph switching rests on it, and one
+   estimate here has already been wrong by a factor of five in the safe
+   direction. Answerable the day M4c can upload against hardware; belongs in
+   `HARDWARE.md` next to the scan rate. **This is the question most likely to
+   change the plan** — if it comes back badly, §3.2's graph set is the answer and
+   it is a firmware milestone, not a Python one.
 5. **`TrialType.graph` is triald's field to add**, alongside or replacing
    `time_sequence`. Same amendment as #3, and probably the same patch.
 6. **Global timers** (`PLAN.md` open question 3, still open) are the one feature
