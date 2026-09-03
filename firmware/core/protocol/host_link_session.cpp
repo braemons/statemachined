@@ -2,6 +2,7 @@
 #include "protocol/host_link_session.h"
 
 #include "protocol/crc16.h"
+#include "protocol/msg_type.h"
 
 namespace statemachined {
 namespace {
@@ -53,14 +54,14 @@ const char* upload_error_code(UploadError e) {
 
 }  // namespace
 
-void DuplicateCommandGuard::remember(uint16_t seq, const char* line, size_t n) {
+void DuplicateCommandGuard::remember(uint16_t message_id, const char* line, size_t n) {
   if (n > sizeof(reply_)) {  // cannot happen: everything is built in a kMaxLine buffer
     have_ = false;
     return;
   }
   for (size_t i = 0; i < n; ++i) reply_[i] = line[i];
   reply_len_ = n;
-  last_seq_ = seq;
+  last_message_id_ = message_id;
   have_ = true;
 }
 
@@ -77,7 +78,7 @@ void HostLinkSession::receive_byte(char c, Microseconds now_us) {
   if (!reader_.feed(c)) return;
 
   if (reader_.status() != FrameError::None) {
-    // The line never assembled, so there is no seq to attribute the error to.
+    // The line never assembled, so there is no message_id to attribute the error to.
     // Reported anyway rather than dropped: a host waiting for an answer it will
     // never get is worse than one told its line was unusable.
     ++bad_lines_;
@@ -107,69 +108,104 @@ void HostLinkSession::handle_line(const char* line, size_t n, Microseconds now_u
     return;
   }
 
-  uint16_t seq = 0;
-  if (!m.u16("seq", &seq)) {
-    send_orphan_error("bad_json", "no seq", "seq");
+  uint16_t message_id = 0;
+  if (!m.u16(kMessageIdKey, &message_id)) {
+    send_orphan_error("bad_json", "no message_id", "message_id");
     return;
   }
 
   // A retry of the command just answered gets that answer back verbatim and
   // changes nothing. Acting twice is what matters: a re-executed start would
   // run a second trial.
-  if (guard_.is_repeat(seq)) {
+  if (guard_.is_repeat(message_id)) {
     out_.send_line(guard_.reply(), guard_.reply_len());
     return;
   }
 
-  dispatch(m, JsonSpan{f.covered, f.covered_len}, seq, now_us);
+  dispatch(m, JsonSpan{f.covered, f.covered_len}, message_id, now_us);
 }
 
-void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t seq,
+void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t message_id,
                                Microseconds now_us) {
-  JsonSpan t;
-  if (!m.str("t", &t)) {
-    send_error(seq, "bad_json", "no message type", "t");
+  JsonSpan name;
+  if (!m.str(kMsgTypeKey, &name)) {
+    send_error(message_id, "bad_json", "no message type", kMsgTypeKey);
     return;
   }
+  const MsgType t = msg_type_from(name);
 
   // hello is the only thing accepted before a hello: everything else needs a
   // session seed, and a device answering commands without one would be running
   // trials nobody could replay.
-  if (state_ == LinkState::Greeting && !json_str_eq(t, "hello")) {
-    send_error(seq, "not_ready", "no hello yet", "hello");
+  if (state_ == LinkState::Greeting && t != MsgType::Hello) {
+    send_error(message_id, "not_ready", "no hello yet", "hello");
     return;
   }
 
-  if (json_str_eq(t, "hello")) return on_hello(m, seq);
-  if (json_str_eq(t, "ping")) return on_ping(seq, now_us);
-  if (json_str_eq(t, "state")) return on_state_request(seq, now_us);
-  if (json_str_eq(t, "configure")) return on_configure(m, seq);
-  if (json_str_eq(t, "start")) return on_start(m, seq, now_us);
-  if (json_str_eq(t, "cancel")) return on_cancel(m, seq, now_us);
+  // A switch rather than a chain of comparisons, so that a message type added
+  // to MsgType and forgotten here is a -Wswitch warning at build time instead
+  // of a command refused as unknown_type on somebody's bench.
+  switch (t) {
+    case MsgType::Hello:
+      return on_hello(m, message_id);
+    case MsgType::Ping:
+      return on_ping(message_id, now_us);
+    case MsgType::State:
+      return on_state_request(message_id, now_us);
+    case MsgType::Configure:
+      return on_configure(m, message_id);
+    case MsgType::Start:
+      return on_start(m, message_id, now_us);
+    case MsgType::Cancel:
+      return on_cancel(m, message_id, now_us);
 
-  if (json_str_eq(t, "graph_begin") || json_str_eq(t, "graph_dist") ||
-      json_str_eq(t, "graph_state") || json_str_eq(t, "graph_transition") ||
-      json_str_eq(t, "graph_action") || json_str_eq(t, "graph_end"))
-    return on_graph_message(m, covered, seq, t);
+    case MsgType::GraphBegin:
+    case MsgType::GraphDist:
+    case MsgType::GraphState:
+    case MsgType::GraphTransition:
+    case MsgType::GraphAction:
+    case MsgType::GraphEnd:
+      return on_graph_message(m, covered, message_id, t);
 
-  send_error(seq, "unknown_type", "unrecognised message type", "t");
+    // Names this device knows but only ever sends. A host saying `pong` is as
+    // unrecognisable a command as one saying `teleport`, and is refused the
+    // same way rather than falling through to something that half-works.
+    case MsgType::HelloAck:
+    case MsgType::Ack:
+    case MsgType::GraphOk:
+    case MsgType::Armed:
+    case MsgType::Started:
+    case MsgType::CancelAck:
+    case MsgType::ResultBegin:
+    case MsgType::ResultPath:
+    case MsgType::ResultEnd:
+    case MsgType::Event:
+    case MsgType::Error:
+    case MsgType::Log:
+    case MsgType::Pong:
+    case MsgType::StateReport:
+    case MsgType::Unknown:
+      break;
+  }
+
+  send_error(message_id, "unknown_type", "unrecognised message type", kMsgTypeKey);
 }
 
 // -------------------------------------------------------------- handlers ---
 
-void HostLinkSession::on_hello(const JsonObject& m, uint16_t seq) {
+void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id) {
   uint16_t proto = 0;
   if (!m.u16("proto", &proto)) {
-    send_error(seq, "bad_json", "no proto", "proto");
+    send_error(message_id, "bad_json", "no proto", "proto");
     return;
   }
   if (proto != kProtocolVersion) {
-    send_error(seq, "bad_proto", "this firmware does not speak that version", "proto");
+    send_error(message_id, "bad_proto", "this firmware does not speak that version", "proto");
     return;
   }
   uint64_t seed = 0;
   if (!m.hex64("seed", &seed)) {
-    send_error(seq, "bad_json", "seed must be a hex string", "seed");
+    send_error(message_id, "bad_json", "seed must be a hex string", "seed");
     return;
   }
 
@@ -183,8 +219,8 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t seq) {
   armed_trial_id_ = 0;
 
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin("hello_ack", tx_seq_);
-  w.req(seq);
+  w.begin(msg_type_name(MsgType::HelloAck), tx_message_id_);
+  w.in_reply_to(message_id);
   w.key_u32("proto", kProtocolVersion);
   w.key_str("board", identity_.board);
   w.key_str("fw", identity_.firmware_version);
@@ -206,40 +242,47 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t seq) {
   w.end_object();
   w.key_bool("has_graph", have_graph_);
   w.key_u32("graph_version", have_graph_ ? live_graph_.version : 0);
-  send(w, seq);
+  send(w, message_id);
 }
 
-void HostLinkSession::on_graph_message(const JsonObject& m, JsonSpan covered, uint16_t seq,
-                                       JsonSpan type) {
+void HostLinkSession::on_graph_message(const JsonObject& m, JsonSpan covered,
+                                       uint16_t message_id, MsgType type) {
   if (state_ == LinkState::Armed || state_ == LinkState::Running) {
-    send_error(seq, "busy", "a trial is armed or running", "graph upload");
+    send_error(message_id, "busy", "a trial is armed or running", "graph upload");
     return;
   }
 
   UploadError e = UploadError::None;
   bool is_end = false;
-  if (json_str_eq(type, "graph_begin")) {
-    e = builder_.begin(m, covered);
-  } else if (json_str_eq(type, "graph_dist")) {
-    e = builder_.add_distribution(m, covered);
-  } else if (json_str_eq(type, "graph_state")) {
-    e = builder_.add_state(m, covered);
-  } else if (json_str_eq(type, "graph_transition")) {
-    e = builder_.add_transition(m, covered);
-  } else if (json_str_eq(type, "graph_action")) {
-    e = builder_.add_action(m, covered);
-  } else {
-    e = builder_.end(m);
-    is_end = true;
+  switch (type) {
+    case MsgType::GraphBegin:
+      e = builder_.begin(m, covered);
+      break;
+    case MsgType::GraphDist:
+      e = builder_.add_distribution(m, covered);
+      break;
+    case MsgType::GraphState:
+      e = builder_.add_state(m, covered);
+      break;
+    case MsgType::GraphTransition:
+      e = builder_.add_transition(m, covered);
+      break;
+    case MsgType::GraphAction:
+      e = builder_.add_action(m, covered);
+      break;
+    default:  // graph_end; dispatch admits no other type here
+      e = builder_.end(m);
+      is_end = true;
+      break;
   }
 
   if (e != UploadError::None) {
-    send_error(seq, upload_error_code(e), upload_error_str(e), builder_.context());
+    send_error(message_id, upload_error_code(e), upload_error_str(e), builder_.context());
     return;
   }
 
   if (!is_end) {
-    send_ack(seq);
+    send_ack(message_id);
     return;
   }
 
@@ -252,45 +295,46 @@ void HostLinkSession::on_graph_message(const JsonObject& m, JsonSpan covered, ui
   runner_ = TrialRunner(live_graph_);
 
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin("graph_ok", tx_seq_);
-  w.req(seq);
+  w.begin(msg_type_name(MsgType::GraphOk), tx_message_id_);
+  w.in_reply_to(message_id);
   w.key_u32("graph_version", live_graph_.version);
   w.key_u32("n_states", live_graph_.n_states);
   w.key_u32("n_transitions", live_graph_.n_transitions);
   w.key_u32("n_output_actions", live_graph_.n_output_actions);
-  send(w, seq);
+  send(w, message_id);
 }
 
-void HostLinkSession::on_configure(const JsonObject& m, uint16_t seq) {
+void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
   if (!have_graph_) {
-    send_error(seq, "not_ready", "no graph has been committed", "graph");
+    send_error(message_id, "not_ready", "no graph has been committed", "graph");
     return;
   }
   if (state_ == LinkState::Running) {
-    send_error(seq, "busy", "a trial is already running", "trial");
+    send_error(message_id, "busy", "a trial is already running", "trial");
     return;
   }
 
   uint32_t trial_id = 0;
   uint16_t version = 0;
   if (!m.u32("trial_id", &trial_id)) {
-    send_error(seq, "bad_json", "no trial_id", "trial_id");
+    send_error(message_id, "bad_json", "no trial_id", "trial_id");
     return;
   }
   if (!m.u16("graph_version", &version)) {
-    send_error(seq, "bad_json", "no graph_version", "graph_version");
+    send_error(message_id, "bad_json", "no graph_version", "graph_version");
     return;
   }
   // A graph edit that did not land would otherwise leave the device confidently
   // running the old paradigm.
   if (version != live_graph_.version) {
-    send_error(seq, "graph_mismatch", "the device holds a different graph", "graph_version");
+    send_error(message_id, "graph_mismatch", "the device holds a different graph",
+               "graph_version");
     return;
   }
 
   int32_t cap_ms = 0;
   if (m.type_of("cap_ms") != JsonType::Missing && !m.i32("cap_ms", &cap_ms)) {
-    send_error(seq, "bad_json", "cap_ms", "cap_ms");
+    send_error(message_id, "bad_json", "cap_ms", "cap_ms");
     return;
   }
 
@@ -298,12 +342,12 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t seq) {
   if (m.type_of("start") != JsonType::Missing) {
     JsonSpan s;
     if (!m.str("start", &s)) {
-      send_error(seq, "bad_json", "start", "start");
+      send_error(message_id, "bad_json", "start", "start");
       return;
     }
     start_from_serial_ = json_str_eq(s, "serial") || json_str_eq(s, "both");
     if (!start_from_serial_ && !json_str_eq(s, "line")) {
-      send_error(seq, "bad_json", "start must be serial, line or both", "start");
+      send_error(message_id, "bad_json", "start must be serial, line or both", "start");
       return;
     }
   }
@@ -316,30 +360,30 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t seq) {
   // Both fields, always: this is the confirmation that start requires, and it
   // is not skippable.
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin("armed", tx_seq_);
-  w.req(seq);
+  w.begin(msg_type_name(MsgType::Armed), tx_message_id_);
+  w.in_reply_to(message_id);
   w.key_u32("trial_id", trial_id);
   w.key_u32("graph_version", live_graph_.version);
-  send(w, seq);
+  send(w, message_id);
 }
 
-void HostLinkSession::on_start(const JsonObject& m, uint16_t seq, Microseconds now_us) {
+void HostLinkSession::on_start(const JsonObject& m, uint16_t message_id, Microseconds now_us) {
   uint32_t trial_id = 0;
   if (!m.u32("trial_id", &trial_id)) {
-    send_error(seq, "bad_json", "no trial_id", "trial_id");
+    send_error(message_id, "bad_json", "no trial_id", "trial_id");
     return;
   }
   // No trial runs that the device was not confirmed configured for.
   if (state_ != LinkState::Armed) {
-    send_error(seq, "not_ready", "not armed", "configure first");
+    send_error(message_id, "not_ready", "not armed", "configure first");
     return;
   }
   if (trial_id != armed_trial_id_) {
-    send_error(seq, "unknown_trial", "armed for a different trial", "trial_id");
+    send_error(message_id, "unknown_trial", "armed for a different trial", "trial_id");
     return;
   }
   if (!start_from_serial_) {
-    send_error(seq, "not_ready", "this trial starts on a line, not on serial", "start");
+    send_error(message_id, "not_ready", "this trial starts on a line, not on serial", "start");
     return;
   }
 
@@ -356,22 +400,22 @@ void HostLinkSession::on_start(const JsonObject& m, uint16_t seq, Microseconds n
   state_ = LinkState::Running;
 
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin("started", tx_seq_);
-  w.req(seq);
+  w.begin(msg_type_name(MsgType::Started), tx_message_id_);
+  w.in_reply_to(message_id);
   w.key_u32("trial_id", armed_trial_id_);
   w.key_u32("at_us", now_us);
-  send(w, seq);
+  send(w, message_id);
 }
 
-void HostLinkSession::on_cancel(const JsonObject& m, uint16_t seq, Microseconds now_us) {
+void HostLinkSession::on_cancel(const JsonObject& m, uint16_t message_id, Microseconds now_us) {
   uint32_t trial_id = 0;
   if (!m.u32("trial_id", &trial_id)) {
-    send_error(seq, "bad_json", "no trial_id", "trial_id");
+    send_error(message_id, "bad_json", "no trial_id", "trial_id");
     return;
   }
   // Refused rather than acked, so the bridge learns that nothing was cancelled.
   if (state_ != LinkState::Running || trial_id != armed_trial_id_) {
-    send_error(seq, "unknown_trial", "no such trial is running", "trial_id");
+    send_error(message_id, "unknown_trial", "no such trial is running", "trial_id");
     return;
   }
 
@@ -380,7 +424,7 @@ void HostLinkSession::on_cancel(const JsonObject& m, uint16_t seq, Microseconds 
   JsonSpan why;
   if (m.type_of("reason") != JsonType::Missing) {
     if (!m.str("reason", &why) || !json_str_eq(why, "host")) {
-      send_error(seq, "bad_json", "only host is a reason the host may give", "reason");
+      send_error(message_id, "bad_json", "only host is a reason the host may give", "reason");
       return;
     }
   }
@@ -392,34 +436,34 @@ void HostLinkSession::on_cancel(const JsonObject& m, uint16_t seq, Microseconds 
   const bool cancelled = runner_.cancel(TrialCancelReason::Host, now_us);
 
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin("cancel_ack", tx_seq_);
-  w.req(seq);
+  w.begin(msg_type_name(MsgType::CancelAck), tx_message_id_);
+  w.in_reply_to(message_id);
   w.key_u32("trial_id", trial_id);
   w.key_bool("cancelled", cancelled);
   w.key_i32("outcome", static_cast<int32_t>(runner_.result().outcome));
-  send(w, seq);
+  send(w, message_id);
 }
 
-void HostLinkSession::on_ping(uint16_t seq, Microseconds now_us) {
+void HostLinkSession::on_ping(uint16_t message_id, Microseconds now_us) {
   if (!have_boot_) {
     booted_us_ = now_us;
     have_boot_ = true;
   }
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin("pong", tx_seq_);
-  w.req(seq);
+  w.begin(msg_type_name(MsgType::Pong), tx_message_id_);
+  w.in_reply_to(message_id);
   w.key_u32("up_us", since(booted_us_, now_us));
-  send(w, seq);
+  send(w, message_id);
 }
 
-void HostLinkSession::on_state_request(uint16_t seq, Microseconds now_us) {
+void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us) {
   if (!have_boot_) {
     booted_us_ = now_us;
     have_boot_ = true;
   }
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin("state_report", tx_seq_);
-  w.req(seq);
+  w.begin(msg_type_name(MsgType::StateReport), tx_message_id_);
+  w.in_reply_to(message_id);
   w.key_u32("link_state", static_cast<uint32_t>(state_));
   w.key_bool("has_graph", have_graph_);
   w.key_u32("graph_version", have_graph_ ? live_graph_.version : 0);
@@ -450,7 +494,7 @@ void HostLinkSession::on_state_request(uint16_t seq, Microseconds now_us) {
   w.key_u32("overruns", scan_.overruns);
   w.key_u32("worst_gap", scan_.worst_gap);
   w.end_object();
-  send(w, seq);
+  send(w, message_id);
 }
 
 // ------------------------------------------------------------ trial loop ---
@@ -535,7 +579,7 @@ void HostLinkSession::emit_result() {
 
   {
     JsonWriter w(tx_, sizeof(tx_));
-    w.begin("result_begin", tx_seq_);
+    w.begin(msg_type_name(MsgType::ResultBegin), tx_message_id_);
     w.key_u32("trial_id", r.trial_id);
     w.key_i32("outcome", static_cast<int32_t>(r.outcome));
     w.key_u32("cancel_reason", static_cast<uint32_t>(r.cancel_reason));
@@ -554,7 +598,7 @@ void HostLinkSession::emit_result() {
   uint8_t from = 0;
   while (from < run.path_len) {
     JsonWriter w(tx_, sizeof(tx_));
-    w.begin("result_path", tx_seq_);
+    w.begin(msg_type_name(MsgType::ResultPath), tx_message_id_);
     w.key_u32("trial_id", r.trial_id);
     w.key_u32("from", from);
     w.begin_array("p");
@@ -590,7 +634,7 @@ void HostLinkSession::emit_result() {
     crc16_to_hex(checksum, hex);
     char text[5] = {hex[0], hex[1], hex[2], hex[3], '\0'};
     JsonWriter w(tx_, sizeof(tx_));
-    w.begin("result_end", tx_seq_);
+    w.begin(msg_type_name(MsgType::ResultEnd), tx_message_id_);
     w.key_u32("trial_id", r.trial_id);
     // Catches a dropped chunk, which no per-line crc can see: the line that
     // vanished was perfectly well formed.
@@ -603,7 +647,7 @@ void HostLinkSession::emit_result() {
 
 namespace {
 
-/// The body every refusal shares, whether or not it can name a `seq`.
+/// The body every refusal shares, whether or not it can name a `message_id`.
 void write_error_body(JsonWriter& w, const char* code, const char* message,
                       const char* context) {
   w.key_str("code", code);
@@ -615,50 +659,50 @@ void write_error_body(JsonWriter& w, const char* code, const char* message,
 
 }  // namespace
 
-void HostLinkSession::send_error(uint16_t seq, const char* code, const char* message,
+void HostLinkSession::send_error(uint16_t message_id, const char* code, const char* message,
                                  const char* context) {
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin("error", tx_seq_);
-  w.req(seq);
+  w.begin(msg_type_name(MsgType::Error), tx_message_id_);
+  w.in_reply_to(message_id);
   write_error_body(w, code, message, context);
-  send(w, seq);
+  send(w, message_id);
 }
 
 // Split from send_error rather than folded into it behind a sentinel value.
-// Zero is a perfectly ordinary seq -- the counter is a u16 that wraps through
+// Zero is a perfectly ordinary message_id -- the counter is a u16 that wraps through
 // it, and the bridge's first command of a session is usually numbered 0 -- so
-// a `seq != 0` test here answered a real command with a reply carrying no
-// `req` and remembered nothing for the retry guard, which is precisely the
+// a `message_id != 0` test here answered a real command with a reply carrying no
+// `in_reply_to` and remembered nothing for the retry guard, which is precisely
 // command a bridge would resend and precisely the resend that must not
-// re-execute. Whether a seq was read is a fact about the line, and the only
+// re-execute. Whether a message_id was read is a fact about the line, and the only
 // thing that can know it is the caller.
 void HostLinkSession::send_orphan_error(const char* code, const char* message,
                                         const char* context) {
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin("error", tx_seq_);
+  w.begin(msg_type_name(MsgType::Error), tx_message_id_);
   write_error_body(w, code, message, context);
   send_unsolicited(w);
 }
 
-void HostLinkSession::send_ack(uint16_t seq) {
+void HostLinkSession::send_ack(uint16_t message_id) {
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin("ack", tx_seq_);
-  w.req(seq);
-  send(w, seq);
+  w.begin(msg_type_name(MsgType::Ack), tx_message_id_);
+  w.in_reply_to(message_id);
+  send(w, message_id);
 }
 
-void HostLinkSession::send(JsonWriter& w, uint16_t seq) {
+void HostLinkSession::send(JsonWriter& w, uint16_t message_id) {
   const size_t n = w.finish();
   if (n == 0) return;  // a message that does not fit is a firmware bug, not a wire condition
-  ++tx_seq_;
-  guard_.remember(seq, tx_, n);
+  ++tx_message_id_;
+  guard_.remember(message_id, tx_, n);
   out_.send_line(tx_, n);
 }
 
 void HostLinkSession::send_unsolicited(JsonWriter& w) {
   const size_t n = w.finish();
   if (n == 0) return;
-  ++tx_seq_;
+  ++tx_message_id_;
   out_.send_line(tx_, n);
 }
 

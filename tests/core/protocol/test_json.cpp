@@ -9,6 +9,7 @@
 #include "doctest.h"
 #include "protocol/framing.h"
 #include "protocol/json.h"
+#include "protocol/msg_type.h"
 
 using namespace statemachined;
 
@@ -29,19 +30,20 @@ const JsonObject& parse(const std::string& s) {
 }  // namespace
 
 TEST_CASE("a protocol message parses into its members") {
-  const auto o = parse(R"({"t":"configure","seq":41,"trial_id":193,"cap_ms":30000})");
+  const auto o =
+      parse(R"({"msg_type":"configure","message_id":41,"trial_id":193,"cap_ms":30000})");
   REQUIRE(o.valid());
   CHECK(o.size() == 4);
 
   JsonSpan t;
-  REQUIRE(o.str("t", &t));
+  REQUIRE(o.str("msg_type", &t));
   CHECK(json_str_eq(t, "configure"));
 
-  uint16_t seq = 0;
+  uint16_t message_id = 0;
   uint32_t id = 0;
   int32_t cap = 0;
-  CHECK(o.u16("seq", &seq));
-  CHECK(seq == 41);
+  CHECK(o.u16("message_id", &message_id));
+  CHECK(message_id == 41);
   CHECK(o.u32("trial_id", &id));
   CHECK(id == 193);
   CHECK(o.i32("cap_ms", &cap));
@@ -49,11 +51,12 @@ TEST_CASE("a protocol message parses into its members") {
 }
 
 TEST_CASE("an unknown member is ignored, which is how the protocol grows") {
-  const auto o = parse(R"({"t":"ping","seq":1,"something_from_2027":{"a":[1,2,3]}})");
+  const auto o =
+      parse(R"({"msg_type":"ping","message_id":1,"something_from_2027":{"a":[1,2,3]}})");
   REQUIRE(o.valid());
-  uint16_t seq = 0;
-  CHECK(o.u16("seq", &seq));
-  CHECK(seq == 1);
+  uint16_t message_id = 0;
+  CHECK(o.u16("message_id", &message_id));
+  CHECK(message_id == 1);
   CHECK(o.type_of("nope") == JsonType::Missing);
 }
 
@@ -353,25 +356,25 @@ TEST_CASE("escapes are decoded on comparison, without a buffer") {
 }
 
 TEST_CASE("whitespace between tokens is accepted") {
-  const auto o = parse("{ \"t\" : \"ping\" , \"seq\" : 3 }");
+  const auto o = parse("{ \"msg_type\" : \"ping\" , \"message_id\" : 3 }");
   REQUIRE(o.valid());
-  uint16_t seq = 0;
-  CHECK(o.u16("seq", &seq));
-  CHECK(seq == 3);
+  uint16_t message_id = 0;
+  CHECK(o.u16("message_id", &message_id));
+  CHECK(message_id == 3);
 }
 
 TEST_CASE("an empty object is valid and says nothing") {
   const auto o = parse("{}");
   CHECK(o.valid());
   CHECK(o.size() == 0);
-  CHECK(o.type_of("t") == JsonType::Missing);
+  CHECK(o.type_of("msg_type") == JsonType::Missing);
 }
 
 TEST_CASE("the writer emits a framed message the reader accepts") {
   char buf[kMaxLine];
   JsonWriter w(buf, sizeof(buf));
-  w.begin("armed", 12);
-  w.req(41);
+  w.begin(msg_type_name(MsgType::Armed), 12);
+  w.in_reply_to(41);
   w.key_u32("trial_id", 193);
   w.key_u32("graph_version", 7);
   const size_t n = w.finish(false);
@@ -379,7 +382,7 @@ TEST_CASE("the writer emits a framed message the reader accepts") {
 
   const std::string line(buf, n);
   const std::string expect =
-      R"({"t":"armed","seq":12,"req":41,"trial_id":193,"graph_version":7)";
+      R"({"msg_type":"armed","message_id":12,"in_reply_to":41,"trial_id":193,"graph_version":7)";
   CHECK(line.compare(0, expect.size(), expect) == 0);
   CHECK(line.size() == expect.size() + 14);  // ,"crc":"XXXX"}
   CHECK(verify_frame(line.data(), line.size(), nullptr) == FrameError::None);
@@ -394,7 +397,7 @@ TEST_CASE("the writer emits a framed message the reader accepts") {
 TEST_CASE("the writer round-trips every type it can emit") {
   char buf[kMaxLine];
   JsonWriter w(buf, sizeof(buf));
-  w.begin("state_report", 3);
+  w.begin(msg_type_name(MsgType::StateReport), 3);
   w.key_i32("neg", -12345);
   w.key_i32("min32", INT32_MIN);
   w.key_bool("yes", true);

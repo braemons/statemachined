@@ -70,7 +70,7 @@ Send And Expect
     ...                The retry is not harness sugar covering a flaky test. It
     ...                is what dev/PROTOCOL.md 3.1 requires of a bridge -- a
     ...                command that draws no reply is resent -- and it is safe
-    ...                because a repeated `seq` is answered from
+    ...                because a repeated `message_id` is answered from
     ...                DuplicateCommandGuard rather than acted on twice. A
     ...                harness that could not do what the protocol demands of a
     ...                real bridge would be testing a rig nobody will build, and
@@ -124,7 +124,7 @@ Advance
     Execute Command    emulation RunFor "${seconds}"
 
 Greet
-    Send And Expect           {"t":"hello","seq":1,"proto":1,"seed":"0123456789ABCDEF"    "t":"hello_ack".*"board":"uno_r4_minima"
+    Send And Expect           {"msg_type":"hello","message_id":1,"proto":1,"seed":"0123456789ABCDEF"    "msg_type":"hello_ack".*"board":"uno_r4_minima"
 
 Upload Reward Graph
     [Documentation]    wait --(${ms} ms)--> Hit, holding output line 0 high for
@@ -132,16 +132,16 @@ Upload Reward Graph
     ...                is P112: port1, pin 12.
     [Arguments]    ${ms}
     @{bodies}=    Create List
-    ...    {"t":"graph_begin","seq":10,"graph_version":1,"n_states":2,"entry":0
-    ...    {"t":"graph_dist","seq":11,"i":0,"kind":"fixed","a":${ms}
-    ...    {"t":"graph_state","seq":12,"i":0,"terminal":null,"timeout":{"dist":0,"target":1}
-    ...    {"t":"graph_action","seq":13,"on":"entry","line":0,"kind":"high"
-    ...    {"t":"graph_state","seq":14,"i":1,"terminal":1,"timeout":null
+    ...    {"msg_type":"graph_begin","message_id":10,"graph_version":1,"n_states":2,"entry":0
+    ...    {"msg_type":"graph_dist","message_id":11,"i":0,"kind":"fixed","a":${ms}
+    ...    {"msg_type":"graph_state","message_id":12,"i":0,"terminal":null,"timeout":{"dist":0,"target":1}
+    ...    {"msg_type":"graph_action","message_id":13,"on":"entry","line":0,"kind":"high"
+    ...    {"msg_type":"graph_state","message_id":14,"i":1,"terminal":1,"timeout":null
     FOR    ${b}    IN    @{bodies}
-        Send And Expect           ${b}    "t":"ack"
+        Send And Expect           ${b}    "msg_type":"ack"
     END
     ${sum}=    Graph Checksum      ${bodies}
-    Send And Expect    {"t":"graph_end","seq":15,"n_transitions":0,"n_output_actions":1,"checksum":"${sum}"    "t":"graph_ok"
+    Send And Expect    {"msg_type":"graph_end","message_id":15,"n_transitions":0,"n_output_actions":1,"checksum":"${sum}"    "msg_type":"graph_ok"
 
 *** Test Cases ***
 The Firmware Boots And Answers On Real Peripherals
@@ -163,13 +163,13 @@ An Input Pin Reaches The Line Number A Graph Would Name
     ...                single-port test and be wrong.
     Greet
     Execute Command           sysbus.port1 OnGPIO 5 true
-    Send And Expect           {"t":"state","seq":2    "io":{"in":1,
+    Send And Expect           {"msg_type":"state","message_id":2    "io":{"in":1,
 
     Execute Command           sysbus.port3 OnGPIO 4 true
-    Send And Expect           {"t":"state","seq":3    "io":{"in":65,
+    Send And Expect           {"msg_type":"state","message_id":3    "io":{"in":65,
 
     Execute Command           sysbus.port1 OnGPIO 5 false
-    Send And Expect           {"t":"state","seq":4    "io":{"in":64,
+    Send And Expect           {"msg_type":"state","message_id":4    "io":{"in":64,
 
 An Output Action Reaches A Real Pin
     [Documentation]    The other half, and it is checked at the port register
@@ -181,12 +181,12 @@ An Output Action Reaches A Real Pin
     ...                sits in the top half of PCNTR1, so pin 12 is bit 28.
     Greet
     Upload Reward Graph       9000
-    Send And Expect           {"t":"configure","seq":20,"trial_id":1,"graph_version":1    "t":"armed"
+    Send And Expect           {"msg_type":"configure","message_id":20,"trial_id":1,"graph_version":1    "msg_type":"armed"
 
     ${before}=    Execute Command    sysbus ReadDoubleWord ${PORT1_PCNTR1}
     Should Not Match Regexp   ${before}    (?i)0x1[0-9a-f]{7}
 
-    Send And Expect           {"t":"start","seq":21,"trial_id":1    "t":"started"
+    Send And Expect           {"msg_type":"start","message_id":21,"trial_id":1    "msg_type":"started"
     Advance                   0.05
     ${during}=    Execute Command    sysbus ReadDoubleWord ${PORT1_PCNTR1}
     Should Match Regexp       ${during}    (?i)0x1[0-9a-f]{7}
@@ -199,10 +199,10 @@ A Whole Trial Runs On The Board's Own Timer
     ...                micros() advanced. Terminal code 1 is HIT.
     Greet
     Upload Reward Graph       50
-    Send And Expect           {"t":"configure","seq":20,"trial_id":7,"graph_version":1    "t":"armed"
-    Send And Expect           {"t":"start","seq":21,"trial_id":7    "t":"started"
-    Wait For Line On Uart     "t":"result_begin".*"trial_id":7.*"outcome":1    treatAsRegex=true
-    Wait For Line On Uart     "t":"result_end"    treatAsRegex=true
+    Send And Expect           {"msg_type":"configure","message_id":20,"trial_id":7,"graph_version":1    "msg_type":"armed"
+    Send And Expect           {"msg_type":"start","message_id":21,"trial_id":7    "msg_type":"started"
+    Wait For Line On Uart     "msg_type":"result_begin".*"trial_id":7.*"outcome":1    treatAsRegex=true
+    Wait For Line On Uart     "msg_type":"result_end"    treatAsRegex=true
 
 The Board Measures Its Own Scan Rate At Boot
     [Documentation]    Not a timing assertion -- Renode's virtual time makes the
@@ -210,4 +210,4 @@ The Board Measures Its Own Scan Rate At Boot
     ...                measurement ran and produced something, so that the field
     ...                is not silently zero on a real board.
     Greet
-    Send And Expect           {"t":"state","seq":2    "scan":{"hz":[0-9]+,"overruns":[0-9]+
+    Send And Expect           {"msg_type":"state","message_id":2    "scan":{"hz":[0-9]+,"overruns":[0-9]+

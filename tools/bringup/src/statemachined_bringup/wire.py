@@ -21,6 +21,8 @@ import json
 import sys
 from pathlib import Path
 
+from .messages import Field
+
 _RELATIVE = Path("emulation") / "tests"
 
 
@@ -59,14 +61,15 @@ class WireError(Exception):
     """A line came back that is not a message: bad CRC, bad JSON, non-ASCII."""
 
 
-def command_line(msg_type: str, seq: int, **fields) -> str:
+def command_line(msg_type: str, message_id: int, **fields) -> str:
     """A framed command line, ready for the wire, without its newline.
 
-    Members are written in call order with `t` and `seq` first, and the CRC
-    goes on last because the protocol requires it to be last -- that is what
-    lets the device find it by scanning backwards instead of parsing first.
+    Members are written in call order with `msg_type` and `message_id` first,
+    and the CRC goes on last because the protocol requires it to be last --
+    that is what lets the device find it by scanning backwards instead of
+    parsing first.
     """
-    body = f'{{"t":"{msg_type}","seq":{seq}'
+    body = f'{{"{Field.MSG_TYPE}":"{msg_type}","{Field.MESSAGE_ID}":{message_id}'
     for key, value in fields.items():
         if value is None:
             continue

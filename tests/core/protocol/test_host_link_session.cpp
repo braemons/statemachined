@@ -34,7 +34,7 @@ struct Host {
   /// DeviceIdentity is copied into the session at construction, so a test that
   /// wants a different board has to say so here rather than assigning after.
   explicit Host(const DeviceIdentity& id) : identity(id), device(sink, identity) {}
-  uint16_t seq = 0;
+  uint16_t message_id = 0;
   uint16_t graph_checksum = 0xFFFF;
   Microseconds now = 0;
 
@@ -67,7 +67,7 @@ struct Host {
     return std::string(buf, n);
   }
 
-  std::string next_seq() { return std::to_string(seq++); }
+  std::string next_message_id() { return std::to_string(message_id++); }
 
   std::string checksum_hex() const {
     char h[4];
@@ -93,7 +93,7 @@ std::string type_of(const std::string& line) {
   const std::string body = line.substr(0, line.size() - 1);
   JsonObject m(body.data(), body.size());
   JsonSpan t;
-  if (!m.str("t", &t)) return "";
+  if (!m.str("msg_type", &t)) return "";
   return std::string(t.p, t.n);
 }
 
@@ -108,7 +108,7 @@ std::string field(const std::string& line, const char* key) {
 }
 
 void greet(Host& h) {
-  const auto r = h.send(R"({"t":"hello","seq":)" + h.next_seq() +
+  const auto r = h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
                         R"(,"proto":1,"seed":"0123456789ABCDEF")");
   REQUIRE(r.size() == 1);
   REQUIRE(type_of(r[0]) == "hello_ack");
@@ -117,26 +117,27 @@ void greet(Host& h) {
 /// wait --(500 ms)--> Hit, with a line raised on entry to wait.
 void upload_minimal(Host& h) {
   h.graph_checksum = 0xFFFF;
-  auto r = h.send(R"({"t":"graph_begin","seq":)" + h.next_seq() +
+  auto r = h.send(R"({"msg_type":"graph_begin","message_id":)" + h.next_message_id() +
                       R"(,"graph_version":7,"n_states":2,"entry":0)",
                   true);
   REQUIRE(type_of(r[0]) == "ack");
-  r = h.send(R"({"t":"graph_dist","seq":)" + h.next_seq() + R"(,"i":0,"kind":"fixed","a":500)",
+  r = h.send(R"({"msg_type":"graph_dist","message_id":)" + h.next_message_id() +
+                 R"(,"i":0,"kind":"fixed","a":500)",
              true);
   REQUIRE(type_of(r[0]) == "ack");
-  r = h.send(R"({"t":"graph_state","seq":)" + h.next_seq() +
+  r = h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
                  R"(,"i":0,"terminal":null,"timeout":{"dist":0,"target":1})",
              true);
   REQUIRE(type_of(r[0]) == "ack");
-  r = h.send(R"({"t":"graph_action","seq":)" + h.next_seq() +
+  r = h.send(R"({"msg_type":"graph_action","message_id":)" + h.next_message_id() +
                  R"(,"on":"entry","line":2,"kind":"high")",
              true);
   REQUIRE(type_of(r[0]) == "ack");
-  r = h.send(
-      R"({"t":"graph_state","seq":)" + h.next_seq() + R"(,"i":1,"terminal":1,"timeout":null)",
-      true);
+  r = h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
+                 R"(,"i":1,"terminal":1,"timeout":null)",
+             true);
   REQUIRE(type_of(r[0]) == "ack");
-  r = h.send(R"({"t":"graph_end","seq":)" + h.next_seq() +
+  r = h.send(R"({"msg_type":"graph_end","message_id":)" + h.next_message_id() +
              R"(,"n_transitions":0,"n_output_actions":1,"checksum":")" + h.checksum_hex() +
              R"(")");
   REQUIRE(r.size() == 1);
@@ -149,7 +150,7 @@ TEST_CASE("nothing is answered before a hello") {
   // Every command needs a session seed, and a device running trials without one
   // would be running trials nobody could replay.
   Host h;
-  const auto r = h.send(R"({"t":"ping","seq":1)");
+  const auto r = h.send(R"({"msg_type":"ping","message_id":1)");
   REQUIRE(r.size() == 1);
   CHECK(type_of(r[0]) == "error");
   CHECK(field(r[0], "code") == "not_ready");
@@ -178,13 +179,13 @@ TEST_CASE("hello reports what the board can hold") {
   CHECK(v == kMaxTransitions);
   CHECK(caps.u32("max_line", &v));
   CHECK(v == kMaxLine);
-  CHECK(field(ack, "req") == "0");
+  CHECK(field(ack, "in_reply_to") == "0");
   CHECK(h.device.state() == LinkState::Idle);
 }
 
 TEST_CASE("a wrong protocol version is refused, not tolerated") {
   Host h;
-  const auto r = h.send(R"({"t":"hello","seq":0,"proto":99,"seed":"1")");
+  const auto r = h.send(R"({"msg_type":"hello","message_id":0,"proto":99,"seed":"1")");
   CHECK(field(r[0], "code") == "bad_proto");
   CHECK(h.device.state() == LinkState::Greeting);
 }
@@ -196,7 +197,7 @@ TEST_CASE("a whole trial: greet, upload, configure, start, run, result") {
   CHECK(h.device.has_graph());
   CHECK(h.device.graph_version() == 7);
 
-  auto r = h.send(R"({"t":"configure","seq":)" + h.next_seq() +
+  auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
                   R"(,"trial_id":193,"graph_version":7,"cap_ms":30000,"start":"serial")");
   REQUIRE(r.size() == 1);
   CHECK(type_of(r[0]) == "armed");
@@ -204,7 +205,8 @@ TEST_CASE("a whole trial: greet, upload, configure, start, run, result") {
   CHECK(field(r[0], "graph_version") == "7");  // both, always
   CHECK(h.device.state() == LinkState::Armed);
 
-  r = h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":193)");
+  r = h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() +
+             R"(,"trial_id":193)");
   REQUIRE(r.size() == 1);
   CHECK(type_of(r[0]) == "started");
   CHECK(h.device.state() == LinkState::Running);
@@ -243,8 +245,9 @@ TEST_CASE("the result's checksum covers every chunk") {
   Host h;
   greet(h);
   upload_minimal(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":1,"graph_version":7)");
-  h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":1)");
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":1,"graph_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":1)");
   const size_t before = h.sink.lines.size();
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
     h.device.advance_trial(0, t);
@@ -273,28 +276,32 @@ TEST_CASE("a path longer than one line is split across chunks") {
   greet(h);
   h.graph_checksum = 0xFFFF;
   // A two-state loop with a short timeout, capped, so the path fills up.
-  h.send(R"({"t":"graph_begin","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"graph_begin","message_id":)" + h.next_message_id() +
              R"(,"graph_version":1,"n_states":3,"entry":0)",
          true);
-  h.send(R"({"t":"graph_dist","seq":)" + h.next_seq() + R"(,"i":0,"kind":"fixed","a":1)", true);
-  h.send(R"({"t":"graph_state","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"graph_dist","message_id":)" + h.next_message_id() +
+             R"(,"i":0,"kind":"fixed","a":1)",
+         true);
+  h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
              R"(,"i":0,"terminal":null,"timeout":{"dist":0,"target":1})",
          true);
-  h.send(R"({"t":"graph_state","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
              R"(,"i":1,"terminal":null,"timeout":{"dist":0,"target":0})",
          true);
-  h.send(R"({"t":"graph_transition","seq":)" + h.next_seq() + R"(,"all":1,"target":2)", true);
-  h.send(
-      R"({"t":"graph_state","seq":)" + h.next_seq() + R"(,"i":2,"terminal":1,"timeout":null)",
-      true);
-  auto r = h.send(R"({"t":"graph_end","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"graph_transition","message_id":)" + h.next_message_id() +
+             R"(,"all":1,"target":2)",
+         true);
+  h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
+             R"(,"i":2,"terminal":1,"timeout":null)",
+         true);
+  auto r = h.send(R"({"msg_type":"graph_end","message_id":)" + h.next_message_id() +
                   R"(,"n_transitions":1,"n_output_actions":0,"checksum":")" + h.checksum_hex() +
                   R"(")");
   REQUIRE(type_of(r[0]) == "graph_ok");
 
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
          R"(,"trial_id":5,"graph_version":1,"cap_ms":200)");
-  h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":5)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":5)");
   const size_t before = h.sink.lines.size();
   for (uint32_t t = 0; t < 5000000u && h.device.state() == LinkState::Running; t += 100)
     h.device.advance_trial(0, t);
@@ -314,10 +321,11 @@ TEST_CASE("a retried command is answered, not re-executed") {
   Host h;
   greet(h);
   upload_minimal(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":9,"graph_version":7)");
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":9,"graph_version":7)");
 
-  const std::string start =
-      h.framed(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":9)");
+  const std::string start = h.framed(R"({"msg_type":"start","message_id":)" +
+                                     h.next_message_id() + R"(,"trial_id":9)");
   const auto first = h.send_raw(start);
   REQUIRE(first.size() == 1);
   CHECK(type_of(first[0]) == "started");
@@ -325,15 +333,15 @@ TEST_CASE("a retried command is answered, not re-executed") {
 
   const auto again = h.send_raw(start);
   REQUIRE(again.size() == 1);
-  CHECK(again[0] == first[0]);  // byte for byte, including its own seq
+  CHECK(again[0] == first[0]);  // byte for byte, including its own message_id
   CHECK(h.device.state() == LinkState::Running);
 }
 
-TEST_CASE("a command with a different seq is not treated as a retry") {
+TEST_CASE("a command with a different message_id is not treated as a retry") {
   Host h;
   greet(h);
-  const auto a = h.send(R"({"t":"ping","seq":)" + h.next_seq());
-  const auto b = h.send(R"({"t":"ping","seq":)" + h.next_seq());
+  const auto a = h.send(R"({"msg_type":"ping","message_id":)" + h.next_message_id());
+  const auto b = h.send(R"({"msg_type":"ping","message_id":)" + h.next_message_id());
   CHECK(type_of(a[0]) == "pong");
   CHECK(type_of(b[0]) == "pong");
   CHECK(a[0] != b[0]);
@@ -345,20 +353,24 @@ TEST_CASE("no trial runs that the device was not confirmed configured for") {
   upload_minimal(h);
 
   SUBCASE("start without configure") {
-    const auto r = h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":1)");
+    const auto r = h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() +
+                          R"(,"trial_id":1)");
     CHECK(field(r[0], "code") == "not_ready");
     CHECK(h.device.state() == LinkState::Idle);
   }
   SUBCASE("start for a different trial than the armed one") {
-    h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":1,"graph_version":7)");
-    const auto r = h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":2)");
+    h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+           R"(,"trial_id":1,"graph_version":7)");
+    const auto r = h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() +
+                          R"(,"trial_id":2)");
     CHECK(field(r[0], "code") == "unknown_trial");
     CHECK(h.device.state() == LinkState::Armed);
   }
   SUBCASE("start when the trial is line-triggered") {
-    h.send(R"({"t":"configure","seq":)" + h.next_seq() +
+    h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
            R"(,"trial_id":1,"graph_version":7,"start":"line")");
-    const auto r = h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":1)");
+    const auto r = h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() +
+                          R"(,"trial_id":1)");
     CHECK(field(r[0], "code") == "not_ready");
   }
 }
@@ -369,7 +381,7 @@ TEST_CASE("configure against a graph the device does not hold is refused") {
   Host h;
   greet(h);
   upload_minimal(h);
-  const auto r = h.send(R"({"t":"configure","seq":)" + h.next_seq() +
+  const auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
                         R"(,"trial_id":1,"graph_version":8)");
   CHECK(field(r[0], "code") == "graph_mismatch");
   CHECK(h.device.state() == LinkState::Idle);
@@ -378,7 +390,7 @@ TEST_CASE("configure against a graph the device does not hold is refused") {
 TEST_CASE("configure before any graph is refused") {
   Host h;
   greet(h);
-  const auto r = h.send(R"({"t":"configure","seq":)" + h.next_seq() +
+  const auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
                         R"(,"trial_id":1,"graph_version":1)");
   CHECK(field(r[0], "code") == "not_ready");
 }
@@ -387,12 +399,13 @@ TEST_CASE("cancel reports what actually happened") {
   Host h;
   greet(h);
   upload_minimal(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":4,"graph_version":7)");
-  h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":4)");
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":4,"graph_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":4)");
   h.device.advance_trial(0, 1000);
 
-  const auto r =
-      h.send(R"({"t":"cancel","seq":)" + h.next_seq() + R"(,"trial_id":4,"reason":"host")");
+  const auto r = h.send(R"({"msg_type":"cancel","message_id":)" + h.next_message_id() +
+                        R"(,"trial_id":4,"reason":"host")");
   REQUIRE(r.size() == 1);
   CHECK(type_of(r[0]) == "cancel_ack");
   CHECK(field(r[0], "outcome") == std::to_string(static_cast<int>(TrialOutcome::Cancelled)));
@@ -416,14 +429,15 @@ TEST_CASE("a cancel that loses the race gets the real outcome back") {
   Host h;
   greet(h);
   upload_minimal(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":6,"graph_version":7)");
-  h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":6)");
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":6,"graph_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":6)");
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
     h.device.advance_trial(0, t);
   REQUIRE(h.device.state() == LinkState::Idle);
 
-  const auto r =
-      h.send(R"({"t":"cancel","seq":)" + h.next_seq() + R"(,"trial_id":6,"reason":"host")");
+  const auto r = h.send(R"({"msg_type":"cancel","message_id":)" + h.next_message_id() +
+                        R"(,"trial_id":6,"reason":"host")");
   // Refused rather than acked: the bridge learns nothing was cancelled.
   CHECK(field(r[0], "code") == "unknown_trial");
 }
@@ -432,9 +446,10 @@ TEST_CASE("only host is a cancel reason the host may give") {
   Host h;
   greet(h);
   upload_minimal(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":4,"graph_version":7)");
-  h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":4)");
-  const auto r = h.send(R"({"t":"cancel","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":4,"graph_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":4)");
+  const auto r = h.send(R"({"msg_type":"cancel","message_id":)" + h.next_message_id() +
                         R"(,"trial_id":4,"reason":"link_lost")");
   CHECK(field(r[0], "code") == "bad_json");
 }
@@ -443,8 +458,9 @@ TEST_CASE("uploading while a trial is armed or running is refused") {
   Host h;
   greet(h);
   upload_minimal(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":1,"graph_version":7)");
-  const auto r = h.send(R"({"t":"graph_begin","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":1,"graph_version":7)");
+  const auto r = h.send(R"({"msg_type":"graph_begin","message_id":)" + h.next_message_id() +
                         R"(,"graph_version":9,"n_states":2,"entry":0)");
   CHECK(field(r[0], "code") == "busy");
   CHECK(h.device.graph_version() == 7);  // untouched
@@ -458,16 +474,16 @@ TEST_CASE("a refused upload leaves the committed graph running") {
   upload_minimal(h);
   REQUIRE(h.device.graph_version() == 7);
 
-  h.send(R"({"t":"graph_begin","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"graph_begin","message_id":)" + h.next_message_id() +
          R"(,"graph_version":9,"n_states":2,"entry":0)");
-  const auto r =
-      h.send(R"({"t":"graph_dist","seq":)" + h.next_seq() + R"(,"i":4,"kind":"fixed","a":1)");
+  const auto r = h.send(R"({"msg_type":"graph_dist","message_id":)" + h.next_message_id() +
+                        R"(,"i":4,"kind":"fixed","a":1)");
   CHECK(field(r[0], "code") == "bad_index");
   CHECK(h.device.has_graph());
   CHECK(h.device.graph_version() == 7);
 
   // And the old graph still runs.
-  const auto c = h.send(R"({"t":"configure","seq":)" + h.next_seq() +
+  const auto c = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
                         R"(,"trial_id":1,"graph_version":7)");
   CHECK(type_of(c[0]) == "armed");
 }
@@ -477,7 +493,8 @@ TEST_CASE("a second hello keeps the committed graph") {
   Host h;
   greet(h);
   upload_minimal(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":1,"graph_version":7)");
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":1,"graph_version":7)");
   REQUIRE(h.device.state() == LinkState::Armed);
 
   greet(h);
@@ -491,18 +508,18 @@ TEST_CASE("a corrupt line is refused whole and named") {
   greet(h);
 
   SUBCASE("a bad crc") {
-    std::string line = h.framed(R"({"t":"ping","seq":3)");
+    std::string line = h.framed(R"({"msg_type":"ping","message_id":3)");
     line[line.size() - 4] = (line[line.size() - 4] == '0') ? '1' : '0';
     const auto r = h.send_raw(line);
     REQUIRE(r.size() == 1);
     CHECK(field(r[0], "code") == "bad_crc");
   }
   SUBCASE("no crc at all") {
-    const auto r = h.send_raw(std::string(R"({"t":"ping","seq":3})") + "\n");
+    const auto r = h.send_raw(std::string(R"({"msg_type":"ping","message_id":3})") + "\n");
     CHECK(field(r[0], "code") == "bad_json");
   }
   SUBCASE("an unknown message type") {
-    const auto r = h.send(R"({"t":"teleport","seq":)" + h.next_seq());
+    const auto r = h.send(R"({"msg_type":"teleport","message_id":)" + h.next_message_id());
     CHECK(field(r[0], "code") == "unknown_type");
   }
   SUBCASE("an overlong line, and the session survives it") {
@@ -513,7 +530,7 @@ TEST_CASE("a corrupt line is refused whole and named") {
     REQUIRE(r.size() == 1);
     CHECK(field(r[0], "code") == "too_long");
     // A burst of noise costs the link one message, not the session.
-    const auto p = h.send(R"({"t":"ping","seq":)" + h.next_seq());
+    const auto p = h.send(R"({"msg_type":"ping","message_id":)" + h.next_message_id());
     CHECK(type_of(p[0]) == "pong");
   }
 }
@@ -528,7 +545,7 @@ TEST_CASE("state_report exposes what a link problem looks like") {
   junk += "\n";
   h.send_raw(junk);
 
-  const auto r = h.send(R"({"t":"state","seq":)" + h.next_seq());
+  const auto r = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
   REQUIRE(r.size() == 1);
   CHECK(type_of(r[0]) == "state_report");
   CHECK(field(r[0], "dropped_lines") == "1");
@@ -549,18 +566,19 @@ TEST_CASE("fail_safe drives every line to its configured level") {
   CHECK(before.set_low == 0xFF);
 
   h.graph_checksum = 0xFFFF;
-  h.send(R"({"t":"graph_begin","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"graph_begin","message_id":)" + h.next_message_id() +
              R"(,"graph_version":3,"n_states":2,"entry":0,"safe":5)",
          true);
-  h.send(R"({"t":"graph_dist","seq":)" + h.next_seq() + R"(,"i":0,"kind":"fixed","a":10)",
+  h.send(R"({"msg_type":"graph_dist","message_id":)" + h.next_message_id() +
+             R"(,"i":0,"kind":"fixed","a":10)",
          true);
-  h.send(R"({"t":"graph_state","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
              R"(,"i":0,"terminal":null,"timeout":{"dist":0,"target":1})",
          true);
-  h.send(
-      R"({"t":"graph_state","seq":)" + h.next_seq() + R"(,"i":1,"terminal":1,"timeout":null)",
-      true);
-  h.send(R"({"t":"graph_end","seq":)" + h.next_seq() +
+  h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
+             R"(,"i":1,"terminal":1,"timeout":null)",
+         true);
+  h.send(R"({"msg_type":"graph_end","message_id":)" + h.next_message_id() +
          R"(,"n_transitions":0,"n_output_actions":0,"checksum":")" + h.checksum_hex() + R"(")");
 
   const OutputUpdate after = h.device.fail_safe();
@@ -575,12 +593,13 @@ TEST_CASE("every reply is a line the bridge can parse") {
   Host h;
   greet(h);
   upload_minimal(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":11,"graph_version":7)");
-  h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":11)");
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":11,"graph_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":11)");
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
     h.device.advance_trial(0, t);
-  h.send(R"({"t":"state","seq":)" + h.next_seq());
-  h.send(R"({"t":"nonsense","seq":)" + h.next_seq());
+  h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
+  h.send(R"({"msg_type":"nonsense","message_id":)" + h.next_message_id());
 
   REQUIRE(h.sink.lines.size() > 10);
   for (const auto& l : h.sink.lines) {
@@ -589,55 +608,56 @@ TEST_CASE("every reply is a line the bridge can parse") {
   }
 }
 
-TEST_CASE("every reply to a command carries the seq it answers") {
+TEST_CASE("every reply to a command carries the message_id it answers") {
   Host h;
   greet(h);
-  const auto r = h.send(R"({"t":"ping","seq":)" + h.next_seq());
-  CHECK(field(r[0], "req") == "1");
-  const auto e = h.send(R"({"t":"nope","seq":)" + h.next_seq());
-  CHECK(field(e[0], "req") == "2");
+  const auto r = h.send(R"({"msg_type":"ping","message_id":)" + h.next_message_id());
+  CHECK(field(r[0], "in_reply_to") == "1");
+  const auto e = h.send(R"({"msg_type":"nope","message_id":)" + h.next_message_id());
+  CHECK(field(e[0], "in_reply_to") == "2");
 }
 
-TEST_CASE("seq 0 is an ordinary sequence number, refusals included") {
-  // It is not a sentinel and cannot be one: seq is a u16 that wraps through
-  // zero, and a bridge's first command of a session is usually numbered 0. A
-  // refusal that dropped `req` for it would leave the bridge unable to tell
-  // which command was refused, and -- worse -- the reply would not be
-  // remembered, so the blind resend the protocol promises is safe would
-  // re-execute instead of being answered from the cache.
+TEST_CASE("message_id 0 is an ordinary identifier, refusals included") {
+  // It is not a sentinel and cannot be one: message_id is a u16 that wraps
+  // through zero, and a bridge's first command of a session is usually
+  // numbered 0. A refusal that dropped `in_reply_to` for it would leave the
+  // bridge unable to tell which command was refused, and -- worse -- the reply
+  // would not be remembered, so the blind resend the protocol promises is safe
+  // would re-execute instead of being answered from the cache.
   Host h;
 
-  SUBCASE("a refusal before the session exists names the seq it refuses") {
-    const auto r = h.send(R"({"t":"ping","seq":0)");
+  SUBCASE("a refusal before the session exists names the message_id it refuses") {
+    const auto r = h.send(R"({"msg_type":"ping","message_id":0)");
     REQUIRE(r.size() == 1);
     CHECK(type_of(r[0]) == "error");
     CHECK(field(r[0], "code") == "not_ready");
-    CHECK(field(r[0], "req") == "0");
+    CHECK(field(r[0], "in_reply_to") == "0");
   }
 
   SUBCASE("and a resend of it is answered from the cache, not re-executed") {
-    greet(h);                                        // hello is seq 0 ...
-    h.send(R"({"t":"ping","seq":)" + h.next_seq());  // ... so move the guard off it
+    greet(h);  // hello is message_id 0 ...
+    h.send(R"({"msg_type":"ping","message_id":)" +
+           h.next_message_id());  // ... so move the guard off it
     const std::string refused =
-        h.framed(R"({"t":"cancel","seq":0,"trial_id":9,"reason":"host")");
+        h.framed(R"({"msg_type":"cancel","message_id":0,"trial_id":9,"reason":"host")");
     const auto first = h.send_raw(refused);
     REQUIRE(first.size() == 1);
     CHECK(type_of(first[0]) == "error");
-    CHECK(field(first[0], "req") == "0");
+    CHECK(field(first[0], "in_reply_to") == "0");
 
     const auto again = h.send_raw(refused);
     REQUIRE(again.size() == 1);
     CHECK(again[0] == first[0]);  // byte for byte, from the cache
   }
 
-  SUBCASE("a line with no seq at all still carries no req, since there is none") {
-    // The other half of the same rule: `req` is omitted only when the line
+  SUBCASE("a line with no message_id carries no in_reply_to, since there is none") {
+    // The other half of the same rule: `in_reply_to` is omitted only when the line
     // genuinely never named itself.
     greet(h);
-    const auto r = h.send(R"({"t":"ping")");
+    const auto r = h.send(R"({"msg_type":"ping")");
     REQUIRE(r.size() == 1);
     CHECK(field(r[0], "code") == "bad_json");
-    CHECK(r[0].find(R"("req":)") == std::string::npos);
+    CHECK(r[0].find(R"("in_reply_to":)") == std::string::npos);
   }
 }
 
@@ -649,8 +669,10 @@ TEST_CASE("a lost link cancels the trial in flight and lowers what it raised") {
   Host h;
   greet(h);
   upload_minimal(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":9,"graph_version":7)");
-  const auto started = h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":9)");
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":9,"graph_version":7)");
+  const auto started =
+      h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":9)");
   REQUIRE(type_of(started[0]) == "started");
   REQUIRE(h.device.state() == LinkState::Running);
 
@@ -665,16 +687,18 @@ TEST_CASE("link loss and fail-safe discard un-applied entry actions") {
   Host h;
   greet(h);
   upload_minimal(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":9,"graph_version":7)");
-  h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":9)");
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":9,"graph_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":9)");
 
   h.device.link_lost(1000);
   const OutputUpdate after_link_loss = h.device.advance_trial(0, 2000);
   CHECK((after_link_loss.set_high & (1u << 2)) == 0);
 
   greet(h);
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":10,"graph_version":7)");
-  h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":10)");
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":10,"graph_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":10)");
   h.device.fail_safe();
   const OutputUpdate after_fail_safe = h.device.advance_trial(0, 3000);
   CHECK((after_fail_safe.set_high & (1u << 2)) == 0);
@@ -692,7 +716,7 @@ TEST_CASE("a lost link keeps the committed graph, so a reconnect costs no re-upl
 
   // The bridge comes back. hello is what brings a fresh session seed; the graph
   // is already there.
-  const auto r = h.send(R"({"t":"hello","seq":)" + h.next_seq() +
+  const auto r = h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
                         R"(,"proto":1,"seed":"FEDCBA9876543210")");
   REQUIRE(type_of(r[0]) == "hello_ack");
   CHECK(field(r[0], "graph_version") == "7");
@@ -709,7 +733,7 @@ TEST_CASE("state_report carries the scan health the board measured") {
   sh.worst_gap = 2;
   h.device.report_scan_health(sh);
 
-  const auto r = h.send(R"({"t":"state","seq":)" + h.next_seq());
+  const auto r = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
   REQUIRE(r.size() == 1);
   REQUIRE(type_of(r[0]) == "state_report");
   CHECK(r[0].find(R"("scan":{"hz":9871,"overruns":4,"worst_gap":2})") != std::string::npos);
@@ -727,8 +751,10 @@ TEST_CASE("the entry state's output actions reach the caller of advance_trial") 
   Host h;
   greet(h);
   upload_minimal(h);  // raises line 2 on entering the first state
-  h.send(R"({"t":"configure","seq":)" + h.next_seq() + R"(,"trial_id":4,"graph_version":7)");
-  const auto started = h.send(R"({"t":"start","seq":)" + h.next_seq() + R"(,"trial_id":4)");
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":4,"graph_version":7)");
+  const auto started =
+      h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":4)");
   REQUIRE(type_of(started[0]) == "started");
 
   const OutputUpdate first = h.device.advance_trial(0, 1000);

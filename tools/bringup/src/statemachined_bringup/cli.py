@@ -19,6 +19,7 @@ import time
 from . import __version__
 from .board import high_lines, word_bits
 from .link import DEFAULT_BAUD, DEFAULT_TARGET, DEFAULT_TIMEOUT, Link
+from .messages import ErrorCode, Field, MsgType
 from .session import Session, Timeout, random_seed
 from .wire import DeviceError, WireError, parse_reply, statemachined_line
 
@@ -39,13 +40,13 @@ def note(text: str) -> None:
 
 
 def show_unsolicited(msg: dict) -> None:
-    t = msg.get("t")
-    if t == "log":
+    t = msg.get(Field.MSG_TYPE)
+    if t == MsgType.LOG:
         note(f"  log [{msg.get('level', '?')}] {msg.get('message', '')}")
-    elif t == "event":
+    elif t == MsgType.EVENT:
         note(f"  event us={msg.get('us')} word={msg.get('word')}")
     else:
-        note(f"  {t} {json.dumps({k: v for k, v in msg.items() if k != 'crc'})}")
+        note(f"  {t} {json.dumps({k: v for k, v in msg.items() if k != Field.CRC})}")
 
 
 def show_junk(line: str, why: str) -> None:
@@ -61,8 +62,8 @@ def seconds(us) -> str:
 
 
 KNOWN_STATE_KEYS = {
-    "t", "seq", "req", "crc", "link_state", "has_graph", "graph_version", "trial_id",
-    "running", "current_state", "up_us", "dropped_lines", "bad_lines", "io", "scan",
+    *Field, "link_state", "has_graph", "graph_version", "trial_id", "running",
+    "current_state", "up_us", "dropped_lines", "bad_lines", "io", "scan",
 }
 
 
@@ -261,7 +262,7 @@ def cmd_raw(args, session: Session) -> int:
     if body.endswith("}"):
         raise SystemExit(
             "error: pass the body *without* its closing brace, e.g.\n"
-            "       raw '{\"t\":\"state\",\"seq\":2'\n"
+            "       raw '{\"msg_type\":\"state\",\"message_id\":2'\n"
             "       The crc member is appended here and must be last."
         )
     session.link.write_line(statemachined_line(body))
@@ -371,7 +372,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_report)
 
     s = sub.add_parser("raw", help="send a hand-written body; the crc is added here")
-    s.add_argument("body", help='message without its closing brace, e.g. \'{"t":"state","seq":2\'')
+    s.add_argument("body", help='message without its closing brace, e.g. \'{"msg_type":"state","message_id":2\'')
     s.set_defaults(func=cmd_raw)
 
     s = sub.add_parser("monitor", help="read lines and check their CRCs, sending nothing")
@@ -397,7 +398,7 @@ def main(argv: list[str] | None = None) -> int:
             return args.func(args, session)
     except DeviceError as exc:
         note(f"device refused it: {exc}")
-        if exc.code == "not_ready" and exc.context == "hello":
+        if exc.code == ErrorCode.NOT_READY and exc.context == "hello":
             note("       The device answers nothing but `hello` before a session exists.")
             note("       Add --hello to greet it first -- which ends demo mode until reset.")
         return 1

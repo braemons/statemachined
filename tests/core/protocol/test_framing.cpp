@@ -80,28 +80,28 @@ TEST_CASE("hex round-trips and refuses what is not hex") {
 }
 
 TEST_CASE("finish_frame writes the tail the protocol specifies") {
-  const std::string line = framed(R"({"t":"ping","seq":41)", false);
-  CHECK(line == R"({"t":"ping","seq":41,"crc":"C083"})");
+  const std::string line = framed(R"({"msg_type":"ping","message_id":41)", false);
+  CHECK(line == R"({"msg_type":"ping","message_id":41,"crc":"A3CE"})");
 
   // And the CRC covers the payload and not the tail, which is the whole point
   // of pinning crc as the last member.
-  CHECK(crc16_ccitt(R"({"t":"ping","seq":41)", 20) == 0xC083);
+  CHECK(crc16_ccitt(R"({"msg_type":"ping","message_id":41)", 34) == 0xA3CE);
 }
 
 TEST_CASE("a well-formed line verifies and names the covered bytes") {
-  const std::string line = framed(R"({"t":"ping","seq":41)", false);
+  const std::string line = framed(R"({"msg_type":"ping","message_id":41)", false);
   Frame f;
   REQUIRE(verify_frame(line.data(), line.size(), &f) == FrameError::None);
-  CHECK(std::string(f.covered, f.covered_len) == R"({"t":"ping","seq":41)");
+  CHECK(std::string(f.covered, f.covered_len) == R"({"msg_type":"ping","message_id":41)");
   CHECK(f.covered_len == line.size() - 14);
 }
 
 TEST_CASE("a corrupted line is refused rather than partly believed") {
-  std::string line = framed(R"({"t":"cancel","seq":9,"trial_id":193)", false);
+  std::string line = framed(R"({"msg_type":"cancel","message_id":9,"trial_id":193)", false);
   REQUIRE(verify_frame(line.data(), line.size(), nullptr) == FrameError::None);
 
   SUBCASE("a flipped payload byte") {
-    line[15] = '8';  // somewhere inside the seq
+    line[15] = '8';  // somewhere inside the message_id
     CHECK(verify_frame(line.data(), line.size(), nullptr) == FrameError::BadCrc);
   }
   SUBCASE("a flipped crc digit") {
@@ -113,11 +113,11 @@ TEST_CASE("a corrupted line is refused rather than partly believed") {
     CHECK(verify_frame(line.data(), line.size(), nullptr) == FrameError::NoCrc);
   }
   SUBCASE("no crc member at all") {
-    const std::string bare = R"({"t":"ping","seq":41})";
+    const std::string bare = R"({"msg_type":"ping","message_id":41})";
     CHECK(verify_frame(bare.data(), bare.size(), nullptr) == FrameError::NoCrc);
   }
   SUBCASE("not an object") {
-    const std::string arr = R"(["t","ping","crc":"C083"])";
+    const std::string arr = R"(["msg_type","ping","crc":"C083"])";
     CHECK(verify_frame(arr.data(), arr.size(), nullptr) == FrameError::NotObject);
     CHECK(verify_frame("", 0, nullptr) == FrameError::NotObject);
     CHECK(verify_frame("{}", 2, nullptr) == FrameError::NotObject);
@@ -129,25 +129,25 @@ TEST_CASE("a crc member that is not last is not found") {
   // from the end of the line. A sender that puts it elsewhere is refused rather
   // than accommodated -- accommodating it would mean parsing before verifying,
   // which is the ordering this layer exists to prevent.
-  const std::string s = R"({"crc":"C083","t":"ping","seq":41})";
+  const std::string s = R"({"crc":"C083","msg_type":"ping","message_id":41})";
   CHECK(verify_frame(s.data(), s.size(), nullptr) == FrameError::NoCrc);
 }
 
 TEST_CASE("the reader splits a stream into lines") {
-  const std::string stream = framed(R"({"t":"ping","seq":1)") +
-                             framed(R"({"t":"ping","seq":2)") +
-                             framed(R"({"t":"ping","seq":3)");
+  const std::string stream = framed(R"({"msg_type":"ping","message_id":1)") +
+                             framed(R"({"msg_type":"ping","message_id":2)") +
+                             framed(R"({"msg_type":"ping","message_id":3)");
   const auto lines = read_all(stream);
   REQUIRE(lines.size() == 3);
   for (const auto& l : lines) {
     CHECK(l.status == FrameError::None);
     CHECK(verify_frame(l.text.data(), l.text.size(), nullptr) == FrameError::None);
   }
-  CHECK(lines[1].text.find(R"("seq":2)") != std::string::npos);
+  CHECK(lines[1].text.find(R"("message_id":2)") != std::string::npos);
 }
 
 TEST_CASE("a trailing carriage return is ignored") {
-  std::string line = framed(R"({"t":"ping","seq":41)", false);
+  std::string line = framed(R"({"msg_type":"ping","message_id":41)", false);
   const auto lines = read_all(line + "\r\n");
   REQUIRE(lines.size() == 1);
   CHECK(lines[0].status == FrameError::None);
@@ -155,7 +155,8 @@ TEST_CASE("a trailing carriage return is ignored") {
 }
 
 TEST_CASE("an empty line is not a message and not an error") {
-  const auto lines = read_all("\n\r\n\n" + framed(R"({"t":"ping","seq":1)") + "\n\n");
+  const auto lines =
+      read_all("\n\r\n\n" + framed(R"({"msg_type":"ping","message_id":1)") + "\n\n");
   REQUIRE(lines.size() == 1);
   CHECK(lines[0].status == FrameError::None);
 }
@@ -164,21 +165,21 @@ TEST_CASE("an overlong line is discarded through the next newline") {
   // And crucially the message *after* it still arrives: a burst of noise must
   // cost the link one message, not the session.
   std::string noise(200, 'x');
-  const std::string good = framed(R"({"t":"ping","seq":7)");
+  const std::string good = framed(R"({"msg_type":"ping","message_id":7)");
   const auto lines = read_all(noise + "\n" + good, 64);
   REQUIRE(lines.size() == 2);
   CHECK(lines[0].status == FrameError::TooLong);
   CHECK(lines[0].text.empty());  // nothing partial is handed up
   CHECK(lines[1].status == FrameError::None);
-  CHECK(lines[1].text.find(R"("seq":7)") != std::string::npos);
+  CHECK(lines[1].text.find(R"("message_id":7)") != std::string::npos);
 }
 
 TEST_CASE("a non-ASCII byte fails the line, not the session") {
-  std::string bad = R"({"t":"log","m":")";
+  std::string bad = R"({"msg_type":"log","m":")";
   bad += static_cast<char>(0xC3);
   bad += static_cast<char>(0xA9);
   bad += "\"}\n";
-  const std::string good = framed(R"({"t":"ping","seq":7)");
+  const std::string good = framed(R"({"msg_type":"ping","message_id":7)");
   const auto lines = read_all(bad + good);
   REQUIRE(lines.size() == 2);
   CHECK(lines[0].status == FrameError::NonAscii);
@@ -199,7 +200,7 @@ TEST_CASE("dropped lines are counted so a bad link is visible") {
 TEST_CASE("a completed line survives until the next byte") {
   char buf[64];
   LineReader r(buf, sizeof(buf));
-  const std::string line = framed(R"({"t":"ping","seq":1)");
+  const std::string line = framed(R"({"msg_type":"ping","message_id":1)");
   size_t i = 0;
   for (; i < line.size(); ++i)
     if (r.feed(line[i])) break;
@@ -208,12 +209,12 @@ TEST_CASE("a completed line survives until the next byte") {
   CHECK(verify_frame(first.data(), first.size(), nullptr) == FrameError::None);
 
   // Feeding the next message must not append to it.
-  const std::string second = framed(R"({"t":"ping","seq":2)");
+  const std::string second = framed(R"({"msg_type":"ping","message_id":2)");
   bool done = false;
   for (char c : second) done = r.feed(c);
   REQUIRE(done);
-  CHECK(std::string(r.line(), r.len()).find(R"("seq":2)") != std::string::npos);
-  CHECK(std::string(r.line(), r.len()).find(R"("seq":1)") == std::string::npos);
+  CHECK(std::string(r.line(), r.len()).find(R"("message_id":2)") != std::string::npos);
+  CHECK(std::string(r.line(), r.len()).find(R"("message_id":1)") == std::string::npos);
 }
 
 TEST_CASE("reset abandons a partial line") {
@@ -222,20 +223,20 @@ TEST_CASE("reset abandons a partial line") {
   // two sessions' bytes into one message.
   char buf[64];
   LineReader r(buf, sizeof(buf));
-  for (char c : std::string(R"({"t":"pin)")) CHECK_FALSE(r.feed(c));
+  for (char c : std::string(R"({"msg_type":"pin)")) CHECK_FALSE(r.feed(c));
   r.reset();
   CHECK(r.len() == 0);
   CHECK(r.status() == FrameError::None);
 
   bool done = false;
-  for (char c : framed(R"({"t":"ping","seq":1)")) done = r.feed(c);
+  for (char c : framed(R"({"msg_type":"ping","message_id":1)")) done = r.feed(c);
   REQUIRE(done);
   CHECK(verify_frame(r.line(), r.len(), nullptr) == FrameError::None);
 }
 
 TEST_CASE("finish_frame refuses to overflow rather than truncating") {
-  char buf[24];
-  const std::string body = R"({"t":"ping","seq":1)";
+  char buf[40];
+  const std::string body = R"({"msg_type":"ping","message_id":1)";
   memcpy(buf, body.data(), body.size());
   CHECK(finish_frame(buf, body.size(), sizeof(buf), true) == 0);
 }

@@ -46,6 +46,7 @@ add_library(statemachined_core
   firmware/core/protocol/graph_builder.cpp
   firmware/core/protocol/host_link_session.cpp
   firmware/core/protocol/json.cpp
+  firmware/core/protocol/msg_type.cpp
 )
 target_link_libraries(statemachined_core PUBLIC statemachined_engine)
 target_compile_options(statemachined_core PRIVATE -Wall -Wextra -Wpedantic -Werror)

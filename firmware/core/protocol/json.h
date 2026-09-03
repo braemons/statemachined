@@ -152,10 +152,12 @@ class JsonWriter {
  public:
   JsonWriter(char* buf, size_t cap) : buf_(buf), cap_(cap) {}
 
-  /// `{"t":"<type>","seq":<seq>` -- every message begins with these two.
-  void begin(const char* type, uint16_t seq);
-  /// The seq of the command being answered. Unsolicited messages omit it.
-  void req(uint16_t seq);
+  /// `{"msg_type":"<name>","message_id":<id>` -- every message begins with
+  /// these two. Pass msg_type_name(MsgType::...) rather than a literal.
+  void begin(const char* msg_type, uint16_t message_id);
+  /// The message_id of the command being answered. Unsolicited messages omit
+  /// it, and so does a refusal of a line that never carried one.
+  void in_reply_to(uint16_t message_id);
 
   void key_u32(const char* k, uint32_t v);
   void key_i32(const char* k, int32_t v);

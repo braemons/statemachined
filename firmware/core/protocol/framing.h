@@ -38,7 +38,7 @@ struct Frame {
 FrameError verify_frame(const char* line, size_t len, Frame* out);
 
 /// Close an outgoing message. `buf[0..len)` holds the object *without* its
-/// closing brace -- `{"t":"pong","seq":16` -- and this appends
+/// closing brace -- `{"msg_type":"pong","message_id":16` -- and this appends
 /// `,"crc":"XXXX"}` and, if `newline`, the terminator. Returns 0 if the result
 /// would not fit in `cap`, which is a caller bug rather than a wire condition:
 /// every message the firmware emits is sized to fit kMaxLine by construction.

@@ -5,8 +5,8 @@
 > way round.
 
 The link between the **bridge** (a host process) and the **device** (firmware on
-a microcontroller). USB CDC, newline-delimited JSON, a sequence number and a
-CRC, as [`PLAN.md`](PLAN.md) specifies.
+a microcontroller). USB CDC, newline-delimited JSON, a per-line identifier and
+a CRC, as [`PLAN.md`](PLAN.md) specifies.
 
 Everything above the framing is a consequence of two constraints that are worth
 stating before the tables, because most of the odd-looking decisions below come
@@ -34,7 +34,7 @@ before the `\n` is accepted and ignored, so a terminal program on the other end
 does not break the link.
 
 ```
-{"t":"ping","seq":41,"crc":"C083"}\n
+{"msg_type":"ping","message_id":41,"crc":"A3CE"}\n
 ```
 
 **Rules**
@@ -45,7 +45,7 @@ does not break the link.
 | Line length | At most `max_line` bytes including the `\n`. The device reports its own limit in `hello_ack`; the reference board's is **512** |
 | Object depth | At most 4. A conforming message never needs more |
 | Unknown members | **Ignored**, on both sides. This is how the protocol gains fields without a version bump |
-| Unknown `t` | Answered with `error` / `unknown_type`. Never silently dropped |
+| Unknown `msg_type` | Answered with `error` / `unknown_type`. Never silently dropped |
 | Member order | Free, **except** `crc`, which is always last |
 
 A line longer than `max_line`, or one containing no `\n` after `max_line` bytes,
@@ -61,8 +61,8 @@ prevent.
 the bytes of the line **preceding** the literal `,"crc":`.
 
 ```
-{"t":"ping","seq":41,"crc":"C083"}
-└ covered by the CRC ┘└ not covered ┘
+{"msg_type":"ping","message_id":41,"crc":"A3CE"}
+└       covered by the CRC       ┘└not covered ┘
 ```
 
 `crc` is required to be the final member precisely so that the receiver can find
@@ -71,28 +71,36 @@ everything before it, compare. That costs one pass and no buffer, which matters
 on the device and costs the host nothing.
 
 A message whose CRC does not match is answered with `error` / `bad_crc` naming
-the `seq` if one could be read, and is otherwise dropped. **It is never acted
+the `message_id` if one could be read, and is otherwise dropped. **It is never acted
 on**, not even partially.
 
 A CRC is not security and is not claimed to be. It catches the failure that
 actually happens on a USB CDC link — a truncated or spliced line after a
 re-enumeration — early enough that a corrupt graph is refused instead of run.
 
-### 1.2 `seq`
+### 1.2 `message_id`
 
 An unsigned 16-bit counter, **independent per direction**, incremented by one
 for every line sent and wrapping through zero. It exists for link-level retry
 and for nothing else; trial attribution is `trial_id`'s job, and the two are
 never conflated.
 
-- Every device reply to a host command carries `req` — the `seq` of the command
-  it answers — in addition to its own `seq`.
-- Unsolicited device messages (`event`, `log`, and `result_*`) carry no `req`.
+> This field was called `seq` until M3, and the name was the problem: it
+> advertised a *sequence*, and readers reasonably expected ordering from it.
+> This protocol provides none — a gap is explicitly not an error, and nothing
+> anywhere waits for a lower number to arrive first. What the field actually
+> does is identify one line, so that a resend of it can be recognised as one.
+> It is named for that job now. No bridge shipped with the old name; `proto`
+> stays **1**.
+
+- Every device reply to a host command carries `in_reply_to` — the `message_id` of the command
+  it answers — in addition to its own `message_id`.
+- Unsolicited device messages (`event`, `log`, and `result_*`) carry no `in_reply_to`.
 - **Every host command gets exactly one reply**, including each message of a
   graph upload. That is what makes a retry decidable: the bridge resends when it
   did not get one, and needs no rule per message type.
 
-- A `seq` equal to **the one the device last answered** makes it repeat that
+- A `message_id` equal to **the one the device last answered** makes it repeat that
   answer verbatim and perform no action. So a host command is idempotent under
   retry and the bridge can resend blindly after a timeout instead of reasoning
   about whether the device got it. A re-executed `start` would run a second
@@ -104,7 +112,7 @@ never conflated.
   nothing that the one-deep case does not already cover. An older duplicate is
   therefore re-executed rather than deduplicated; the bridge must not have two
   commands outstanding.
-- A gap in `seq` is **not** an error. USB CDC does not lose bytes in the middle
+- A gap in `message_id` is **not** an error. USB CDC does not lose bytes in the middle
   of a session, and treating a gap as a fault would turn a cosmetic problem into
   a dropped trial. Gaps are reported in `state` for diagnosis.
 
@@ -137,7 +145,7 @@ drives every output to its safe level. It does not clear the committed graph:
 reconnecting the bridge must not cost a re-upload.
 
 ```json
-{"t":"hello","seq":0,"proto":1,"seed":"0123456789ABCDEF","crc":"...."}
+{"msg_type":"hello","message_id":0,"proto":1,"seed":"0123456789ABCDEF","crc":"...."}
 ```
 
 | Field | Type | |
@@ -175,7 +183,7 @@ paradigm it was already running.
 #### `graph_begin`
 
 ```json
-{"t":"graph_begin","seq":1,"graph_version":7,"n_states":4,"entry":0,
+{"msg_type":"graph_begin","message_id":1,"graph_version":7,"n_states":4,"entry":0,
  "invert":0,"enable":4294967295,"safe":0,"debounce_ms":[0,2,2,0],"crc":"...."}
 ```
 
@@ -195,7 +203,7 @@ One entry of the shared distribution pool. Timeouts and holds refer to it by
 index, so a graph reuses one distribution everywhere it means the same thing.
 
 ```json
-{"t":"graph_dist","seq":2,"i":0,"kind":"uniform","a":300,"b":700,"crc":"...."}
+{"msg_type":"graph_dist","message_id":2,"i":0,"kind":"uniform","a":300,"b":700,"crc":"...."}
 ```
 
 | `kind` | `a` | `b` | `c` | `opts` / `weights` |
@@ -212,7 +220,7 @@ a dropped message from a silently mis-indexed graph into a refusal.
 #### `graph_state`
 
 ```json
-{"t":"graph_state","seq":6,"i":1,"terminal":null,
+{"msg_type":"graph_state","message_id":6,"i":1,"terminal":null,
  "timeout":{"dist":0,"target":2},"crc":"...."}
 ```
 
@@ -225,7 +233,7 @@ a dropped message from a silently mis-indexed graph into a refusal.
 #### `graph_transition`
 
 ```json
-{"t":"graph_transition","seq":7,"all":3,"any":0,"none":8,
+{"msg_type":"graph_transition","message_id":7,"all":3,"any":0,"none":8,
  "target":2,"hold":1,"level":false,"crc":"...."}
 ```
 
@@ -245,7 +253,7 @@ tie-break an experimenter can reason about from reading the graph.
 #### `graph_action`
 
 ```json
-{"t":"graph_action","seq":8,"on":"entry","line":2,"kind":"pulse","ms":50,"crc":"...."}
+{"msg_type":"graph_action","message_id":8,"on":"entry","line":2,"kind":"pulse","ms":50,"crc":"...."}
 ```
 
 | Field | Type | |
@@ -294,7 +302,7 @@ a graph forgot one is not a failure mode this protocol admits.
 #### `graph_end`
 
 ```json
-{"t":"graph_end","seq":40,"n_transitions":6,"n_output_actions":5,
+{"msg_type":"graph_end","message_id":40,"n_transitions":6,"n_output_actions":5,
  "checksum":"<crc16>","crc":"...."}
 ```
 
@@ -317,7 +325,7 @@ failed.
 The per-trial message. Arms the device for exactly one trial.
 
 ```json
-{"t":"configure","seq":41,"trial_id":193,"graph_version":7,"cap_ms":30000,
+{"msg_type":"configure","message_id":41,"trial_id":193,"graph_version":7,"cap_ms":30000,
  "start":"serial","patch":[{"i":0,"a":250,"b":900}],"crc":"...."}
 ```
 
@@ -338,10 +346,10 @@ Answered with `armed`, or `error`.
 ### 3.4 `start`, `cancel`, `ping`, `state`
 
 ```json
-{"t":"start","seq":42,"trial_id":193,"crc":"...."}
-{"t":"cancel","seq":43,"trial_id":193,"reason":"host","crc":"...."}
-{"t":"ping","seq":44,"crc":"...."}
-{"t":"state","seq":45,"crc":"...."}
+{"msg_type":"start","message_id":42,"trial_id":193,"crc":"...."}
+{"msg_type":"cancel","message_id":43,"trial_id":193,"reason":"host","crc":"...."}
+{"msg_type":"ping","message_id":44,"crc":"...."}
+{"msg_type":"state","message_id":45,"crc":"...."}
 ```
 
 `start` is refused unless the device is armed for that `trial_id` and the
@@ -369,7 +377,7 @@ inspection only — it is never in a trial's critical path.
 ### 4.1 `hello_ack`
 
 ```json
-{"t":"hello_ack","seq":0,"req":0,"proto":1,"board":"uno_r4_minima",
+{"msg_type":"hello_ack","message_id":0,"in_reply_to":0,"proto":1,"board":"uno_r4_minima",
  "fw":"0.1.0","n_input_lines":8,"n_output_lines":8,"scan_hz":10000,
  "has_graph":true,"graph_version":7,
  "caps":{"max_line":512,"max_states":32,"max_transitions":64,
@@ -395,7 +403,7 @@ bridge that dropped its link knows whether it has to re-upload.
 ### 4.2 `armed`
 
 ```json
-{"t":"armed","seq":1,"req":41,"trial_id":193,"graph_version":7,"crc":"...."}
+{"msg_type":"armed","message_id":1,"in_reply_to":41,"trial_id":193,"graph_version":7,"crc":"...."}
 ```
 
 Both fields, always. This is the confirmation that `start` requires and it is
@@ -414,13 +422,13 @@ result_end
 ```
 
 ```json
-{"t":"result_begin","seq":9,"trial_id":193,"outcome":1,"cancel_reason":0,
+{"msg_type":"result_begin","message_id":9,"trial_id":193,"outcome":1,"cancel_reason":0,
  "total_us":1483200,"path_len":5,"truncated":false,"crc":"...."}
 
-{"t":"result_path","seq":10,"trial_id":193,"from":0,
+{"msg_type":"result_path","message_id":10,"trial_id":193,"from":0,
  "p":[[0,"timeout",255,500,0,500120],[1,"transition",2,0,500120,183044]],"crc":"...."}
 
-{"t":"result_end","seq":12,"trial_id":193,"checksum":"<crc16>","crc":"...."}
+{"msg_type":"result_end","message_id":12,"trial_id":193,"checksum":"<crc16>","crc":"...."}
 ```
 
 Each entry of `p` is a fixed six-element array, **not** an object:
@@ -452,10 +460,10 @@ is on the wire so the host never mistakes a truncated path for a complete one.
 ### 4.4 `event`, `error`, `log`, `pong`, `state_report`
 
 ```json
-{"t":"event","seq":13,"us":1483200,"word":6,"crc":"...."}
-{"t":"error","seq":14,"req":41,"code":"bad_graph","message":"...","context":"...","crc":"...."}
-{"t":"log","seq":15,"level":"warn","message":"...","crc":"...."}
-{"t":"pong","seq":16,"req":44,"up_us":90210000,"crc":"...."}
+{"msg_type":"event","message_id":13,"us":1483200,"word":6,"crc":"...."}
+{"msg_type":"error","message_id":14,"in_reply_to":41,"code":"bad_graph","message":"...","context":"...","crc":"...."}
+{"msg_type":"log","message_id":15,"level":"warn","message":"...","crc":"...."}
+{"msg_type":"pong","message_id":16,"in_reply_to":44,"up_us":90210000,"crc":"...."}
 ```
 
 `event` reports the conditioned input word on change. **Off by default and never
@@ -503,7 +511,7 @@ the other two.
 | `bad_crc` | Line CRC mismatch. Nothing was acted on |
 | `too_long` | Line exceeded `max_line`; discarded to the next newline |
 | `bad_json` | Not a parsable object, or deeper than 4 |
-| `unknown_type` | Unrecognised `t` |
+| `unknown_type` | Unrecognised `msg_type` |
 | `bad_proto` | `hello` named a protocol version this firmware does not speak |
 | `not_ready` | The command is legal but not in this state — `start` when not armed, `graph_state` before `graph_begin` |
 | `bad_order` | A graph message arrived out of the order §3.2 requires |

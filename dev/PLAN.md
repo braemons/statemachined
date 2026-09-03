@@ -401,10 +401,10 @@ Both, not one.
 
 ## The wire protocol
 
-USB CDC, **newline-delimited JSON**, with a sequence number and a CRC — as
+USB CDC, **newline-delimited JSON**, with a per-line identifier and a CRC — as
 specified in triald's PLAN.md. The `921600` figure there matters only where a
 UART bridge is in the path; on native USB CDC (all four targets) the baud
-parameter is ignored and throughput is the USB link's. `seq` covers
+parameter is ignored and throughput is the USB link's. `message_id` covers
 link-level retry; `trial_id` covers trial-level attribution. Different jobs, both
 needed.
 
@@ -429,7 +429,7 @@ Full spec lands in `dev/PROTOCOL.md`. The shape:
 | Message | Payload |
 |---|---|
 | `armed` | `{trial_id, graph_version}` — **both**, because a graph edit that did not land would otherwise leave the device confidently running the old paradigm |
-| `result` | `{trial_id, outcome, cancel_reason?, path: [{state_index, entered_us, duration_us, drawn_ms, exit: "timeout"\|"condition"\|"cancel", condition_index?}], reward_ms, seq}` |
+| `result` | `{trial_id, outcome, cancel_reason?, path: [{state_index, entered_us, duration_us, drawn_ms, exit: "timeout"\|"condition"\|"cancel", condition_index?}], reward_ms, message_id}` |
 | `event` | Asynchronous line changes, for monitoring. Off by default; never in the trial's critical path |
 | `error` | `{code, message, context}` |
 | `log` | Free text, rate-limited, never load-bearing |
