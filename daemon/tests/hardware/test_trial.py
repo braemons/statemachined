@@ -29,8 +29,8 @@ DWELL_TOLERANCE_US = 2000
 
 def test_a_graph_commits_and_the_device_reports_holding_it(device, two_state_graph):
     report = device.state()
-    assert report["has_graph"] is True
-    assert report["graph_version"] == two_state_graph.version
+    assert report["graph"]["has_set"] is True
+    assert report["graph"]["set_version"] == two_state_graph.version
 
 
 def test_a_graph_whose_checksum_does_not_match_is_refused(device):
@@ -57,16 +57,16 @@ def test_a_graph_whose_checksum_does_not_match_is_refused(device):
 
     # And the refusal left the previously committed graph alone: a failed
     # upload must not cost the device the paradigm it was already holding.
-    assert device.state()["graph_version"] != 2
+    assert device.state()["graph"]["set_version"] != 2
 
 
 def test_configure_refuses_a_version_the_device_does_not_hold(device, two_state_graph):
     """A graph edit that did not land would otherwise run the old paradigm."""
     error = device.refuse(
-        MsgType.CONFIGURE, trial_id=1, graph_version=two_state_graph.version + 7, cap_ms=1000
+        MsgType.CONFIGURE, trial_id=1, set_version=two_state_graph.version + 7, cap_ms=1000
     )
     assert error.code == ErrorCode.GRAPH_MISMATCH
-    assert error.context == "graph_version"
+    assert error.context == "set_version"
 
 
 def test_start_without_configure_is_refused(device, two_state_graph):
@@ -78,7 +78,7 @@ def test_start_without_configure_is_refused(device, two_state_graph):
 def test_start_with_the_wrong_trial_id_is_refused(device, two_state_graph):
     """No trial runs that the device was not confirmed configured for."""
     armed = device.request(
-        MsgType.CONFIGURE, trial_id=11, graph_version=two_state_graph.version, cap_ms=2000,
+        MsgType.CONFIGURE, trial_id=11, set_version=two_state_graph.version, cap_ms=2000,
         start="serial",
     )
     assert armed[Field.MSG_TYPE] == MsgType.ARMED
@@ -91,10 +91,10 @@ def test_start_with_the_wrong_trial_id_is_refused(device, two_state_graph):
 def test_a_graph_upload_is_refused_while_a_trial_is_armed(device, two_state_graph):
     """Uploading over a graph a trial is armed against would change it underneath."""
     device.request(
-        MsgType.CONFIGURE, trial_id=21, graph_version=two_state_graph.version, cap_ms=2000,
+        MsgType.CONFIGURE, trial_id=21, set_version=two_state_graph.version, cap_ms=2000,
         start="serial",
     )
-    error = device.refuse(MsgType.GRAPH_BEGIN, graph_version=3, n_states=2, entry=0)
+    error = device.refuse(MsgType.SET_BEGIN, set_version=3, n_graphs=1)
     assert error.code == ErrorCode.BUSY
     assert error.context == "graph upload"
 
@@ -111,7 +111,7 @@ def test_a_trial_runs_and_reports_what_it_actually_did(device, two_state_graph):
     4. the rolling checksum over those result lines matches.
     """
     armed = device.request(
-        MsgType.CONFIGURE, trial_id=42, graph_version=two_state_graph.version, cap_ms=5000,
+        MsgType.CONFIGURE, trial_id=42, set_version=two_state_graph.version, cap_ms=5000,
         start="serial",
     )
     assert armed["trial_id"] == 42
@@ -155,7 +155,7 @@ def test_the_lines_a_trial_raised_come_down_when_it_ends(device, two_state_graph
     and low once the terminal state is reached, without the graph saying so.
     """
     device.request(
-        MsgType.CONFIGURE, trial_id=43, graph_version=two_state_graph.version, cap_ms=5000,
+        MsgType.CONFIGURE, trial_id=43, set_version=two_state_graph.version, cap_ms=5000,
         start="serial",
     )
     device.request(MsgType.START, trial_id=43)
@@ -171,7 +171,7 @@ def test_the_lines_a_trial_raised_come_down_when_it_ends(device, two_state_graph
 def test_cancel_stops_a_running_trial_and_says_why(device, two_state_graph):
     """Cancellation is a forced transition through the ordinary exit path."""
     device.request(
-        MsgType.CONFIGURE, trial_id=44, graph_version=two_state_graph.version, cap_ms=5000,
+        MsgType.CONFIGURE, trial_id=44, set_version=two_state_graph.version, cap_ms=5000,
         start="serial",
     )
     device.request(MsgType.START, trial_id=44)
@@ -206,6 +206,6 @@ def test_a_reconnect_does_not_cost_a_re_upload(device, two_state_graph):
     half-finished upload and any armed trial, and leaves the live graph alone.
     """
     ack = device.session.hello()
-    assert ack["has_graph"] is True
-    assert ack["graph_version"] == two_state_graph.version
+    assert ack["has_set"] is True
+    assert ack["set_version"] == two_state_graph.version
     assert device.state()["running"] is False

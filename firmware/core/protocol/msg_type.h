@@ -29,6 +29,8 @@ struct JsonSpan;
 enum class MsgType : uint8_t {
   // Host -> device.
   Hello,
+  SetBegin,
+  SetEnd,
   GraphBegin,
   GraphDist,
   GraphState,
@@ -45,7 +47,7 @@ enum class MsgType : uint8_t {
   // Device -> host.
   HelloAck,
   Ack,
-  GraphOk,
+  SetOk,
   Armed,
   Started,
   CancelAck,

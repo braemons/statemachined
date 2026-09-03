@@ -43,7 +43,7 @@ TEST_CASE("every visit reaches the sink, including the ones the ring drops") {
   c.all_high = bit(0);
   c.target_state = hit;
   b.on(loop, c);
-  b.g.entry = loop;
+  b.entry(loop);
 
   Recorder rec;
   TrialRunner e(b.g);
@@ -75,7 +75,7 @@ TEST_CASE("a machine with no sink records exactly as it did before") {
   const uint8_t wait = b.state();
   const uint8_t ns = b.terminal(TrialOutcome::NotStarted);
   b.timeout(wait, b.fixed(50), ns);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -90,7 +90,7 @@ TEST_CASE("a timeout carries the trial to its terminal state") {
   const uint8_t wait = b.state();
   const uint8_t ns = b.terminal(TrialOutcome::NotStarted);
   b.timeout(wait, b.fixed(500), ns);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner e(b.g);
@@ -115,7 +115,7 @@ TEST_CASE("a single-line transition fires on its rising edge") {
   c.all_high = bit(0);
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner e(b.g);
@@ -143,7 +143,7 @@ TEST_CASE("a transition already true at entry does not fire unless level") {
     c.target_state = hit;
     c.fire_if_true_on_entry = fire_if_true_on_entry;
     b.on(wait, c);
-    b.g.entry = wait;
+    b.entry(wait);
   };
 
   SUBCASE("edge semantics wait for the line to fall first") {
@@ -188,7 +188,7 @@ TEST_CASE("a line that rises between arming and the first scan is an edge") {
   c.all_high = bit(0);
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -211,7 +211,7 @@ TEST_CASE("a combination of TTL lines is one transition") {
   c.none_high = bit(2);          // and the abort line low
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner e(b.g);
@@ -240,7 +240,7 @@ TEST_CASE("any-of fires on whichever line arrives") {
   c.any_high = bit(3) | bit(4);
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -263,7 +263,7 @@ TEST_CASE("hold_ms requires the predicate to stay true") {
   c.target_state = hit;
   c.hold_duration = hold;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -306,7 +306,7 @@ TEST_CASE("declaration order resolves a tie") {
   c.any_high = bit(0) | bit(1);
   c.target_state = second;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -324,7 +324,7 @@ TEST_CASE("outputs a state raised come down when it is left") {
   const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.on_entry(reward, OutputAction{2, OutputActionKind::High, 0});  // the valve
   b.timeout(reward, b.fixed(100), hit);
-  b.g.entry = reward;
+  b.entry(reward);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner e(b.g);
@@ -346,7 +346,7 @@ TEST_CASE("cancel lowers the outputs and names CANCELLED") {
   const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.on_entry(reward, OutputAction{2, OutputActionKind::High, 0});
   b.timeout(reward, b.fixed(10000), hit);
-  b.g.entry = reward;
+  b.entry(reward);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -377,7 +377,7 @@ TEST_CASE("the first terminal decision wins") {
   c.all_high = bit(0);
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -402,7 +402,7 @@ TEST_CASE("the trial cap catches a graph that cannot end") {
   c.all_high = bit(9);  // never raised in this test
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);  // it *looks* fine
 
   TrialRunner e(b.g);
@@ -426,7 +426,7 @@ TEST_CASE("a self-transition resets the timer and redraws the duration") {
   c.all_high = bit(0);
   c.target_state = wait;  // back to itself
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner e(b.g);
@@ -457,7 +457,7 @@ TEST_CASE("the path records every state with its realised duration") {
   const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.timeout(a, b.fixed(200), c);
   b.timeout(c, b.fixed(300), hit);
-  b.g.entry = a;
+  b.entry(a);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -484,7 +484,7 @@ TEST_CASE("a randomised duration is reported and is reproducible") {
   const uint8_t fore = b.state();
   const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.timeout(fore, b.uniform(200, 800), hit);
-  b.g.entry = fore;
+  b.entry(fore);
 
   auto run = [&](uint32_t trial_id) {
     TrialRunner e(b.g);
@@ -514,7 +514,7 @@ TEST_CASE("the path truncates rather than corrupts") {
   c.all_high = bit(0);
   c.target_state = hit;
   b.on(loop, c);
-  b.g.entry = loop;
+  b.entry(loop);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -547,7 +547,7 @@ TEST_CASE("micros() wraparound does not disturb a trial") {
   const uint8_t wait = b.state();
   const uint8_t ns = b.terminal(TrialOutcome::NotStarted);
   b.timeout(wait, b.fixed(500), ns);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0xFFFFFFFF - ms(200);  // wraps mid-trial
@@ -591,7 +591,7 @@ TEST_CASE("a level transition fires on entry even when the input word never move
   c.target_state = hit;
   c.fire_if_true_on_entry = true;
   b.on(held, c);
-  b.g.entry = first;
+  b.entry(first);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -622,7 +622,7 @@ TEST_CASE("entering a state does not let an edge transition fire on a stale pred
   c.target_state = hit;
   c.fire_if_true_on_entry = false;
   b.on(held, c);
-  b.g.entry = first;
+  b.entry(first);
 
   TrialRunner e(b.g);
   uint32_t t = 0;

@@ -25,7 +25,7 @@ TEST_CASE("a run reports the terminal code it reached, not an interpretation") {
   const uint8_t wait = b.state();
   const uint8_t done = b.terminal_code(7);
   b.timeout(wait, b.fixed(10), done);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -45,7 +45,7 @@ TEST_CASE("force_end ends a run through the ordinary exit path") {
   const uint8_t done = b.terminal_code(1);
   b.timeout(hold, b.fixed(10000), done);
   b.on_entry(hold, OutputAction{3, OutputActionKind::High, 0});
-  b.g.entry = hold;
+  b.entry(hold);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -73,7 +73,7 @@ TEST_CASE("the run cap stops a graph that validates but never ends") {
   const uint8_t done = b.terminal_code(1);
   // Reachable on paper, never reached in practice: nothing drives the input.
   b.on(spin, Transition{bit(0), 0, 0, done, kNoRandomDistribution, false});
-  b.g.entry = spin;
+  b.entry(spin);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -92,7 +92,7 @@ TEST_CASE("the same seed gives the same run") {
   const uint8_t wait = b.state();
   const uint8_t done = b.terminal_code(1);
   b.timeout(wait, b.uniform(10, 200), done);
-  b.g.entry = wait;
+  b.entry(wait);
 
   auto run_once = [&](uint64_t seed) {
     StateMachine m(b.g);
@@ -117,7 +117,7 @@ TEST_CASE("every output action kind has a defined effect on the update") {
   b.on_entry(drive, OutputAction{2, OutputActionKind::Toggle, 0});
   b.on_entry(drive, OutputAction{3, OutputActionKind::Pulse, 50});
   b.timeout(drive, b.fixed(10), done);
-  b.g.entry = drive;
+  b.entry(drive);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -155,7 +155,7 @@ TEST_CASE("a pulse shorter than its state comes down on its own width") {
   const uint8_t done = b.terminal_code(1);
   b.on_entry(drive, OutputAction{4, OutputActionKind::Pulse, 20});
   b.timeout(drive, b.fixed(500), done);
-  b.g.entry = drive;
+  b.entry(drive);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -183,7 +183,7 @@ TEST_CASE("a reward pulsed on entering a terminal state still comes down") {
   const uint8_t hit = b.terminal_code(1);
   b.timeout(wait, b.fixed(10), hit);
   b.on_entry(hit, OutputAction{7, OutputActionKind::Pulse, 30});
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -216,7 +216,7 @@ TEST_CASE("toggle is resolved against where the line actually is") {
   const uint8_t done = b.terminal_code(1);
   b.on_entry(a, OutputAction{9, OutputActionKind::Toggle, 0});
   b.timeout(a, b.fixed(10), done);
-  b.g.entry = a;
+  b.entry(a);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -234,6 +234,6 @@ TEST_CASE("a pulse with no width is refused rather than never coming down") {
   const uint8_t done = b.terminal_code(1);
   b.on_entry(a, OutputAction{1, OutputActionKind::Pulse, 0});
   b.timeout(a, b.fixed(10), done);
-  b.g.entry = a;
+  b.entry(a);
   CHECK(validate(b.g) == GraphError::BadPulse);
 }

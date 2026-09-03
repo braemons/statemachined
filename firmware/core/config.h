@@ -6,6 +6,13 @@
 #pragma once
 #include <cstdint>
 
+// How many graphs one set may hold. Sixty bytes of table on the reference
+// board, so this is not where a set's cost is -- the pools below are. A session
+// declares its graphs up front and switches between them by index; see
+// dev/DAEMON.md 3.2.
+#ifndef STATEMACHINED_MAX_GRAPHS
+#define STATEMACHINED_MAX_GRAPHS 20
+#endif
 #ifndef STATEMACHINED_MAX_STATES
 #define STATEMACHINED_MAX_STATES 32
 #endif
@@ -56,21 +63,17 @@
 // The visit ring: a graph may loop, and a long trial must degrade to a
 // truncated path, never a corrupt one.
 //
-// 255 on a rig. The bench image cannot have it: demo mode carries a second
-// TrialRunner, so the path is paid for twice, and 2 x 4080 B on top of demo's
-// own graph runs the Uno R4 Minima into the framework's 8 KB heap at link time.
-// The bench image is the one where that trade is obviously right -- nothing
-// there is recording an experiment -- and `caps.max_path` in hello_ack is how a
-// host learns which build it is talking to, which is what that field is for.
+// It was briefly 64 on the bench image, because demo mode carries a second
+// TrialRunner and 2 x 4080 B would not link. The graph set paid that back: a
+// set is single-buffered, so the staged copy a single graph needed is gone, and
+// both images fit 255 again. Both boards therefore report the same capacities,
+// which is the state worth being in.
 #ifndef STATEMACHINED_MAX_PATH
-#if STATEMACHINED_DEMO
-#define STATEMACHINED_MAX_PATH 64
-#else
 #define STATEMACHINED_MAX_PATH 255
-#endif
 #endif
 
 namespace statemachined {
+constexpr uint8_t kMaxGraphs = STATEMACHINED_MAX_GRAPHS;
 constexpr uint8_t kMaxStates = STATEMACHINED_MAX_STATES;
 constexpr uint8_t kMaxTransitions = STATEMACHINED_MAX_TRANSITIONS;
 constexpr uint8_t kMaxOutputActions = STATEMACHINED_MAX_OUTPUT_ACTIONS;

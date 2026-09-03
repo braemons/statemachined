@@ -124,7 +124,7 @@ def test_state_report_carries_what_bringup_reads_off_it(device):
     for key in ("hz", "overruns", "worst_gap", "tx_stalls"):
         assert isinstance(scan.get(key), int), f"scan.{key}"
 
-    for key in ("link_state", "has_graph", "running", "up_us"):
+    for key in ("link_state", "graph", "running", "up_us"):
         assert key in report, key
     assert isinstance(report["dropped_lines"], int)
     assert isinstance(report["bad_lines"], int)

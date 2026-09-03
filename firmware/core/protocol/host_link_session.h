@@ -20,7 +20,7 @@
 #include <cstdint>
 
 #include "config.h"
-#include "graph/state_graph.h"
+#include "graph/graph_set.h"
 #include "io/wiring.h"
 #include "protocol/framing.h"
 #include "protocol/graph_builder.h"
@@ -159,9 +159,10 @@ class HostLinkSession {
   void set_wiring(const DeviceWiring& w, bool from_host = false);
 
   LinkState state() const { return state_; }
-  bool has_graph() const { return have_graph_; }
-  uint16_t graph_version() const { return live_graph_.version; }
-  const StateGraph& graph() const { return live_graph_; }
+  bool has_set() const { return have_set_; }
+  uint16_t set_version() const { return live_set_.version; }
+  uint8_t graph_count() const { return have_set_ ? live_set_.n_graphs : 0; }
+  const GraphSet& graph_set() const { return live_set_; }
   uint32_t armed_trial_id() const { return armed_trial_id_; }
 
   /// Tell the session how the scan loop is doing, for state_report. Set by
@@ -188,8 +189,8 @@ class HostLinkSession {
   // One handler per host command. Each is responsible for sending exactly one
   // reply, which is what makes a retry decidable for the bridge.
   void on_hello(const JsonObject& m, uint16_t message_id);
-  void on_graph_message(const JsonObject& m, JsonSpan covered, uint16_t message_id,
-                        MsgType type);
+  void on_upload_message(const JsonObject& m, JsonSpan covered, uint16_t message_id,
+                         MsgType type);
   void on_configure(const JsonObject& m, uint16_t message_id);
   void on_start(const JsonObject& m, uint16_t message_id, Microseconds now_us);
   void on_cancel(const JsonObject& m, uint16_t message_id, Microseconds now_us);
@@ -248,9 +249,11 @@ class HostLinkSession {
   LineReader reader_;
   char tx_[kMaxLine];
 
-  GraphBuilder builder_;
-  StateGraph live_graph_;
-  bool have_graph_ = false;
+  /// One set, built in place by the builder. Two do not fit on a 32 KB board:
+  /// see the note at the top of graph_builder.h for what that costs.
+  GraphSet live_set_;
+  GraphBuilder builder_{live_set_};
+  bool have_set_ = false;
 
   DeviceWiring wiring_;
   bool have_wiring_ = false;

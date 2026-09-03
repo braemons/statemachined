@@ -1009,7 +1009,7 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 |---|---|
 | **M4a** ✅ | **The move, and nothing else.** `tools/bringup/` → `daemon/`, `statemachined_bringup` → `statemachined` with the wire under `device/`, `wire.py` made standalone with golden vectors against the emulator's copy *and* against `crc16.cpp`. The graph upload and result reassembly left `tests/hardware/harness.py` for `device/upload.py` and `device/result.py`, so the hardware suite now tests the daemon's codec rather than a copy of it. `make bringup` and `make test-hardware` unchanged in behaviour; `make test-daemon` is new and is in `make ci` and CI |
 | **M4b** ✅ | **Wiring config and the `visit` stream, in the firmware** (§3.3, §3.6). The wiring move plus a compile-time safe-level word closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships; the stream is a callback and a serialiser. They share a file and a protocol document, so they share a branch. **No data flash** — that is deferred to M7 |
-| **M4c** | **The graph set, in the firmware** (§3.2, §3.3): shared pools, `GraphEntry`, `set_begin`/`set_end`, a slot in `configure`, `max_graphs` in `caps`. The larger of the two firmware milestones and the one this plan's trial loop rests on. Covered by the native core, the Renode session and `PROTOCOL.md` message by message, all of which exist |
+| **M4c** ✅ | **The graph set, in the firmware** (§3.2, §3.3): shared pools, `GraphEntry`, `set_begin`/`set_end`, a slot in `configure`, `max_graphs` in `caps`. The larger of the two firmware milestones and the one this plan's trial loop rests on. Covered by the native core, the Renode session and `PROTOCOL.md` message by message, all of which exist |
 | **M4d** | `model/` and `compile.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4e** | `device/supervisor.py` and `clock.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core over a pty — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks |
 | **M4f** | FastAPI: device, lines, graphs, trial, config, state/stream; the triald client; `statemachined serve`. `dev/API.md` written first, the way `PROTOCOL.md` was |
@@ -1018,14 +1018,25 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
 | **M7** | **Data flash** (§3.4): the `hal.h` addition, the RA4M1 implementation, a file-backed `native.cpp` stand-in, the boot-time read, and `persist`. Deferred deliberately: the compile-time safe levels of §3.4 hold the fail-safe hole shut without it, and this is easier to build once a daemon exists to exercise it. Renode covers the HAL addition |
 
-**What M4b cost, measured.** The 255-entry path is +3056 B, exactly as budgeted
-— but demo mode carries a *second* `TrialRunner`, so the bench image pays for it
-twice and does not fit. `caps.max_path` is therefore **255 on the rig image and
-64 on the bench one**, decided in `config.h` by `STATEMACHINED_DEMO`, which is
-what `caps` exists to let a host discover. The rig image is 15 984 B of 32 768,
-leaving ~7.5 KB once the framework's 8 KB heap and the stack are taken — which
-is the whole of what §3.2's graph set wants, and is why open question 10 is now
-the tightest one in this document rather than a note.
+**What M4b and M4c cost, measured.** The 255-entry path is +3056 B, exactly as
+budgeted, and it briefly did not fit: demo mode carries a *second* `TrialRunner`,
+so the bench image paid for the path twice and would not link. M4c paid that
+back. A set is **single-buffered** — two do not fit — so the staged `StateGraph`
+a single graph needed is gone, worth about 2.5 KB, and both images fit 255
+again. `caps.max_path` is 255 everywhere, which is the state worth being in.
+
+| | RAM, of 32 768 |
+|---|---|
+| rig image, before M4b | 12 928 B |
+| rig image, now | **13 520 B** |
+| bench image, now | 21 224 B |
+
+So the set cost about 600 B net on a rig, not the ~7.5 KB §3.2 estimated —
+because §3.2 was costing *bigger pools*, and M4c deliberately did not grow them.
+The mechanism is in with today's capacities: twenty slots sharing 32 states, 64
+transitions, 64 actions and 32 distributions, which is four graphs of eight
+states. **Growing the pools is the follow-up**, and it now has ~9 KB of headroom
+and a real `.map` to argue from rather than an estimate — see open question 10.
 
 `platformio.ini` also said `MAX_PATH=1024` for the Teensy and `512` for the
 ESP32, neither of which was ever possible: `path_len` is a `uint8_t`. A
@@ -1082,14 +1093,18 @@ diff.
    a design question. The version worth arguing about is whether it is kept at
    all — if the answer to #11 is that triald stows every trial's trace beside the
    `.tdr`, the daemon's file is a duplicate and could go.
-10. **The SRAM budget, now that both §3.2's set and a 255-visit path are in.**
-   +3 KB for the path is affordable on its own and ~7.5 KB for a graph set is
-   affordable on its own; together they are 11.5 KB of 32 alongside the
-   framework's 8 KB heap, and neither is contingent any more. This wants an
-   actual `.map` from M4c before either number is trusted, and the honest
-   outcome may be that `max_graphs` is twelve rather than twenty — which the
-   design already tolerates, since §3.2 puts the figure in `caps` rather than in
-   the daemon.
+10. **How big the shared pools should be.** Answered halfway. M4b and M4c are
+   both in and the rig image is 13 520 B of 32 768, so the fear that they would
+   not fit together was wrong — single-buffering the set paid for most of the
+   path. What is *not* done is growing the pools: the set holds twenty slots
+   sharing today's 32 states and 64 transitions, which is four graphs of eight
+   states, and §3.2's arithmetic wants ~160 and ~240. There is room for it now
+   (about 9 KB once the framework's 8 KB heap and the stack are taken), and it
+   is a one-line change per capacity in `platformio.ini` plus a `.map` to check
+   — deliberately not done in the same commit as the mechanism, so that a
+   sizing decision is argued from a measurement rather than mixed into a
+   refactor. Note `TransitionState` is 12 B per transition *per machine*, and a
+   bench build has two.
 11. **Does triald stow the trace beside the `.tdr`?** §4.6 leaves it optional and
    that is right for the daemon, but "optional" across two daemons usually means
    "nobody did it". If the answer is yes it is a triald change, and it lands with

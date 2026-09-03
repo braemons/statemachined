@@ -2,14 +2,35 @@
 // A tiny builder, so a test reads as the paradigm it describes rather than as
 // struct initialisation.
 #pragma once
-#include "graph/state_graph.h"
+#include "graph/graph_set.h"
 #include "trial/trial.h"
 #include "trial/trial_runner.h"
 
 namespace statemachined::test {
 
 struct Builder {
-  StateGraph g;
+  GraphSet g;
+  /// Which graph in the set is being filled. A test that says nothing about
+  /// sets builds a set of one, which is what almost all of them want.
+  uint8_t current = 0;
+
+  Builder() {
+    g.n_graphs = 1;
+    g.graphs[0].first_state = 0;
+  }
+
+  /// Start another graph in the same set. Its states carry on in the shared
+  /// pool -- which is the whole mechanism -- so `state()` keeps returning
+  /// absolute indices and a test names targets the way it always did.
+  uint8_t graph() {
+    const uint8_t i = g.n_graphs++;
+    g.graphs[i].first_state = g.n_states;
+    g.graphs[i].n_states = 0;
+    current = i;
+    return i;
+  }
+
+  void entry(uint8_t s) { g.graphs[current].entry = s; }
 
   uint8_t fixed(int32_t ms) {
     g.distributions[g.n_distributions] =
@@ -24,6 +45,7 @@ struct Builder {
 
   uint8_t state() {
     g.states[g.n_states] = State{};
+    ++g.graphs[current].n_states;
     return g.n_states++;
   }
   /// A terminal state reporting a raw code -- for tests that exercise the state

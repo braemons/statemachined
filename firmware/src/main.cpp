@@ -218,7 +218,7 @@ bool g_link_was_up = false;
 // firmware/core/config.h, with the capacities that depend on it.
 
 #if STATEMACHINED_DEMO
-StateGraph g_demo_graph;
+GraphSet g_demo_graph;
 bool g_demo_active = false;
 uint32_t g_demo_trial_id = 0;
 Microseconds g_demo_start_at_us = 0;

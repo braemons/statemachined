@@ -21,7 +21,7 @@
 #include <cstdint>
 
 #include "config.h"
-#include "graph/state_graph.h"
+#include "graph/graph_set.h"
 #include "io/wiring.h"
 
 namespace statemachined {
@@ -64,7 +64,7 @@ constexpr Milliseconds kStepMs = 500;
 /// pins. `done` is terminal and reports Hit; `aborted` is terminal and reports
 /// Cancelled. A terminal state's entry actions run and nothing exits it, so its
 /// LED stays lit as a result lamp until the next trial starts.
-void build(StateGraph& g);
+void build(GraphSet& g);
 
 /// The wiring the demo needs: 20 ms of debounce on both of its inputs, because
 /// a bench switch bounces for a few milliseconds and an undebounced one fires

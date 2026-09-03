@@ -16,9 +16,13 @@ namespace statemachined {
 
 class TrialRunner {
  public:
-  explicit TrialRunner(const StateGraph& g) : machine_(g) {}
+  /// The set and which graph in it -- the whole of what "switching paradigm
+  /// between two trials" costs, since the pools do not move. See
+  /// dev/DAEMON.md 3.2.
+  explicit TrialRunner(const GraphSet& s, uint8_t graph_index = 0) : machine_(s, graph_index) {}
 
-  const StateGraph& graph() const { return machine_.graph(); }
+  const GraphSet& graph_set() const { return machine_.graph_set(); }
+  uint8_t graph_index() const { return machine_.graph_index(); }
 
   /// Begin a trial. The per-trial stream is derived rather than free-running:
   /// replaying trial 412 alone must draw trial 412's numbers, and a link reset

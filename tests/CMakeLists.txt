@@ -4,7 +4,7 @@ target_include_directories(doctest_main PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/third
 
 # Mirrors firmware/core's layout, so a test lives next to the concern it tests.
 set(STATEMACHINED_TESTS
-  graph/state_graph
+  graph/graph_set
   random/rng
   io/input_conditioner
   io/reply_queue

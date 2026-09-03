@@ -47,8 +47,8 @@ OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask
   has_pending_ = false;
   pending_ = OutputUpdate{};
 
-  enter(graph_->entry, now_us, word);
-  const State& s = graph_->states[current_];
+  enter(graph().entry, now_us, word);
+  const State& s = set_->states[current_];
   OutputUpdate ops = apply_actions(s.first_entry_action, s.entry_action_count, now_us);
   ops.set_low |= left_over & ~ops.set_high;
   raised_ |= ops.set_high;
@@ -61,11 +61,11 @@ void StateMachine::enter(StateIndex state, Microseconds now_us, LineBitmask word
   entered_us_ = now_us;
   // This state's transitions have never been looked at. See advance().
   just_entered_ = true;
-  const State& s = graph_->states[state];
+  const State& s = set_->states[state];
 
   timeout_ms_ = (s.timeout_duration == kNoRandomDistribution)
                     ? -1
-                    : graph_->distributions[s.timeout_duration].draw(rng_);
+                    : set_->distributions[s.timeout_duration].draw(rng_);
 
   // Arm this state's transitions against the input word AS IT IS AT ENTRY.
   //
@@ -76,14 +76,13 @@ void StateMachine::enter(StateIndex state, Microseconds now_us, LineBitmask word
   // and the first scan is a genuine rising edge and must fire.
   for (uint8_t c = 0; c < s.transition_count; ++c) {
     const TransitionIndex i = s.first_transition + c;
-    const Transition& cond = graph_->transitions[i];
+    const Transition& cond = set_->transitions[i];
     TransitionState& cs = trans_state_[i];
     cs.was_true = cond.holds(word);
     cs.armed = cond.fire_if_true_on_entry || !cs.was_true;
     cs.held_since = now_us;
-    const RandomDistributionIndex hd = graph_->transitions[i].hold_duration;
-    cs.hold_needed_ms =
-        (hd == kNoRandomDistribution) ? 0 : graph_->distributions[hd].draw(rng_);
+    const RandomDistributionIndex hd = set_->transitions[i].hold_duration;
+    cs.hold_needed_ms = (hd == kNoRandomDistribution) ? 0 : set_->distributions[hd].draw(rng_);
   }
 }
 
@@ -95,7 +94,7 @@ OutputUpdate StateMachine::apply_actions(OutputActionIndex first, uint8_t count,
   // what the first one did rather than what the pin was before either.
   LineBitmask level = driven_;
   for (uint8_t i = 0; i < count; ++i) {
-    const OutputAction& a = graph_->output_actions[first + i];
+    const OutputAction& a = set_->output_actions[first + i];
     const LineBitmask bit = 1u << a.output_line;
     bool high;
     switch (a.kind) {
@@ -136,7 +135,9 @@ OutputUpdate StateMachine::apply_actions(OutputActionIndex first, uint8_t count,
 void StateMachine::record_visit(StateExitCause cause, TransitionIndex fired,
                                 Microseconds now_us) {
   StateVisit e;
-  e.state_index = current_;
+  // Within this graph, not into the shared pool: the host resolves it against
+  // the graph it selected.
+  e.state_index = static_cast<StateIndex>(current_ - graph().first_state);
   e.cause = cause;
   e.transition_index = fired;
   e.drawn_ms = timeout_ms_;
@@ -169,7 +170,7 @@ void StateMachine::record_visit(StateExitCause cause, TransitionIndex fired,
 OutputUpdate StateMachine::leave(StateExitCause cause, TransitionIndex fired,
                                  Microseconds now_us) {
   record_visit(cause, fired, now_us);
-  const State& s = graph_->states[current_];
+  const State& s = set_->states[current_];
   OutputUpdate ops = apply_actions(s.first_exit_action, s.exit_action_count, now_us);
   // Everything this state raised comes down, whether or not the graph said so.
   // A valve left open because a graph forgot an on_exit is not an acceptable
@@ -229,7 +230,7 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
     return ops;
   }
 
-  const State& s = graph_->states[current_];
+  const State& s = set_->states[current_];
   StateIndex next = kNoState;
   TransitionIndex fired = kNoTransition;
   StateExitCause cause = StateExitCause::Timeout;
@@ -262,7 +263,7 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   // the first transition in the list wins, as in Bpod.
   for (uint8_t c = 0; need_eval && c < s.transition_count && next == kNoState; ++c) {
     const TransitionIndex i = s.first_transition + c;
-    const Transition& cond = graph_->transitions[i];
+    const Transition& cond = set_->transitions[i];
     TransitionState& cs = trans_state_[i];
     const bool now_true = cond.holds(word);
 
@@ -301,7 +302,7 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   const OutputUpdate exit_ops = leave(cause, fired, now_us);
   merge(ops, exit_ops);
 
-  const State& target = graph_->states[next];
+  const State& target = set_->states[next];
   if (target.terminal()) {
     record_.terminal_code = target.terminal_code;
     record_.total_us = since(started_us_, now_us);

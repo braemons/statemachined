@@ -95,7 +95,7 @@ def test_the_two_rolling_checksums_agree():
 GENERATED = [
     '{"msg_type":"cancel","message_id":65535,"trial_id":4294967295,"reason":"host"',
     '{"msg_type":"graph_dist","message_id":2,"i":0,"kind":"choice","opts":[100,200,300]',
-    '{"msg_type":"configure","message_id":41,"trial_id":193,"graph_version":7,"cap_ms":30000',
+    '{"msg_type":"configure","message_id":41,"trial_id":193,"set_version":7,"graph_index":2',
     '{"msg_type":"x","message_id":1,"s":"a space, a comma, and a \\"quote\\""',
 ]
 

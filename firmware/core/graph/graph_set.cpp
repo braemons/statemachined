@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "graph/state_graph.h"
+#include "graph/graph_set.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -12,7 +12,7 @@ namespace {
 /// relational comparison of pointers into different objects is not something
 /// the standard defines, and this is asked exactly about pointers that may be
 /// into a different object.
-ptrdiff_t pool_offset(const StateGraph& g, const Milliseconds* p) {
+ptrdiff_t pool_offset(const GraphSet& g, const Milliseconds* p) {
   if (p == nullptr) return -1;
   const uintptr_t base = reinterpret_cast<uintptr_t>(&g.choice_options[0]);
   const uintptr_t end = base + sizeof(g.choice_options);
@@ -21,7 +21,7 @@ ptrdiff_t pool_offset(const StateGraph& g, const Milliseconds* p) {
   return static_cast<ptrdiff_t>((at - base) / sizeof(Milliseconds));
 }
 
-ptrdiff_t weight_offset(const StateGraph& g, const uint16_t* p) {
+ptrdiff_t weight_offset(const GraphSet& g, const uint16_t* p) {
   if (p == nullptr) return -1;
   const uintptr_t base = reinterpret_cast<uintptr_t>(&g.choice_weights[0]);
   const uintptr_t end = base + sizeof(g.choice_weights);
@@ -32,9 +32,10 @@ ptrdiff_t weight_offset(const StateGraph& g, const uint16_t* p) {
 
 }  // namespace
 
-void StateGraph::assign(const StateGraph& other) {
+void GraphSet::assign(const GraphSet& other) {
   version = other.version;
-  entry = other.entry;
+  n_graphs = other.n_graphs;
+  for (uint8_t i = 0; i < n_graphs; ++i) graphs[i] = other.graphs[i];
   n_states = other.n_states;
   n_transitions = other.n_transitions;
   n_output_actions = other.n_output_actions;
@@ -61,12 +62,12 @@ void StateGraph::assign(const StateGraph& other) {
   }
 }
 
-GraphError validate(const StateGraph& g) {
+GraphError validate(const GraphSet& g) {
+  if (g.n_graphs == 0 || g.n_graphs > kMaxGraphs) return GraphError::TooManyGraphs;
   if (g.n_states == 0 || g.n_states > kMaxStates) return GraphError::TooManyStates;
   if (g.n_transitions > kMaxTransitions) return GraphError::TooManyTransitions;
   if (g.n_output_actions > kMaxOutputActions) return GraphError::TooManyOutputActions;
   if (g.n_distributions > kMaxDistributions) return GraphError::TooManyDistributions;
-  if (g.entry >= g.n_states) return GraphError::BadEntry;
 
   // Every action in the pool, not just the reachable ones: apply_actions()
   // shifts by this line number, and a shift past the width of a LineBitmask is
@@ -94,53 +95,66 @@ GraphError validate(const StateGraph& g) {
     if (d.n > kMaxChoiceOptions) return GraphError::BadDistribution;
   }
 
-  for (uint8_t i = 0; i < g.n_states; ++i) {
-    const State& s = g.states[i];
-    if (s.first_transition + s.transition_count > g.n_transitions)
-      return GraphError::TooManyTransitions;
-    if (s.first_entry_action + s.entry_action_count > g.n_output_actions)
-      return GraphError::TooManyOutputActions;
-    if (s.first_exit_action + s.exit_action_count > g.n_output_actions)
-      return GraphError::TooManyOutputActions;
-    if (s.timeout_duration != kNoRandomDistribution) {
-      if (s.timeout_duration >= g.n_distributions) return GraphError::TooManyDistributions;
-      if (s.timeout_target >= g.n_states) return GraphError::BadTarget;
-    }
-    for (uint8_t c = 0; c < s.transition_count; ++c) {
-      const Transition& t = g.transitions[s.first_transition + c];
-      if (t.target_state >= g.n_states) return GraphError::BadTarget;
-      if (t.hold_duration != kNoRandomDistribution && t.hold_duration >= g.n_distributions)
-        return GraphError::TooManyDistributions;
-    }
-  }
+  // The pool-wide checks are done. The rest is per graph, and the whole point
+  // of doing it per graph is the slice: a transition may not leave the graph it
+  // belongs to. Two paradigms sharing a pool must not be able to reach each
+  // other, or selecting one by index would not select a machine.
+  for (uint8_t gi = 0; gi < g.n_graphs; ++gi) {
+    const GraphEntry& e = g.graphs[gi];
+    if (e.n_states == 0) return GraphError::EmptyGraph;
+    const uint16_t end = static_cast<uint16_t>(e.first_state) + e.n_states;
+    if (end > g.n_states) return GraphError::TooManyStates;
+    const auto mine = [&](StateIndex s) { return s >= e.first_state && s < end; };
+    if (!mine(e.entry)) return GraphError::BadEntry;
 
-  // Reachability from the entry state, and whether a terminal state is among
-  // what is reachable. A graph that cannot end is a graph that hangs with
-  // outputs high.
-  bool seen[kMaxStates] = {false};
-  uint8_t stack[kMaxStates];
-  uint8_t top = 0;
-  stack[top++] = g.entry;
-  seen[g.entry] = true;
-  bool terminal_reachable = false;
-
-  while (top > 0) {
-    const State& s = g.states[stack[--top]];
-    if (s.terminal()) terminal_reachable = true;
-    auto push = [&](uint8_t t) {
-      if (t < g.n_states && !seen[t]) {
-        seen[t] = true;
-        stack[top++] = t;
+    for (uint8_t i = e.first_state; i < end; ++i) {
+      const State& s = g.states[i];
+      if (s.first_transition + s.transition_count > g.n_transitions)
+        return GraphError::TooManyTransitions;
+      if (s.first_entry_action + s.entry_action_count > g.n_output_actions)
+        return GraphError::TooManyOutputActions;
+      if (s.first_exit_action + s.exit_action_count > g.n_output_actions)
+        return GraphError::TooManyOutputActions;
+      if (s.timeout_duration != kNoRandomDistribution) {
+        if (s.timeout_duration >= g.n_distributions) return GraphError::TooManyDistributions;
+        if (!mine(s.timeout_target)) return GraphError::BadTarget;
       }
-    };
-    if (s.timeout_duration != kNoRandomDistribution) push(s.timeout_target);
-    for (uint8_t c = 0; c < s.transition_count; ++c)
-      push(g.transitions[s.first_transition + c].target_state);
-  }
+      for (uint8_t c = 0; c < s.transition_count; ++c) {
+        const Transition& t = g.transitions[s.first_transition + c];
+        if (!mine(t.target_state)) return GraphError::BadTarget;
+        if (t.hold_duration != kNoRandomDistribution && t.hold_duration >= g.n_distributions)
+          return GraphError::TooManyDistributions;
+      }
+    }
 
-  if (!terminal_reachable) return GraphError::NoTerminal;
-  for (uint8_t i = 0; i < g.n_states; ++i)
-    if (!seen[i]) return GraphError::UnreachableState;
+    // Reachability from the entry state, and whether a terminal state is among
+    // what is reachable. A graph that cannot end is a graph that hangs with
+    // outputs high.
+    bool seen[kMaxStates] = {false};
+    uint8_t stack[kMaxStates];
+    uint8_t top = 0;
+    stack[top++] = e.entry;
+    seen[e.entry] = true;
+    bool terminal_reachable = false;
+
+    while (top > 0) {
+      const State& s = g.states[stack[--top]];
+      if (s.terminal()) terminal_reachable = true;
+      auto push = [&](uint8_t t) {
+        if (mine(t) && !seen[t]) {
+          seen[t] = true;
+          stack[top++] = t;
+        }
+      };
+      if (s.timeout_duration != kNoRandomDistribution) push(s.timeout_target);
+      for (uint8_t c = 0; c < s.transition_count; ++c)
+        push(g.transitions[s.first_transition + c].target_state);
+    }
+
+    if (!terminal_reachable) return GraphError::NoTerminal;
+    for (uint8_t i = e.first_state; i < end; ++i)
+      if (!seen[i]) return GraphError::UnreachableState;
+  }
 
   return GraphError::None;
 }
@@ -171,6 +185,10 @@ const char* graph_error_str(GraphError e) {
       return "no terminal state is reachable from the entry state";
     case GraphError::UnreachableState:
       return "a state is unreachable from the entry state";
+    case GraphError::TooManyGraphs:
+      return "too many graphs in the set";
+    case GraphError::EmptyGraph:
+      return "a graph in the set has no states";
   }
   return "unknown";
 }

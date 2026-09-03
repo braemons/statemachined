@@ -11,13 +11,37 @@ namespace {
 /// compile rather than going out on the wire unnamed. Unknown is last in the
 /// enum and has no entry, which is what makes the count check work.
 const char* const kNames[] = {
-    "hello",        "graph_begin",  "graph_dist",  "graph_state",  "graph_transition",
-    "graph_action", "graph_end",    "configure",   "start",        "cancel",
-    "ping",         "state",        "wiring",
+    "hello",
+    "set_begin",
+    "set_end",
+    "graph_begin",
+    "graph_dist",
+    "graph_state",
+    "graph_transition",
+    "graph_action",
+    "graph_end",
+    "configure",
+    "start",
+    "cancel",
+    "ping",
+    "state",
+    "wiring",
 
-    "hello_ack",    "ack",          "graph_ok",    "armed",        "started",
-    "cancel_ack",   "result_begin", "result_path", "result_end",   "event",
-    "error",        "log",          "pong",        "state_report", "visit",
+    "hello_ack",
+    "ack",
+    "set_ok",
+    "armed",
+    "started",
+    "cancel_ack",
+    "result_begin",
+    "result_path",
+    "result_end",
+    "event",
+    "error",
+    "log",
+    "pong",
+    "state_report",
+    "visit",
 };
 
 constexpr uint8_t kKnown = static_cast<uint8_t>(MsgType::Unknown);

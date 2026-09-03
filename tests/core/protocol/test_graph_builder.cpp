@@ -23,12 +23,21 @@ namespace {
 /// over the CRC-covered bytes, and a test that made those up would not be
 /// testing the thing the host has to reproduce.
 struct Upload {
-  GraphBuilder builder;
+  GraphSet set;
+  GraphBuilder builder{set};
   std::deque<std::string> keep;  ///< spans borrow; the text must outlive them
   uint16_t checksum = 0xFFFF;    ///< what the host would have accumulated
 
   /// `body` is the object without its closing brace, as the writer produces it.
   UploadError send(const std::string& body, bool fold = true) {
+    // These tests are about the graph layer, so a graph_begin with no set open
+    // opens one first rather than every case carrying the same two lines. The
+    // set layer's own rules are tested where they belong, below.
+    if (!builder.open() && body.find(R"("msg_type":"graph_begin")") != std::string::npos) {
+      REQUIRE(send(R"({"msg_type":"set_begin","message_id":0,"set_version":1,"n_graphs":1)") ==
+              UploadError::None);
+    }
+
     char buf[kMaxLine];
     REQUIRE(body.size() < sizeof(buf));
     for (size_t i = 0; i < body.size(); ++i) buf[i] = body[i];
@@ -47,12 +56,14 @@ struct Upload {
     JsonSpan t;
     REQUIRE(m.str("msg_type", &t));
 
-    if (json_str_eq(t, "graph_begin")) return builder.begin(m, covered);
+    if (json_str_eq(t, "set_begin")) return builder.begin_set(m, covered);
+    if (json_str_eq(t, "graph_begin")) return builder.begin_graph(m, covered);
     if (json_str_eq(t, "graph_dist")) return builder.add_distribution(m, covered);
     if (json_str_eq(t, "graph_state")) return builder.add_state(m, covered);
     if (json_str_eq(t, "graph_transition")) return builder.add_transition(m, covered);
     if (json_str_eq(t, "graph_action")) return builder.add_action(m, covered);
-    if (json_str_eq(t, "graph_end")) return builder.end(m);
+    if (json_str_eq(t, "graph_end")) return builder.end_graph(m, covered);
+    if (json_str_eq(t, "set_end")) return builder.end_set(m);
     FAIL("unknown message type in test");
     return UploadError::BadField;
   }
@@ -63,18 +74,36 @@ struct Upload {
     return std::string(h, 4);
   }
 
-  UploadError finish(int n_transitions, int n_actions) {
+  /// Close the current graph. Its own totals, not the set's.
+  UploadError end_graph(int n_transitions, int n_actions) {
     return send(R"({"msg_type":"graph_end","message_id":9,"n_transitions":)" +
                 std::to_string(n_transitions) + R"(,"n_output_actions":)" +
-                std::to_string(n_actions) + R"(,"checksum":")" + checksum_hex() + R"(")");
+                std::to_string(n_actions));
+  }
+
+  /// Close the set: its totals, and the checksum over everything before it.
+  UploadError end_set(int n_states, int n_transitions, int n_actions) {
+    return send(R"({"msg_type":"set_end","message_id":10,"n_states":)" +
+                    std::to_string(n_states) + R"(,"n_transitions":)" +
+                    std::to_string(n_transitions) + R"(,"n_output_actions":)" +
+                    std::to_string(n_actions) + R"(,"checksum":")" + checksum_hex() + R"(")",
+                false);
+  }
+
+  /// The common case: one graph, closed, and the set closed after it.
+  UploadError finish(int n_transitions, int n_actions) {
+    const UploadError e = end_graph(n_transitions, n_actions);
+    if (e != UploadError::None) return e;
+    return end_set(set.n_states, n_transitions, n_actions);
   }
 };
 
 /// Two states: wait, with a 500 ms timeout, going to a terminal Hit.
 void minimal(Upload& u) {
+  REQUIRE(u.send(R"({"msg_type":"set_begin","message_id":0,"set_version":7,"n_graphs":1)") ==
+          UploadError::None);
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":7,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":500)") ==
           UploadError::None);
@@ -95,10 +124,13 @@ TEST_CASE("a well-formed upload assembles, validates and commits") {
   REQUIRE(u.finish(0, 0) == UploadError::None);
   REQUIRE(u.builder.complete());
 
-  const StateGraph& g = u.builder.staged();
+  const GraphSet& g = u.set;
   CHECK(g.version == 7);
+  CHECK(g.n_graphs == 1);
   CHECK(g.n_states == 2);
-  CHECK(g.entry == 0);
+  CHECK(g.graphs[0].entry == 0);
+  CHECK(g.graphs[0].first_state == 0);
+  CHECK(g.graphs[0].n_states == 2);
   CHECK(g.n_distributions == 1);
   CHECK(g.states[0].timeout_duration == 0);
   CHECK(g.states[0].timeout_target == 1);
@@ -113,8 +145,7 @@ TEST_CASE("the assembled graph actually runs") {
   // the struct alone would let a subtly wrong slice through.
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":7,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":500)") ==
           UploadError::None);
@@ -131,7 +162,7 @@ TEST_CASE("the assembled graph actually runs") {
       UploadError::None);
   REQUIRE(u.finish(0, 1) == UploadError::None);
 
-  StateMachine m(u.builder.staged());
+  StateMachine m(u.set);
   const OutputUpdate on_entry = m.start(1, 0);
   CHECK((on_entry.set_high & (1u << 2)) != 0);
 
@@ -152,8 +183,7 @@ TEST_CASE("a terminal state's entry actions run -- that is how a reward is writt
   // spread a single intention over every route into it.
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":10)") ==
           UploadError::None);
@@ -170,7 +200,7 @@ TEST_CASE("a terminal state's entry actions run -- that is how a reward is writt
       UploadError::None);
   REQUIRE(u.finish(0, 1) == UploadError::None);
 
-  StateMachine m(u.builder.staged());
+  StateMachine m(u.set);
   LineBitmask raised = m.start(1, 0).set_high;
   uint32_t t = 0;
   while (m.is_running() && t < 1000000u) {
@@ -189,8 +219,7 @@ TEST_CASE("what a terminal state raised is lowered when the next run starts") {
   // unnoticed, which is the guarantee leave() already makes within a run.
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":10)") ==
           UploadError::None);
@@ -207,7 +236,7 @@ TEST_CASE("what a terminal state raised is lowered when the next run starts") {
       UploadError::None);
   REQUIRE(u.finish(0, 1) == UploadError::None);
 
-  StateMachine m(u.builder.staged());
+  StateMachine m(u.set);
   m.start(1, 0);
   uint32_t t = 0;
   LineBitmask raised = 0;
@@ -227,8 +256,7 @@ TEST_CASE("transitions and actions attach to the state that preceded them") {
   // contiguous only if everything for a state arrives together.
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":3,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":3,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":100)") ==
           UploadError::None);
@@ -251,7 +279,7 @@ TEST_CASE("transitions and actions attach to the state that preceded them") {
       UploadError::None);
   REQUIRE(u.finish(3, 0) == UploadError::None);
 
-  const StateGraph& g = u.builder.staged();
+  const GraphSet& g = u.set;
   CHECK(g.states[0].first_transition == 0);
   CHECK(g.states[0].transition_count == 2);
   CHECK(g.states[1].first_transition == 2);
@@ -278,7 +306,7 @@ TEST_CASE("entry and exit actions are two contiguous slices of one pool") {
       UploadError::None);
   REQUIRE(u.finish(0, 3) == UploadError::None);
 
-  const StateGraph& g = u.builder.staged();
+  const GraphSet& g = u.set;
   const State& s = g.states[1];
   CHECK(s.first_entry_action == 0);
   CHECK(s.entry_action_count == 2);
@@ -311,8 +339,7 @@ TEST_CASE("a dropped message is caught by the checksum, not by luck") {
   // that vanished was perfectly well formed.
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":7,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":500)") ==
           UploadError::None);
@@ -340,8 +367,7 @@ TEST_CASE("the totals in graph_end are checked against what arrived") {
 TEST_CASE("fewer states than graph_begin declared is refused") {
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":7,"n_states":3,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":3,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":500)") ==
           UploadError::None);
@@ -362,8 +388,7 @@ TEST_CASE("an index that does not follow the ones accepted is refused") {
   SUBCASE("a state") {
     Upload u;
     REQUIRE(
-        u.send(
-            R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+        u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
         UploadError::None);
     CHECK(
         u.send(
@@ -373,8 +398,7 @@ TEST_CASE("an index that does not follow the ones accepted is refused") {
   SUBCASE("a distribution") {
     Upload u;
     REQUIRE(
-        u.send(
-            R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+        u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
         UploadError::None);
     CHECK(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":3,"kind":"fixed","a":1)") ==
           UploadError::BadIndex);
@@ -413,8 +437,7 @@ TEST_CASE("a graph message out of order is refused") {
   SUBCASE("a transition with no state to attach to") {
     Upload u;
     REQUIRE(
-        u.send(
-            R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+        u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
         UploadError::None);
     CHECK(u.send(R"({"msg_type":"graph_transition","message_id":2,"all":1,"target":1)") ==
           UploadError::BadOrder);
@@ -422,8 +445,7 @@ TEST_CASE("a graph message out of order is refused") {
   SUBCASE("an action with no state to attach to") {
     Upload u;
     REQUIRE(
-        u.send(
-            R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+        u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
         UploadError::None);
     CHECK(
         u.send(
@@ -434,16 +456,14 @@ TEST_CASE("a graph message out of order is refused") {
 
 TEST_CASE("a capacity is refused by name, so the answer is which limit to raise") {
   Upload u;
-  const std::string begin =
-      R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":)" +
-      std::to_string(kMaxStates + 1) + R"(,"entry":0)";
+  const std::string begin = R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":)" +
+                            std::to_string(kMaxStates + 1) + R"(,"entry":0)";
   CHECK(u.send(begin) == UploadError::TooMany);
   CHECK(std::string(u.builder.context()) == "max_states");
 
   Upload v;
   REQUIRE(
-      v.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      v.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   UploadError last = UploadError::None;
   for (int i = 0; i <= kMaxDistributions && last == UploadError::None; ++i)
@@ -466,8 +486,7 @@ TEST_CASE("a transition with no predicate at all is refused") {
 TEST_CASE("a choice distribution keeps its options in the graph's own pool") {
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(
       u.send(
@@ -486,7 +505,7 @@ TEST_CASE("a choice distribution keeps its options in the graph's own pool") {
       UploadError::None);
   REQUIRE(u.finish(0, 0) == UploadError::None);
 
-  const StateGraph& g = u.builder.staged();
+  const GraphSet& g = u.set;
   REQUIRE(g.n_choice_options == 5);
   CHECK(g.distributions[0].n == 3);
   CHECK(g.distributions[0].opts == &g.choice_options[0]);
@@ -513,8 +532,7 @@ TEST_CASE("committing a graph by copy re-points its choice options") {
   // whatever a later paradigm left behind.
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(
       u.send(
@@ -529,9 +547,9 @@ TEST_CASE("committing a graph by copy re-points its choice options") {
       UploadError::None);
   REQUIRE(u.finish(0, 0) == UploadError::None);
 
-  StateGraph live = u.builder.staged();
+  GraphSet live = u.set;
   CHECK(live.distributions[0].opts == &live.choice_options[0]);
-  CHECK(live.distributions[0].opts != u.builder.staged().distributions[0].opts);
+  CHECK(live.distributions[0].opts != u.set.distributions[0].opts);
   CHECK(live.choice_options[0] == 100);
   CHECK(live.choice_options[1] == 200);
   CHECK(validate(live) == GraphError::None);
@@ -547,21 +565,20 @@ TEST_CASE("a distribution pointing at a static array survives a copy untouched")
   // A hand-built graph -- which is how every other test in this repo makes one
   // -- never pointed into a pool, so the copy must leave it exactly as it was.
   static const Milliseconds kOpts[] = {5, 6, 7};
-  StateGraph a;
+  GraphSet a;
   a.n_distributions = 1;
   a.distributions[0].kind = RandomDistributionKind::Choice;
   a.distributions[0].n = 3;
   a.distributions[0].opts = kOpts;
 
-  const StateGraph b = a;
+  const GraphSet b = a;
   CHECK(b.distributions[0].opts == kOpts);
 }
 
 TEST_CASE("weights must line up with the options they weight") {
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   SUBCASE("shorter") {
     // Silently giving the unlisted options weight 1 against neighbours weighted
@@ -587,8 +604,7 @@ TEST_CASE("weights must line up with the options they weight") {
 TEST_CASE("a malformed or missing member is refused by name") {
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":100)") ==
           UploadError::None);
@@ -603,8 +619,7 @@ TEST_CASE("a malformed or missing member is refused by name") {
   SUBCASE("an unknown distribution kind") {
     Upload v;
     REQUIRE(
-        v.send(
-            R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+        v.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
         UploadError::None);
     CHECK(v.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"gaussian","a":1)") ==
           UploadError::BadField);
@@ -649,8 +664,7 @@ TEST_CASE("a malformed or missing member is refused by name") {
   SUBCASE("an entry state that does not exist") {
     Upload v;
     CHECK(
-        v.send(
-            R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":5)") ==
+        v.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":5)") ==
         UploadError::BadField);
     CHECK(std::string(v.builder.context()) == "entry");
   }
@@ -661,8 +675,7 @@ TEST_CASE("a graph that assembles but cannot run is refused, naming the rule") {
   // flattened into "bad graph".
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":100)") ==
           UploadError::None);
@@ -685,8 +698,7 @@ TEST_CASE("a refused message abandons the upload rather than half-building one")
   // The alternative is a graph assembled from two different attempts.
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.builder.open());
   CHECK(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":9,"kind":"fixed","a":1)") ==
@@ -697,31 +709,28 @@ TEST_CASE("a refused message abandons the upload rather than half-building one")
       UploadError::NotOpen);
 }
 
-TEST_CASE("a second graph_begin discards the first attempt") {
+TEST_CASE("a second set_begin discards the first attempt") {
   Upload u;
+  REQUIRE(u.send(R"({"msg_type":"set_begin","message_id":0,"set_version":1,"n_graphs":1)") ==
+          UploadError::None);
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":1)") ==
           UploadError::None);
 
-  Upload v;  // a fresh accumulator; the device resets its own
-  v.builder = u.builder;
-  v.checksum = 0xFFFF;
-  REQUIRE(
-      v.send(
-          R"({"msg_type":"graph_begin","message_id":3,"graph_version":2,"n_states":2,"entry":0)") ==
-      UploadError::None);
-  CHECK(v.builder.staged().n_distributions == 0);
-  CHECK(v.builder.staged().version == 2);
+  u.checksum = 0xFFFF;  // the host would restart its accumulator too
+  REQUIRE(u.send(R"({"msg_type":"set_begin","message_id":3,"set_version":2,"n_graphs":1)") ==
+          UploadError::None);
+  CHECK(u.set.n_distributions == 0);
+  CHECK(u.set.n_graphs == 0);
+  CHECK(u.set.version == 2);
 }
 
 TEST_CASE("abandon throws away a partial upload") {
   Upload u;
   REQUIRE(
-      u.send(
-          R"({"msg_type":"graph_begin","message_id":1,"graph_version":1,"n_states":2,"entry":0)") ==
+      u.send(R"({"msg_type":"graph_begin","message_id":1,"slot":0,"n_states":2,"entry":0)") ==
       UploadError::None);
   u.builder.abandon();
   CHECK_FALSE(u.builder.open());
@@ -753,7 +762,7 @@ TEST_CASE("`level` on a graph_transition reaches fire_if_true_on_entry") {
     REQUIRE(u.send(R"({"msg_type":"graph_transition","message_id":5,"target":1,"all":1)") ==
             UploadError::None);
     REQUIRE(u.finish(1, 0) == UploadError::None);
-    CHECK_FALSE(u.builder.staged().transitions[0].fire_if_true_on_entry);
+    CHECK_FALSE(u.set.transitions[0].fire_if_true_on_entry);
   }
 
   SUBCASE("true opts out of the rising edge") {
@@ -764,7 +773,7 @@ TEST_CASE("`level` on a graph_transition reaches fire_if_true_on_entry") {
             R"({"msg_type":"graph_transition","message_id":5,"target":1,"all":1,"level":true)") ==
         UploadError::None);
     REQUIRE(u.finish(1, 0) == UploadError::None);
-    CHECK(u.builder.staged().transitions[0].fire_if_true_on_entry);
+    CHECK(u.set.transitions[0].fire_if_true_on_entry);
   }
 
   SUBCASE("false is explicit and means the same as absent") {
@@ -775,6 +784,6 @@ TEST_CASE("`level` on a graph_transition reaches fire_if_true_on_entry") {
             R"({"msg_type":"graph_transition","message_id":5,"target":1,"all":1,"level":false)") ==
         UploadError::None);
     REQUIRE(u.finish(1, 0) == UploadError::None);
-    CHECK_FALSE(u.builder.staged().transitions[0].fire_if_true_on_entry);
+    CHECK_FALSE(u.set.transitions[0].fire_if_true_on_entry);
   }
 }

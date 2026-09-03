@@ -29,13 +29,13 @@ LineBitmask settle(TrialRunner& r, LineBitmask word, Microseconds& now, Microsec
 }  // namespace
 
 TEST_CASE("the demo graph is a valid graph") {
-  StateGraph g;
+  GraphSet g;
   demo::build(g);
   CHECK(validate(g) == GraphError::None);
 }
 
 TEST_CASE("the demo graph fits the reference board's capacities") {
-  StateGraph g;
+  GraphSet g;
   demo::build(g);
   // It has to fit the smallest board we ship, or the bench it exists for is the
   // one place it does not run.
@@ -51,7 +51,7 @@ TEST_CASE("the demo graph fits the reference board's capacities") {
 }
 
 TEST_CASE("it waits for the start switch rather than starting on its own") {
-  StateGraph g;
+  GraphSet g;
   demo::build(g);
   TrialRunner r(g);
 
@@ -69,7 +69,7 @@ TEST_CASE("it waits for the start switch rather than starting on its own") {
 }
 
 TEST_CASE("the switch starts one LED walking across the step outputs") {
-  StateGraph g;
+  GraphSet g;
   demo::build(g);
   TrialRunner r(g);
 
@@ -102,7 +102,7 @@ TEST_CASE("the switch starts one LED walking across the step outputs") {
 }
 
 TEST_CASE("the abort switch ends the trial mid-chase") {
-  StateGraph g;
+  GraphSet g;
   demo::build(g);
   TrialRunner r(g);
 

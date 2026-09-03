@@ -29,16 +29,18 @@
 #include <cstdint>
 
 #include "config.h"
+#include "graph/graph_set.h"
 #include "graph/output_action.h"
 #include "graph/state.h"
-#include "graph/state_graph.h"
 #include "random/rng.h"
 
 namespace statemachined {
 
 /// One visited state. `state_index`, not a name: the bridge holds the graph and
 /// resolves names host-side, which is part of what keeps the device inside
-/// 32 KB.
+/// 32 KB. It is the index **within this graph**, counted from zero, not into
+/// the set's shared state pool -- the host authored the graph and counts its
+/// states the way it wrote them.
 struct StateVisit {
   StateIndex state_index = 0;
   StateExitCause cause = StateExitCause::Terminal;
@@ -96,15 +98,19 @@ struct StateMachineRunRecord {
 
 class StateMachine {
  public:
-  /// The graph arrives at construction and never changes. A machine without one
-  /// would be an object with no legal operation on it, and a set_graph() would
-  /// mean every method had to consider the case where nobody had called it.
-  /// Committing a different graph means constructing a different machine --
-  /// which is also the honest semantics, since a new graph invalidates every
-  /// index the old run was recording.
-  explicit StateMachine(const StateGraph& g) : graph_(&g) {}
+  /// The set and which graph in it. Both arrive at construction and neither
+  /// changes. A machine without a graph would be an object with no legal
+  /// operation on it, and a set_graph() would mean every method had to consider
+  /// the case where nobody had called it. Switching graphs means constructing a
+  /// different machine -- which is also the honest semantics, since a different
+  /// graph invalidates every index the old run was recording, and it is cheap:
+  /// the pools do not move.
+  explicit StateMachine(const GraphSet& s, uint8_t graph_index = 0)
+      : set_(&s), graph_index_(graph_index) {}
 
-  const StateGraph& graph() const { return *graph_; }
+  const GraphSet& graph_set() const { return *set_; }
+  uint8_t graph_index() const { return graph_index_; }
+  const GraphEntry& graph() const { return set_->graphs[graph_index_]; }
 
   /// Begin a run. `now_us` is the arming instant. Returns the entry state's
   /// output actions -- they are outputs like any other and must not wait for
@@ -174,7 +180,12 @@ class StateMachine {
   bool force_end(Microseconds now_us);
 
   bool is_running() const { return running_; }
-  StateIndex get_current_state_index() const { return current_; }
+  /// Within this graph, counted from zero, like everything else that crosses
+  /// the wire. kNoState when no run has started.
+  StateIndex get_current_state_index() const {
+    return current_ == kNoState ? kNoState
+                                : static_cast<StateIndex>(current_ - graph().first_state);
+  }
   const StateMachineRunRecord& get_record() const { return record_; }
 
   /// Wall-clock cap on a whole run. A graph is user data and may contain a
@@ -196,7 +207,8 @@ class StateMachine {
   /// been folded, so it can be applied again to a merged one.
   void note(const OutputUpdate& ops);
 
-  const StateGraph* graph_;
+  const GraphSet* set_;
+  uint8_t graph_index_ = 0;
   VisitSink* visits_ = nullptr;
   Rng rng_;
   StateMachineRunRecord record_;

@@ -155,42 +155,79 @@ reconnecting the bridge must not cost a re-upload.
 
 Answered with `hello_ack`, or `error` / `bad_proto`.
 
-### 3.2 The graph upload
+### 3.2 The set upload
 
-Six message types, in this order:
+**A session uploads every graph it will use, once, before its first trial**, and
+then switches between them with `configure`'s `graph_index` (§3.3). Nothing is
+uploaded between trials. See `dev/DAEMON.md` §3.2 for why: an upload that
+happens only when the trial type *changes* lengthens the ITI on exactly those
+trials, which is a timing difference correlated with the variable under study.
+
+Eight message types, in this order:
 
 ```
-graph_begin
-  graph_dist        × n_distributions
-  graph_state       × n_states, in index order
-    graph_transition  × this state's transitions
-    graph_action      × this state's entry and exit actions
-graph_end
+set_begin
+  graph_dist        × n_distributions        (see below on where these may go)
+  graph_begin       × n_graphs, in slot order
+    graph_state       × that graph's n_states, in index order
+      graph_transition  × this state's transitions
+      graph_action      × this state's entry and exit actions
+  graph_end
+set_end
 ```
 
 **`graph_transition` and `graph_action` attach to the most recently declared
-`graph_state`.** That is not a convenience: the device stores transitions and
-actions as one flat pool per kind, and a state refers to its own as a
-`(first, count)` slice of it. A slice is contiguous by construction only if
-everything belonging to a state arrives together — so the ordering rule on the
-wire *is* the memory invariant, and a violation is refused rather than producing
-a state that owns somebody else's transitions.
+`graph_state`, and a `graph_state` to the most recently declared
+`graph_begin`.** That is not a convenience: the device stores states,
+transitions and actions as one flat pool per kind, shared by every graph in the
+set, and each level refers to its own as a `(first, count)` slice. A slice is
+contiguous by construction only if everything belonging to it arrives together —
+so the ordering rule on the wire *is* the memory invariant, and a violation is
+refused rather than producing a graph that owns somebody else's states.
 
-The upload is staged. **The committed graph is untouched until `graph_end`
-succeeds**, so a failed or abandoned upload leaves the device running the
-paradigm it was already running.
+**State indices are per graph**, counted from zero, because that is how the host
+authored them: `entry`, a `timeout.target` and a transition's `target` all mean
+"the n'th state of *this* graph". The device adds the graph's offset on the way
+in, and reports state indices the same way in `result_path` and `visit`. Every
+other pool index — a distribution, in particular — is **set-global**, because
+those pools are genuinely shared and one graph reusing another's foreperiod is
+the point of sharing them.
 
-#### `graph_begin`
+> **A transition may not leave its own graph.** Selecting a graph by index has
+> to select a *machine*. A shared pool makes crossing easy to write by accident,
+> so it is refused at `set_end` with `bad_graph`.
+
+**The upload is not staged, and this is the one thing that got worse.** A single
+graph was double-buffered, so a failed re-upload left the previous paradigm
+running. Two sets do not fit in 32 KB, so the device fills the live one: from
+`set_begin` until `set_end` succeeds it holds **no graph at all**, `configure` is
+refused with `not_ready`, and every output sits at its safe level (§3.5). That
+fails safe and loudly where the alternative would be a board quietly running a
+paradigm somebody thought they had replaced — and it can only happen between
+sessions, since an upload is refused with `busy` while a trial is armed.
+
+#### `set_begin`
 
 ```json
-{"msg_type":"graph_begin","message_id":1,"graph_version":7,"n_states":4,"entry":0,"crc":"...."}
+{"msg_type":"set_begin","message_id":1,"set_version":7,"n_graphs":3,"crc":"...."}
 ```
 
 | Field | Type | |
 |---|---|---|
-| `graph_version` | `u16` | The host's identifier for this graph. Echoed in `armed` and checked by `configure` |
+| `set_version` | `u16` | The host's identifier for this set. Echoed in `armed` and checked by `configure` |
+| `n_graphs` | `u8` | Declared up front so an oversize set is refused before the first graph is sent, and so a `set_end` that arrives early is caught rather than committing a set with a hole in it. At most `caps.max_graphs` |
+
+#### `graph_begin`
+
+```json
+{"msg_type":"graph_begin","message_id":4,"slot":0,"n_states":4,"entry":0,"crc":"...."}
+```
+
+| Field | Type | |
+|---|---|---|
+| `slot` | `u8` | Which graph in the set this is, and what `configure`'s `graph_index` will name. Must be the next one: stated rather than implied by arrival order, so a dropped `graph_begin` is a refusal rather than a silently renumbered set |
 | `n_states` | `u8` | Declared up front so an oversize graph is refused before the first state is sent, not after the last |
-| `entry` | `u8` | State index the machine starts in |
+| `entry` | `u8` | State index the machine starts in, **within this graph** |
 
 > **`invert`, `enable`, `safe` and `debounce_ms` used to be here.** They describe
 > the *wiring* rather than the paradigm, and carrying them on `graph_begin` made
@@ -201,8 +238,15 @@ paradigm it was already running.
 
 #### `graph_dist`
 
-One entry of the shared distribution pool. Timeouts and holds refer to it by
-index, so a graph reuses one distribution everywhere it means the same thing.
+One entry of the distribution pool, which is shared by the **whole set**.
+Timeouts and holds refer to it by index, so a graph reuses one distribution
+everywhere it means the same thing, and two graphs reuse one where they mean the
+same thing.
+
+A host may send them all at set level, before the first `graph_begin`, or with
+the graph that introduces them. The one rule is the one that has always been
+here: a distribution arrives **before any state that could name it**, so a state
+is range-checked against the pool as it arrives rather than after the fact.
 
 ```json
 {"msg_type":"graph_dist","message_id":2,"i":0,"kind":"uniform","a":300,"b":700,"crc":"...."}
@@ -304,44 +348,57 @@ a graph forgot one is not a failure mode this protocol admits.
 #### `graph_end`
 
 ```json
-{"msg_type":"graph_end","message_id":40,"n_transitions":6,"n_output_actions":5,
- "checksum":"<crc16>","crc":"...."}
+{"msg_type":"graph_end","message_id":40,"n_transitions":6,"n_output_actions":5,"crc":"...."}
 ```
 
+Closes one graph. `n_transitions` and `n_output_actions` are **this graph's**
+counts, not the set's, checked against the device's — a host that miscounted one
+graph should be told which graph. Answered with `ack`.
+
+#### `set_end`
+
+```json
+{"msg_type":"set_end","message_id":41,"n_states":9,"n_transitions":6,
+ "n_output_actions":5,"checksum":"<crc16>","crc":"...."}
+```
+
+The set's totals across every graph, and the checksum.
+
 `checksum` is CRC-16/CCITT-FALSE accumulated over the **CRC-covered bytes of
-every graph message since `graph_begin`, in arrival order, `graph_begin`
-included and `graph_end` excluded**. It is not the same thing as the per-line
-`crc`: that one catches a corrupt line, this one catches a *missing* one.
+every upload message since `set_begin`, in arrival order, `set_begin` included
+and `set_end` excluded**. It is not the same thing as the per-line `crc`: that
+one catches a corrupt line, this one catches a *missing* one.
 
-`n_transitions` and `n_output_actions` are the host's counts, checked against the
-device's. A mismatch is refused, naming both.
-
-On success the assembled graph is validated — every index in range, every slice
-inside its pool, no output line the board does not have, a terminal state
-reachable from the entry state, and no unreachable state — and then committed.
-Answered with `graph_ok` or `error` / `bad_graph`, whose `context` names what
-failed.
+On success the whole set is validated — every index in range, every slice inside
+its pool, no output line the board does not have, no transition leaving its own
+graph, and per graph a terminal state reachable from the entry state with no
+unreachable state — and then committed. **All of it or none of it**: a set that
+uploaded four graphs and validated three is a session that fails at trial 40
+instead of before the animal is in the booth. Answered with `set_ok` or `error`
+/ `bad_graph`, whose `context` names what failed.
 
 ### 3.3 `configure`
 
 The per-trial message. Arms the device for exactly one trial.
 
 ```json
-{"msg_type":"configure","message_id":41,"trial_id":193,"graph_version":7,"cap_ms":30000,
- "start":"serial","patch":[{"i":0,"a":250,"b":900}],"crc":"...."}
+{"msg_type":"configure","message_id":41,"trial_id":193,"set_version":7,"graph_index":2,
+ "cap_ms":30000,"start":"serial","patch":[{"i":0,"a":250,"b":900}],"crc":"...."}
 ```
 
 | Field | Type | |
 |---|---|---|
 | `trial_id` | `u32` | The host's identity for this trial. Appears in `armed` and `result`, and a `cancel` for any other id is refused |
-| `graph_version` | `u16` | Must match the committed graph. A graph edit that did not land would otherwise leave the device confidently running the old paradigm |
+| `set_version` | `u16` | Must match the committed set. A set edit that did not land would otherwise leave the device confidently running the old paradigms |
+| `graph_index` | `u8` | Which graph of the set this trial runs. **This is the switch**: every graph is already on the device, so changing paradigm between two trials is one field on a message that was going to be sent anyway. Absent means `0`. Out of range is refused with `bad_index` |
 | `cap_ms` | `i32` | Wall-clock cap on the whole trial. `0` or absent means the device default. Validation cannot tell a 10 s foreperiod from a hang, so this stays regardless of the graph |
 | `start` | `"serial"` `"line"` `"both"` | What may start the trial once armed |
 | `patch` | array | Optional per-trial overrides of distribution parameters, by pool index. Only `a`, `b`, `c` may be patched; `kind` may not. Reverted when the trial ends |
 
-`patch` is why the graph does not have to be re-uploaded when only the timings
-change, which is the common case. It cannot change the *shape* of anything —
-that would be a different graph, and a different `graph_version`.
+`patch` indices are into the set's shared distribution pool, like every other
+distribution index. It is why a set does not have to be re-uploaded when only
+the timings change, which is the common case. It cannot change the *shape* of
+anything — that would be a different graph, and a different `set_version`.
 
 Answered with `armed`, or `error`.
 
@@ -419,10 +476,10 @@ a debounce must not take the safe levels with it.
 ```json
 {"msg_type":"hello_ack","message_id":0,"in_reply_to":0,"proto":1,"board":"uno_r4_minima",
  "fw":"0.1.0","n_input_lines":8,"n_output_lines":8,"scan_hz":10000,
- "has_graph":true,"graph_version":7,"has_wiring":true,
+ "has_set":true,"set_version":7,"n_graphs":3,"has_wiring":true,
  "caps":{"max_line":512,"max_states":32,"max_transitions":64,
          "max_output_actions":64,"max_distributions":32,
-         "max_choice_options":32,"max_path":255},"crc":"...."}
+         "max_choice_options":32,"max_path":255,"max_graphs":20},"crc":"...."}
 ```
 
 `scan_hz` is **measured at boot, not declared**, so the host knows the timing
@@ -447,13 +504,14 @@ board is running its compile-time defaults**, which is a different thing from
 "wired the way this rig needs" and is exactly what a host must not have to
 guess.
 
-`has_graph` and `graph_version` say whether a graph survived the reconnect, so a
+`has_set`, `set_version` and `n_graphs` say whether a set survived the reconnect, so a
 bridge that dropped its link knows whether it has to re-upload.
 
 ### 4.2 `armed`
 
 ```json
-{"msg_type":"armed","message_id":1,"in_reply_to":41,"trial_id":193,"graph_version":7,"crc":"...."}
+{"msg_type":"armed","message_id":1,"in_reply_to":41,"trial_id":193,"set_version":7,
+ "graph_index":2,"crc":"...."}
 ```
 
 Both fields, always. This is the confirmation that `start` requires and it is
@@ -576,8 +634,11 @@ up drops events rather than delaying a scan.
 may parse it.
 
 `state_report` answers `state` with the current state index, uptime, the
-committed `graph_version`, `has_wiring` as in §4.1, the counts of dropped and
-unusable lines, and a nested `scan` object. Diagnosis, not control.
+nested `graph` object (`has_set`, `set_version`, `n_graphs`, `index`),
+`has_wiring` as in §4.1, the counts of dropped and unusable lines, and a nested
+`scan` object. Nested because a message is capped at sixteen top-level members
+and that cap is what bounds the reader's stack footprint. Diagnosis, not
+control.
 
 ```jsonc
 "io":   {"in": 5, "out": 128},
@@ -626,7 +687,7 @@ the other two.
 | `bad_index` | An `i` did not match the count already accepted, or an index named something that does not exist |
 | `too_many` | A capacity was exceeded. `context` names **which one**, so the answer is "raise `max_transitions`", not "make the graph smaller" |
 | `bad_graph` | The assembled graph failed validation. `context` names the fault |
-| `graph_mismatch` | `configure` named a `graph_version` the device does not hold |
+| `graph_mismatch` | `configure` named a `set_version` the device does not hold |
 | `unknown_trial` | A `start` or `cancel` for a `trial_id` that is not the armed one |
 | `busy` | A trial is in flight and the command is not legal during one |
 | `internal` | A bug. Should never appear; if it does, it is one |

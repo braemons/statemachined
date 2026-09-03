@@ -17,7 +17,7 @@ constexpr LineBitmask bit(LineIndex n) { return static_cast<LineBitmask>(1u) << 
 /// a state's transitions and its actions are (first, count) *slices*, so each
 /// state's entries have to be added contiguously.
 struct Fill {
-  StateGraph& g;
+  GraphSet& g;
 
   uint8_t fixed_ms(Milliseconds ms) {
     RandomDistribution& d = g.distributions[g.n_distributions];
@@ -70,8 +70,13 @@ struct Fill {
 
 }  // namespace
 
-void build(StateGraph& g) {
-  g = StateGraph{};
+void build(GraphSet& g) {
+  g = GraphSet{};
+  // A set of one. The demo is the only graph a bench board holds, and building
+  // it as a set rather than beside one keeps a single code path from the pools
+  // through the machine.
+  g.n_graphs = 1;
+  g.graphs[0].first_state = 0;
   Fill f{g};
 
   const uint8_t step = f.fixed_ms(kStepMs);
@@ -84,7 +89,7 @@ void build(StateGraph& g) {
   const uint8_t done = f.terminal(TrialOutcome::Hit);
   const uint8_t aborted = f.terminal(TrialOutcome::Cancelled);
 
-  g.entry = wait;
+  g.graphs[0].entry = wait;
   g.version = 1;
 
   // Sitting idle, with the ready lamp on, until the switch is pressed. No
@@ -106,6 +111,8 @@ void build(StateGraph& g) {
   // is not it.
   f.raise_on_entry(done, kReadyOutput);
   f.raise_on_entry(aborted, static_cast<LineIndex>(kFirstStepOutput));
+
+  g.graphs[0].n_states = g.n_states;
 }
 
 DeviceWiring wiring() {

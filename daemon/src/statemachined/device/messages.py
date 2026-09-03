@@ -38,6 +38,8 @@ class MsgType(StrEnum):
 
     # Host -> device.
     HELLO = "hello"
+    SET_BEGIN = "set_begin"
+    SET_END = "set_end"
     GRAPH_BEGIN = "graph_begin"
     GRAPH_DIST = "graph_dist"
     GRAPH_STATE = "graph_state"
@@ -54,7 +56,7 @@ class MsgType(StrEnum):
     # Device -> host.
     HELLO_ACK = "hello_ack"
     ACK = "ack"
-    GRAPH_OK = "graph_ok"
+    SET_OK = "set_ok"
     ARMED = "armed"
     STARTED = "started"
     CANCEL_ACK = "cancel_ack"

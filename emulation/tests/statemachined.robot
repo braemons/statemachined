@@ -132,16 +132,18 @@ Upload Reward Graph
     ...                is P112: port1, pin 12.
     [Arguments]    ${ms}
     @{bodies}=    Create List
-    ...    {"msg_type":"graph_begin","message_id":10,"graph_version":1,"n_states":2,"entry":0
+    ...    {"msg_type":"set_begin","message_id":10,"set_version":1,"n_graphs":1
     ...    {"msg_type":"graph_dist","message_id":11,"i":0,"kind":"fixed","a":${ms}
-    ...    {"msg_type":"graph_state","message_id":12,"i":0,"terminal":null,"timeout":{"dist":0,"target":1}
-    ...    {"msg_type":"graph_action","message_id":13,"on":"entry","line":0,"kind":"high"
-    ...    {"msg_type":"graph_state","message_id":14,"i":1,"terminal":1,"timeout":null
+    ...    {"msg_type":"graph_begin","message_id":12,"slot":0,"n_states":2,"entry":0
+    ...    {"msg_type":"graph_state","message_id":13,"i":0,"terminal":null,"timeout":{"dist":0,"target":1}
+    ...    {"msg_type":"graph_action","message_id":14,"on":"entry","line":0,"kind":"high"
+    ...    {"msg_type":"graph_state","message_id":15,"i":1,"terminal":1,"timeout":null
+    ...    {"msg_type":"graph_end","message_id":16,"n_transitions":0,"n_output_actions":1
     FOR    ${b}    IN    @{bodies}
         Send And Expect           ${b}    "msg_type":"ack"
     END
     ${sum}=    Graph Checksum      ${bodies}
-    Send And Expect    {"msg_type":"graph_end","message_id":15,"n_transitions":0,"n_output_actions":1,"checksum":"${sum}"    "msg_type":"graph_ok"
+    Send And Expect    {"msg_type":"set_end","message_id":17,"n_states":2,"n_transitions":0,"n_output_actions":1,"checksum":"${sum}"    "msg_type":"set_ok"
 
 *** Test Cases ***
 The Firmware Boots And Answers On Real Peripherals
@@ -181,7 +183,7 @@ An Output Action Reaches A Real Pin
     ...                sits in the top half of PCNTR1, so pin 12 is bit 28.
     Greet
     Upload Reward Graph       9000
-    Send And Expect           {"msg_type":"configure","message_id":20,"trial_id":1,"graph_version":1    "msg_type":"armed"
+    Send And Expect           {"msg_type":"configure","message_id":20,"trial_id":1,"set_version":1    "msg_type":"armed"
 
     ${before}=    Execute Command    sysbus ReadDoubleWord ${PORT1_PCNTR1}
     Should Not Match Regexp   ${before}    (?i)0x1[0-9a-f]{7}
@@ -199,7 +201,7 @@ A Whole Trial Runs On The Board's Own Timer
     ...                micros() advanced. Terminal code 1 is HIT.
     Greet
     Upload Reward Graph       50
-    Send And Expect           {"msg_type":"configure","message_id":20,"trial_id":7,"graph_version":1    "msg_type":"armed"
+    Send And Expect           {"msg_type":"configure","message_id":20,"trial_id":7,"set_version":1    "msg_type":"armed"
     Send And Expect           {"msg_type":"start","message_id":21,"trial_id":7    "msg_type":"started"
     Wait For Line On Uart     "msg_type":"result_begin".*"trial_id":7.*"outcome":1    treatAsRegex=true
     Wait For Line On Uart     "msg_type":"result_end"    treatAsRegex=true

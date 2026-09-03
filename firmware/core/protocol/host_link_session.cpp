@@ -66,7 +66,7 @@ void DuplicateCommandGuard::remember(uint16_t message_id, const char* line, size
 }
 
 HostLinkSession::HostLinkSession(ReplySink& out, const DeviceIdentity& identity)
-    : out_(out), identity_(identity), reader_(rx_, sizeof(rx_)), runner_(live_graph_) {
+    : out_(out), identity_(identity), reader_(rx_, sizeof(rx_)), runner_(live_set_) {
   rebind_runner();
 }
 
@@ -165,20 +165,22 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
     case MsgType::Cancel:
       return on_cancel(m, message_id, now_us);
 
+    case MsgType::SetBegin:
+    case MsgType::SetEnd:
     case MsgType::GraphBegin:
     case MsgType::GraphDist:
     case MsgType::GraphState:
     case MsgType::GraphTransition:
     case MsgType::GraphAction:
     case MsgType::GraphEnd:
-      return on_graph_message(m, covered, message_id, t);
+      return on_upload_message(m, covered, message_id, t);
 
     // Names this device knows but only ever sends. A host saying `pong` is as
     // unrecognisable a command as one saying `teleport`, and is refused the
     // same way rather than falling through to something that half-works.
     case MsgType::HelloAck:
     case MsgType::Ack:
-    case MsgType::GraphOk:
+    case MsgType::SetOk:
     case MsgType::Armed:
     case MsgType::Started:
     case MsgType::CancelAck:
@@ -246,9 +248,11 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id) {
   w.key_u32("max_distributions", kMaxDistributions);
   w.key_u32("max_choice_options", kMaxChoiceOptions);
   w.key_u32("max_path", kMaxPath);
+  w.key_u32("max_graphs", kMaxGraphs);
   w.end_object();
-  w.key_bool("has_graph", have_graph_);
-  w.key_u32("graph_version", have_graph_ ? live_graph_.version : 0);
+  w.key_bool("has_set", have_set_);
+  w.key_u32("set_version", have_set_ ? live_set_.version : 0);
+  w.key_u32("n_graphs", have_set_ ? live_set_.n_graphs : 0);
   // Whether anybody has told this board what it is wired to. False means it is
   // running the compile-time defaults, which a daemon needs to know before it
   // decides whether to push a wiring or to trust the one that is there.
@@ -320,8 +324,8 @@ void HostLinkSession::on_wiring(const JsonObject& m, uint16_t message_id) {
   send_ack(message_id);
 }
 
-void HostLinkSession::on_graph_message(const JsonObject& m, JsonSpan covered,
-                                       uint16_t message_id, MsgType type) {
+void HostLinkSession::on_upload_message(const JsonObject& m, JsonSpan covered,
+                                        uint16_t message_id, MsgType type) {
   if (state_ == LinkState::Armed || state_ == LinkState::Running) {
     send_error(message_id, "busy", "a trial is armed or running", "graph upload");
     return;
@@ -330,8 +334,15 @@ void HostLinkSession::on_graph_message(const JsonObject& m, JsonSpan covered,
   UploadError e = UploadError::None;
   bool is_end = false;
   switch (type) {
+    case MsgType::SetBegin:
+      // From here until set_end succeeds the board holds no graph. The builder
+      // writes into the live set because two do not fit, so this is where the
+      // old double buffering went -- see graph_builder.h.
+      have_set_ = false;
+      e = builder_.begin_set(m, covered);
+      break;
     case MsgType::GraphBegin:
-      e = builder_.begin(m, covered);
+      e = builder_.begin_graph(m, covered);
       break;
     case MsgType::GraphDist:
       e = builder_.add_distribution(m, covered);
@@ -345,8 +356,11 @@ void HostLinkSession::on_graph_message(const JsonObject& m, JsonSpan covered,
     case MsgType::GraphAction:
       e = builder_.add_action(m, covered);
       break;
-    default:  // graph_end; dispatch admits no other type here
-      e = builder_.end(m);
+    case MsgType::GraphEnd:
+      e = builder_.end_graph(m, covered);
+      break;
+    default:  // set_end; dispatch admits no other type here
+      e = builder_.end_set(m);
       is_end = true;
       break;
   }
@@ -361,28 +375,27 @@ void HostLinkSession::on_graph_message(const JsonObject& m, JsonSpan covered,
     return;
   }
 
-  // The live graph is untouched until here, so a failed or abandoned upload
-  // leaves the device running the paradigm it was already running. Copying is
-  // what makes the swap atomic from the caller's point of view, and StateGraph's
-  // copy re-points the choice pools so the new graph refers to its own.
-  live_graph_ = builder_.staged();
-  have_graph_ = true;
-  runner_ = TrialRunner(live_graph_);
+  have_set_ = true;
+  // Graph 0 until a configure says otherwise, so a board that has just been
+  // given a set is in a defined state rather than pointing at a slot nobody
+  // chose.
+  runner_ = TrialRunner(live_set_, 0);
   rebind_runner();
 
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::GraphOk), tx_message_id_);
+  w.begin(msg_type_name(MsgType::SetOk), tx_message_id_);
   w.in_reply_to(message_id);
-  w.key_u32("graph_version", live_graph_.version);
-  w.key_u32("n_states", live_graph_.n_states);
-  w.key_u32("n_transitions", live_graph_.n_transitions);
-  w.key_u32("n_output_actions", live_graph_.n_output_actions);
+  w.key_u32("set_version", live_set_.version);
+  w.key_u32("n_graphs", live_set_.n_graphs);
+  w.key_u32("n_states", live_set_.n_states);
+  w.key_u32("n_transitions", live_set_.n_transitions);
+  w.key_u32("n_output_actions", live_set_.n_output_actions);
   send(w, message_id);
 }
 
 void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
-  if (!have_graph_) {
-    send_error(message_id, "not_ready", "no graph has been committed", "graph");
+  if (!have_set_) {
+    send_error(message_id, "not_ready", "no graph set has been committed", "graph");
     return;
   }
   if (state_ == LinkState::Running) {
@@ -396,15 +409,29 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
     send_error(message_id, "bad_json", "no trial_id", "trial_id");
     return;
   }
-  if (!m.u16("graph_version", &version)) {
-    send_error(message_id, "bad_json", "no graph_version", "graph_version");
+  if (!m.u16("set_version", &version)) {
+    send_error(message_id, "bad_json", "no set_version", "set_version");
     return;
   }
-  // A graph edit that did not land would otherwise leave the device confidently
-  // running the old paradigm.
-  if (version != live_graph_.version) {
-    send_error(message_id, "graph_mismatch", "the device holds a different graph",
-               "graph_version");
+  // A set edit that did not land would otherwise leave the device confidently
+  // running the old paradigms.
+  if (version != live_set_.version) {
+    send_error(message_id, "graph_mismatch", "the device holds a different set", "set_version");
+    return;
+  }
+
+  // This is the switch. Every graph the session uses is already here, so
+  // changing paradigm between two trials costs one field on a message the
+  // device was going to receive anyway. See dev/DAEMON.md 3.2.
+  uint8_t graph_index = 0;
+  if (m.type_of("graph_index") != JsonType::Missing) {
+    if (!m.u8("graph_index", &graph_index)) {
+      send_error(message_id, "bad_json", "graph_index", "graph_index");
+      return;
+    }
+  }
+  if (graph_index >= live_set_.n_graphs) {
+    send_error(message_id, "bad_index", "no graph in that slot", "graph_index");
     return;
   }
 
@@ -428,7 +455,7 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
     }
   }
 
-  runner_ = TrialRunner(live_graph_);
+  runner_ = TrialRunner(live_set_, graph_index);
   rebind_runner();
   runner_.set_trial_cap_ms(cap_ms);
   armed_trial_id_ = trial_id;
@@ -440,7 +467,8 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
   w.begin(msg_type_name(MsgType::Armed), tx_message_id_);
   w.in_reply_to(message_id);
   w.key_u32("trial_id", trial_id);
-  w.key_u32("graph_version", live_graph_.version);
+  w.key_u32("set_version", live_set_.version);
+  w.key_u32("graph_index", graph_index);
   send(w, message_id);
 }
 
@@ -542,8 +570,16 @@ void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us)
   w.begin(msg_type_name(MsgType::StateReport), tx_message_id_);
   w.in_reply_to(message_id);
   w.key_u32("link_state", static_cast<uint32_t>(state_));
-  w.key_bool("has_graph", have_graph_);
-  w.key_u32("graph_version", have_graph_ ? live_graph_.version : 0);
+  // Nested for the reason `io` and `scan` are, and it is a hard limit rather
+  // than a preference: a message is capped at kJsonMaxMembers, and that cap is
+  // what bounds JsonObject's stack footprint. Four more top-level members here
+  // would push state_report past it and make the reply unparsable.
+  w.begin_object("graph");
+  w.key_bool("has_set", have_set_);
+  w.key_u32("set_version", have_set_ ? live_set_.version : 0);
+  w.key_u32("n_graphs", have_set_ ? live_set_.n_graphs : 0);
+  w.key_u32("index", runner_.graph_index());
+  w.end_object();
   w.key_bool("has_wiring", have_wiring_);
   w.key_u32("trial_id", armed_trial_id_);
   w.key_bool("running", runner_.running());

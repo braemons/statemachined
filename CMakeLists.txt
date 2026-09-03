@@ -29,7 +29,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # machine ever grows a dependency on JSON or framing, that link fails -- which
 # is a better answer than a comment asking people not to.
 add_library(statemachined_engine
-  firmware/core/graph/state_graph.cpp
+  firmware/core/graph/graph_set.cpp
   firmware/core/random/rng.cpp
   firmware/core/random/random_distribution.cpp
   firmware/core/io/input_conditioner.cpp

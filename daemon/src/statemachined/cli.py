@@ -62,7 +62,7 @@ def seconds(us) -> str:
 
 
 KNOWN_STATE_KEYS = {
-    *Field, "link_state", "has_graph", "graph_version", "trial_id", "running",
+    *Field, "link_state", "graph", "trial_id", "running",
     "current_state", "up_us", "dropped_lines", "bad_lines", "io", "scan",
 }
 
@@ -72,7 +72,13 @@ def print_state(report: dict, board: str | None, n_in: int, n_out: int) -> None:
     scan = report.get("scan", {})
 
     field("link_state", report.get("link_state"))
-    field("graph", f"v{report['graph_version']}" if report.get("has_graph") else "none")
+    g = report.get("graph", {})
+    field(
+        "graph",
+        f"set v{g['set_version']}, {g['n_graphs']} graph(s), running {g['index']}"
+        if g.get("has_set")
+        else "none",
+    )
     field("trial", f"{report.get('trial_id')}{' (running)' if report.get('running') else ''}")
     field("current_state", report.get("current_state"))
     field("up", seconds(report.get("up_us")))
@@ -102,7 +108,9 @@ def print_hello_ack(ack: dict) -> None:
     field("scan_hz", f"{hz}{verdict}")
     field(
         "graph",
-        f"v{ack['graph_version']} (survived the reconnect)" if ack.get("has_graph") else "none",
+        f"set v{ack['set_version']}, {ack['n_graphs']} graph(s) (survived the reconnect)"
+        if ack.get("has_set")
+        else "none",
     )
     field("caps", json.dumps(ack.get("caps", {})))
 

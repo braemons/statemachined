@@ -202,7 +202,7 @@ def two_state_graph(device):
     graph.action("entry", line=TRIAL_OUTPUT_LINE, kind="high")
     graph.state(1, terminal=1, timeout=None)
     ok = graph.end()
-    assert ok[Field.MSG_TYPE] == MsgType.GRAPH_OK, ok
+    assert ok[Field.MSG_TYPE] == MsgType.SET_OK, ok
     return graph
 
 
@@ -230,9 +230,9 @@ def loopback(greeted) -> dict[int, int]:
         graph.action("entry", line=out_line, kind="high")
     graph.state(1, terminal=1, timeout=None)
     ok = graph.end()
-    assert ok[Field.MSG_TYPE] == MsgType.GRAPH_OK, ok
+    assert ok[Field.MSG_TYPE] == MsgType.SET_OK, ok
 
-    device.request(MsgType.CONFIGURE, trial_id=9001, graph_version=99, cap_ms=2000,
+    device.request(MsgType.CONFIGURE, trial_id=9001, set_version=99, cap_ms=2000,
                    start="serial")
     device.request(MsgType.START, trial_id=9001)
     seen = device.state()["io"]["in"]

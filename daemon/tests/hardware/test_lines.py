@@ -60,7 +60,7 @@ def bit(n: int) -> int:
 def run_trial(device, graph, trial_id: int, cap_ms: int = 2000):
     """Arm, start, and collect the result. The shape every test here shares."""
     armed = device.request(
-        MsgType.CONFIGURE, trial_id=trial_id, graph_version=graph.version, cap_ms=cap_ms,
+        MsgType.CONFIGURE, trial_id=trial_id, set_version=graph.version, cap_ms=cap_ms,
         start="serial",
     )
     assert armed[Field.MSG_TYPE] == MsgType.ARMED
@@ -86,7 +86,7 @@ def predicate_graph(device, version: int, raise_lines: list[int], **predicate):
     graph.transition(target=1, **predicate)
     graph.state(1, terminal=int(Outcome.HIT), timeout=None)
     ok = graph.end()
-    assert ok[Field.MSG_TYPE] == MsgType.GRAPH_OK, ok
+    assert ok[Field.MSG_TYPE] == MsgType.SET_OK, ok
     return graph
 
 
@@ -146,7 +146,7 @@ def test_all_requires_every_line_named(device, loopback):
     graph.transition(target=2, all=bit(IN_A) | bit(IN_B))
     graph.state(2, terminal=int(Outcome.HIT), timeout=None)
     ok = graph.end()
-    assert ok[Field.MSG_TYPE] == MsgType.GRAPH_OK, ok
+    assert ok[Field.MSG_TYPE] == MsgType.SET_OK, ok
 
     result = run_trial(device, graph, trial_id=102)
     assert result.outcome == Outcome.HIT
@@ -213,7 +213,7 @@ def test_a_predicate_already_true_on_entry_does_not_fire(device, loopback):
     graph.transition(target=2, all=bit(IN_A))
     graph.state(2, terminal=int(Outcome.HIT), timeout=None)
     ok = graph.end()
-    assert ok[Field.MSG_TYPE] == MsgType.GRAPH_OK, ok
+    assert ok[Field.MSG_TYPE] == MsgType.SET_OK, ok
 
     result = run_trial(device, graph, trial_id=105, cap_ms=300)
     assert result.outcome != Outcome.HIT, (
@@ -238,7 +238,7 @@ def test_level_makes_a_predicate_fire_on_entry(device, loopback):
     graph.transition(target=2, all=bit(IN_A), level=True)
     graph.state(2, terminal=int(Outcome.HIT), timeout=None)
     ok = graph.end()
-    assert ok[Field.MSG_TYPE] == MsgType.GRAPH_OK, ok
+    assert ok[Field.MSG_TYPE] == MsgType.SET_OK, ok
 
     result = run_trial(device, graph, trial_id=106, cap_ms=300)
     assert result.outcome == Outcome.HIT
