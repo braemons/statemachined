@@ -354,16 +354,15 @@ paradigm; re-sending them with every graph is what makes "change the debounce"
 read as "re-upload the graph" in §4.1, and keeping them only inside a graph is
 why a board with no graph cannot fail safe correctly.
 
-That, plus persistence, is one small firmware milestone — **M4b′** in §7:
+That move is part of **M4b′** in §7. **Persisting it is deferred** — see the end
+of §3.4 — so M4b′ takes the half that needs no flash driver:
 
 | | |
 |---|---|
 | `graph/state_graph.h` | `InputConfig` and `output_safe_levels` move out to device scope |
-| `core/hal.h` | an eighth function: read and write the data flash, on a boundary that already exists |
-| `hal/renesas_ra4m1.cpp` | the RA4M1 data-flash implementation. `native.cpp` gets a file-backed stand-in so the host tests still cover the path |
-| `src/main.cpp` | read the wiring config before the first `fail_safe()`, and the graph after it |
-| `protocol/host_link_session.cpp` | a `wiring` command, a `persist` command, both refused with `busy` during a trial |
-| `dev/PROTOCOL.md` | §3 gains those two; §4.1 `hello_ack` reports what was restored, so the daemon never guesses whether the board came up configured |
+| `protocol/host_link_session.cpp` | a `wiring` command, refused with `busy` during a trial |
+| `src/main.cpp` | the compile-time safe levels of §3.4, applied before the first `fail_safe()` |
+| `dev/PROTOCOL.md` | §3 gains `wiring`; §4.1 `hello_ack` says whether the board has been given one, so the daemon never guesses whether it came up configured |
 
 Should the graph set of §3.2 also be needed, it is `config.h`,
 `graph/state_graph.h`,
@@ -427,6 +426,30 @@ What this adds below the daemon: a `persist` message in `PROTOCOL.md` §3, a
 makes it eight, on a boundary that already exists), a boot-time read in
 `main.cpp` before `fail_safe()`, and `hello_ack` reporting what was restored so
 the daemon never has to guess whether the board came up configured.
+
+#### Deferred, and what holds the hole shut meanwhile
+
+**The data flash itself is later work.** The `hal.h` addition, the RA4M1
+implementation, the file-backed `native.cpp` stand-in, the boot-time read and the
+`persist` command are a milestone of their own, after the daemon exists and can
+exercise them; nothing above M6 needs them. Open questions 8 and 12 defer with
+them.
+
+That leaves the fail-safe hole open, so it should be shut cheaply rather than
+left. Two things do it:
+
+**A compile-time safe-level word in the rig image.** `make firmware-rig` already
+builds a distinct binary; `-DSTATEMACHINED_SAFE_LEVELS=0x…` makes the first
+`fail_safe()` correct for a rig whose wiring is fixed, which is every rig, and
+costs one constant. It is worse than data flash in exactly one way — changing the
+wiring means rebuilding rather than a `wiring` command — and that is the argument
+for doing the flash later, not for leaving the outputs wrong now.
+
+**The daemon pushes the wiring on connect**, before it does anything else, so the
+window in which a board holds compile-time defaults is the seconds between power
+and the first `hello`. With the constant in place that window is safe rather than
+merely short, which is the point: the mitigation must not depend on the daemon
+being up.
 
 ### 3.5 Randomised durations: already the design, and a contradiction
 
@@ -593,7 +616,7 @@ together is cheaper than sequencing them:
 | `machine/state_machine.cpp` | `record_visit()` gains an emit callback. The machine must not learn about the link, so it is a sink passed in, and `native` tests pass a vector |
 | `protocol/host_link_session.cpp` | serialise `visit`, queue it, never block on it |
 | `trial/trial_runner.cpp` | supplies `trial_id` to the sink; `0` when there is no trial |
-| `core/config.h` | `STATEMACHINED_MAX_PATH` 64 → 255 |
+| `core/config.h` | `STATEMACHINED_MAX_PATH` 64 → 255, and `STATEMACHINED_SAFE_LEVELS` (§3.4) |
 | `machine/state_machine.cpp` | `record_visit()` becomes a real ring: overflow costs the oldest visit, not the newest, which is what `config.h:34` has always claimed |
 | `protocol/host_link_session.cpp` | `result_begin` gains `first_seq` and `total_visits`; the chunker walks the ring in order |
 | `dev/PROTOCOL.md` | §4 gains `visit`, and §4.3 gains the sentence that the result is authoritative and the stream is a preview |
@@ -939,13 +962,14 @@ M4a–M4e; its M5–M7 shift down and need renumbering in that document.
 | | |
 |---|---|
 | **M4a** | **The move, and nothing else.** `tools/bringup/` → `daemon/`, package renamed, `wire.py` made standalone with golden vectors against the emulator's copy. `make bringup` and `make test-hardware` keep working, unchanged in behaviour. Reviewable as a pure move |
-| **M4b′** | **Wiring config, persistence, and the `visit` stream, in the firmware** (§3.3, §3.4, §3.6). The one firmware milestone here, and small. The first part closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships; the second is a callback and a serialiser. They share a file and a protocol document, so they share a branch. Renode covers the HAL addition; `native.cpp` gets a file-backed stand-in so the host tests reach it too |
+| **M4b′** | **Wiring config and the `visit` stream, in the firmware** (§3.3, §3.6). The one firmware milestone here, and small. The wiring move plus a compile-time safe-level word closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships; the stream is a callback and a serialiser. They share a file and a protocol document, so they share a branch. **No data flash** — that is deferred to M7 |
 | **M4b** | `model/` and `compile.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4c** | `device/supervisor.py` and `clock.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core over a pty — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks |
 | **M4d** | FastAPI: device, lines, graphs, trial, config, state/stream; the triald client; `statemachined serve`. `dev/API.md` written first, the way `PROTOCOL.md` was |
 | **M4e** | The web UI and the `/elements/` contract; mDNS |
 | **M5** | Packaging: nfpm, systemd, sysusers, udev, logrotate, the builder containers, `release.yml`, one line in `packages/sources.txt`. **Installed on the Pi 5 alongside vstimd and triald** |
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
+| **M7** | **Data flash** (§3.4): the `hal.h` addition, the RA4M1 implementation, a file-backed `native.cpp` stand-in, the boot-time read, and `persist`. Deferred deliberately: the compile-time safe levels of §3.4 hold the fail-safe hole shut without it, and this is easier to build once a daemon exists to exercise it. Renode covers the HAL addition |
 
 **M4a is worth doing and merging on its own.** It is a move with no new
 behaviour, it makes the hardware suite test the daemon's codec instead of a copy
@@ -984,7 +1008,9 @@ diff.
    deferred long, since it is most of what makes three daemons feel like one rig.
 8. **The RA4M1 data-flash numbers** (§3.4): 8 KB and ~100 000 erase cycles are
    from memory, not from the datasheet. Cheap to confirm, and #12 depends on the
-   second one being roughly right.
+   second one being roughly right. **Deferred with M7** — but confirm it before
+   M7 is planned in detail rather than during it, since a figure an order of
+   magnitude out changes whether `persist` is worth having at all.
 9. **Trace retention.** Mostly answered by the ring: nothing in the daemon
    depends on what logrotate deletes, because the API reads the ring and never
    the file. What is left is how long the file is kept and by what rule, which is
@@ -1002,7 +1028,8 @@ diff.
    that is right for the daemon, but "optional" across two daemons usually means
    "nobody did it". If the answer is yes it is a triald change, and it lands with
    the amendments in #3 and #5.
-12. **Who is allowed to call `persist`, and how often.** "Explicit, never on
+12. **Who is allowed to call `persist`, and how often** — deferred with M7, and
+   the reason the rule is written down now rather than then. "Explicit, never on
    `graph_end`" is the rule that protects the part, and a rule enforced only by
    the daemon's good manners is one a future caller breaks. Worth a write counter
    in `state_report`, so the budget is observable rather than trusted — the same
