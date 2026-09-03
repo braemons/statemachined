@@ -1,4 +1,4 @@
-# Formatting style for fsmd. Keep in step with the clang-format version pinned
+# Formatting style for statemachined. Keep in step with the clang-format version pinned
 # in .github/workflows/ci.yml and .devcontainer/Dockerfile (currently 23.1.0).
 #
 # This file cannot pin the version by itself: `BasedOnStyle: Google` resolves

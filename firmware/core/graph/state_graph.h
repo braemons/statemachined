@@ -19,7 +19,7 @@
 #include "graph/transition.h"
 #include "random/random_distribution.h"
 
-namespace fsmd {
+namespace statemachined {
 
 /// Per-line input conditioning, applied when the word is assembled so that every
 /// predicate above sees clean, polarity-normalised bits and no transition logic
@@ -103,4 +103,4 @@ GraphError validate(const StateGraph& g);
 
 const char* graph_error_str(GraphError e);
 
-}  // namespace fsmd
+}  // namespace statemachined

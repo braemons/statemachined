@@ -1,4 +1,4 @@
-# fsmd — the wire protocol
+# statemachined — the wire protocol
 
 > **Status:** specification. The codec is milestone M2 in [`PLAN.md`](PLAN.md);
 > the firmware side of it is being written against this document, not the other

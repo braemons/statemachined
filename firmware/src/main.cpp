@@ -41,15 +41,15 @@
 #include "protocol/host_link_session.h"
 #include "trial/trial_runner.h"
 
-using namespace fsmd;
+using namespace statemachined;
 
-namespace fsmd {
+namespace statemachined {
 namespace hal {
 /// Declared in the board HAL rather than in hal.h: who owns the tick is a
 /// property of the board, and this is the only caller.
 bool start_scan_timer(uint32_t hz, void (*callback)());
 }  // namespace hal
-}  // namespace fsmd
+}  // namespace statemachined
 
 namespace {
 
@@ -140,12 +140,12 @@ bool g_link_was_up = false;
 // Costs ~4.6 KB of SRAM -- its own StateGraph and its own TrialRunner -- on a
 // board with 32 KB. That is worth it on a bench and worth nothing on a rig,
 // where a host greets within a second of boot, so a deployed build can drop it
-// with -DFSMD_DEMO=0 and get the RAM back.
-#ifndef FSMD_DEMO
-#define FSMD_DEMO 1
+// with -DSTATEMACHINED_DEMO=0 and get the RAM back.
+#ifndef STATEMACHINED_DEMO
+#define STATEMACHINED_DEMO 1
 #endif
 
-#if FSMD_DEMO
+#if STATEMACHINED_DEMO
 StateGraph g_demo_graph;
 bool g_demo_active = false;
 uint32_t g_demo_trial_id = 0;
@@ -179,7 +179,7 @@ bool reached(Microseconds now, Microseconds deadline) {
 /// service_link() is what notices a host has arrived.
 void demo_end(Microseconds now);
 
-#else  // !FSMD_DEMO
+#else  // !STATEMACHINED_DEMO
 
 // Stubs, so the call sites read the same in both builds and the compiler drops
 // the branches rather than the reader having to.
@@ -188,7 +188,7 @@ inline void demo_begin(Microseconds) {}
 inline void demo_end(Microseconds) {}
 inline void demo_scan(LineBitmask, Microseconds) {}
 
-#endif  // FSMD_DEMO
+#endif  // STATEMACHINED_DEMO
 
 void apply_graph_input_config();
 
@@ -232,7 +232,7 @@ void service_link() {
   }
 }
 
-#if FSMD_DEMO
+#if STATEMACHINED_DEMO
 
 /// The heartbeat on the board's own LED, which is deliberately NOT one of the
 /// eight output lines: D13 is excluded from the line map on purpose, so this
@@ -318,7 +318,7 @@ void demo_scan(LineBitmask word, Microseconds now) {
 /// back inverted and every declared debounce was silently ignored. The
 /// conditioner is owned here rather than by the session, so this is where the
 /// two are joined.
-#endif  // FSMD_DEMO
+#endif  // STATEMACHINED_DEMO
 
 void apply_graph_input_config() {
   static uint16_t applied_version = 0;

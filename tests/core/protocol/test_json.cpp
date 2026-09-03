@@ -10,7 +10,7 @@
 #include "protocol/framing.h"
 #include "protocol/json.h"
 
-using namespace fsmd;
+using namespace statemachined;
 
 namespace {
 

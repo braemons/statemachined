@@ -1,4 +1,4 @@
-# Reproducible build environment for fsmd.
+# Reproducible build environment for statemachined.
 #
 # The point of pinning here is that CI, this container, and a developer's laptop
 # should disagree about nothing that can change a build result. Two things in

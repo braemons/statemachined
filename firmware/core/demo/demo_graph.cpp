@@ -6,7 +6,7 @@
 #include "graph/transition.h"
 #include "trial/trial.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace demo {
 namespace {
 
@@ -115,4 +115,4 @@ void build(StateGraph& g) {
 }
 
 }  // namespace demo
-}  // namespace fsmd
+}  // namespace statemachined

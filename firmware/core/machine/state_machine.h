@@ -34,7 +34,7 @@
 #include "graph/state_graph.h"
 #include "random/rng.h"
 
-namespace fsmd {
+namespace statemachined {
 
 /// One visited state. `state_index`, not a name: the bridge holds the graph and
 /// resolves names host-side, which is part of what keeps the device inside
@@ -192,4 +192,4 @@ class StateMachine {
                                ///< unchanged input word still needs work
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

@@ -8,9 +8,9 @@
 #include "doctest.h"
 #include "trial/trial_runner.h"
 
-using namespace fsmd;
-using fsmd::test::bit;
-using fsmd::test::ms;
+using namespace statemachined;
+using statemachined::test::bit;
+using statemachined::test::ms;
 
 namespace {
 

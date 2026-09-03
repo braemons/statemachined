@@ -26,7 +26,7 @@
 #include "protocol/json.h"
 #include "trial/trial_runner.h"
 
-namespace fsmd {
+namespace statemachined {
 
 /// Where a reply goes. Abstract because the session must not know whether the
 /// far end is a USB CDC endpoint or a std::string in a test.
@@ -209,4 +209,4 @@ class HostLinkSession {
   OutputUpdate pending_ops_;
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

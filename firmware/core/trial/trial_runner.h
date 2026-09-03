@@ -12,7 +12,7 @@
 #include "machine/state_machine.h"
 #include "trial/trial.h"
 
-namespace fsmd {
+namespace statemachined {
 
 class TrialRunner {
  public:
@@ -72,4 +72,4 @@ class TrialRunner {
   TrialRecord result_;
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

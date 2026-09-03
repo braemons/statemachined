@@ -4,7 +4,7 @@
 #include "protocol/crc16.h"
 #include "protocol/framing.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace {
 
 bool is_ws(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
@@ -673,4 +673,4 @@ size_t JsonWriter::finish(bool newline) {
   return finish_frame(buf_, len_, cap_, newline);
 }
 
-}  // namespace fsmd
+}  // namespace statemachined

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 *** Settings ***
-Documentation     fsmd on an emulated Uno R4 Minima.
+Documentation     statemachined on an emulated Uno R4 Minima.
 ...
 ...               These tests cover the code the host build physically cannot
 ...               compile: the pin map, the port-register arithmetic, the timer
@@ -12,11 +12,11 @@ Documentation     fsmd on an emulated Uno R4 Minima.
 ...               a nominal MIPS figure, so a scan takes exactly as long as we
 ...               tell it to. The 10 kHz claim needs a board -- dev/HARDWARE.md.
 
-Library           ${CURDIR}/fsmd_protocol.py
+Library           ${CURDIR}/statemachined_protocol.py
 Resource          ${RENODEKEYWORDS}
 Suite Setup       Setup
 Suite Teardown    Teardown
-Test Setup        Boot Fsmd
+Test Setup        Boot Statemachined
 Test Teardown     Test Teardown
 
 *** Variables ***
@@ -26,9 +26,9 @@ ${PORT1_PCNTR1}   0x40040020
 ${PORT0_PCNTR1}   0x40040000
 
 *** Keywords ***
-Boot Fsmd
+Boot Statemachined
     Execute Command           $elf = @${ELF}
-    Execute Script            ${CURDIR}/../fsmd.resc
+    Execute Script            ${CURDIR}/../statemachined.resc
     # defaultPauseEmulation is what makes this suite deterministic rather than
     # merely usually-green. With it, the machine advances ONLY where a test says
     # so -- an explicit RunFor, or a wait that stops the moment it matches -- so
@@ -81,10 +81,10 @@ Send And Expect
 
 Send Once And Match
     [Arguments]    ${body}    ${pattern}
-    Send Fsmd                 ${body}
+    Send Statemachined                 ${body}
     Wait For Line On Uart     ${pattern}    treatAsRegex=true    timeout=8
 
-Send Fsmd
+Send Statemachined
     [Documentation]    One protocol line into SCI2, paced so the receive FIFO
     ...                drains between bytes.
     ...
@@ -152,11 +152,11 @@ The Firmware Boots And Answers On Real Peripherals
 
 An Input Pin Reaches The Line Number A Graph Would Name
     [Documentation]    The test this whole emulator exists for. Nothing on the
-    ...                host can check that fsmd input line 0 is the pin somebody
+    ...                host can check that statemachined input line 0 is the pin somebody
     ...                wired to D2 -- that arithmetic only runs on the board, and
     ...                getting it wrong means a lever press arriving as a lick.
     ...
-    ...                fsmd input line 0 is D2, which is P105: port1, pin 5.
+    ...                statemachined input line 0 is D2, which is P105: port1, pin 5.
     ...                Line 6 is D8, which is P304: port3, pin 4 -- a different
     ...                port on purpose, because a HAL that reads one port
     ...                register and gathers every line out of it would pass a

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The trial layer's vocabulary. None of this is known to the state machine.
 //
-// fsmd is the *timing* authority and triald is the *decision* authority: what
+// statemachined is the *timing* authority and triald is the *decision* authority: what
 // crosses the wire is a report of what happened, not a verdict on it. The
 // firmware never learns the trial type -- it receives a graph, timings and a
 // reward duration, which is what keeps firmware stable while paradigms change.
@@ -12,7 +12,7 @@
 #include "graph/state.h"
 #include "machine/state_machine.h"
 
-namespace fsmd {
+namespace statemachined {
 
 /// triald's .tdr outcome codes. A wire contract: these values are in every .tdr
 /// the lab has written and every analysis script that reads one. NEVER
@@ -45,7 +45,7 @@ enum class TrialCancelReason : uint8_t {
   TrialTimeout = 4,  ///< the wall-clock cap on total trial duration
 };
 
-/// What fsmd adds to a run to make it a trial: an identity and a verdict on how
+/// What statemachined adds to a run to make it a trial: an identity and a verdict on how
 /// it ended. Deliberately does NOT embed the StateMachineRunRecord. That record holds
 /// kMaxPath StateVisits -- about 1 KB on the reference board -- and copying it
 /// here would double the largest buffer in the system on a part with 32 KB.
@@ -56,4 +56,4 @@ struct TrialRecord {
   TrialCancelReason cancel_reason = TrialCancelReason::None;
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

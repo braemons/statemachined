@@ -28,7 +28,7 @@
 
 #include "config.h"
 
-namespace fsmd {
+namespace statemachined {
 
 struct Transition {
   LineBitmask all_high = 0;   ///< every one of these lines must be high
@@ -66,4 +66,4 @@ struct TransitionState {
   Milliseconds hold_needed_ms = 0;  ///< drawn on state entry
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

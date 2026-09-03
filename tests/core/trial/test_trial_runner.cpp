@@ -5,8 +5,8 @@
 #include "helpers.h"
 #include "trial/trial_runner.h"
 
-using namespace fsmd;
-using namespace fsmd::test;
+using namespace statemachined;
+using namespace statemachined::test;
 
 namespace {
 /// Run the engine forward to `until_us` in 100 us steps -- the real 10 kHz scan

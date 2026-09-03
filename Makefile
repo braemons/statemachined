@@ -26,7 +26,7 @@ export ASAN_OPTIONS  ?= detect_leaks=1
 
 .PHONY: sanitize
 sanitize:                   ## the same tests under ASan and UBSan
-	cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DFSMD_SANITIZE=ON
+	cmake -S . -B build-san -DCMAKE_BUILD_TYPE=Debug -DSTATEMACHINED_SANITIZE=ON
 	cmake --build build-san -j
 	ctest --test-dir build-san --output-on-failure
 
@@ -52,7 +52,7 @@ firmware:                   ## build for the reference board (demo mode on)
 # here as well as by CI, or the #else half of that switch rots unnoticed.
 .PHONY: firmware-rig
 firmware-rig:               ## the same, with demo mode compiled out
-	PLATFORMIO_BUILD_FLAGS=-DFSMD_DEMO=0 pio run -e $(BOARD)
+	PLATFORMIO_BUILD_FLAGS=-DSTATEMACHINED_DEMO=0 pio run -e $(BOARD)
 
 # Emulation. Covers what the host build cannot compile -- the pin map, the port
 # registers, the timer ISR, the protocol over a real UART -- and says nothing
@@ -62,7 +62,7 @@ RENODE_VERSION ?= 1.16.1
 .PHONY: emulate
 emulate:                    ## run the firmware under Renode, in Robot tests
 	pio run -e $(BOARD)_sci
-	renode-test emulation/tests/fsmd.robot
+	renode-test emulation/tests/statemachined.robot
 
 .PHONY: upload
 upload:                     ## flash the reference board
@@ -160,21 +160,21 @@ image:                      ## build both flashable images, with a manifest
 	rm -rf $(IMAGE_DIR)
 	mkdir -p $(IMAGE_DIR)
 	$(MAKE) firmware
-	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/fsmd-$(BOARD)-bench.bin
-	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/fsmd-$(BOARD)-bench.elf
+	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/statemachined-$(BOARD)-bench.bin
+	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/statemachined-$(BOARD)-bench.elf
 	$(MAKE) firmware-rig
-	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/fsmd-$(BOARD)-rig.bin
-	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/fsmd-$(BOARD)-rig.elf
+	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/statemachined-$(BOARD)-rig.bin
+	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/statemachined-$(BOARD)-rig.elf
 	@{ \
-	  echo "fsmd firmware for the $(BOARD)"; \
+	  echo "statemachined firmware for the $(BOARD)"; \
 	  echo; \
 	  echo "commit: $(IMAGE_SHA)"; \
 	  echo "built:  $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
 	  echo "pio:    $$(pio --version)"; \
 	  echo; \
-	  echo "fsmd-$(BOARD)-bench.bin  demo mode ON: runs a built-in graph until a"; \
+	  echo "statemachined-$(BOARD)-bench.bin  demo mode ON: runs a built-in graph until a"; \
 	  echo "                          host says hello. Wiring in dev/HARDWARE.md"; \
-	  echo "fsmd-$(BOARD)-rig.bin    demo mode OFF (-DFSMD_DEMO=0)"; \
+	  echo "statemachined-$(BOARD)-rig.bin    demo mode OFF (-DSTATEMACHINED_DEMO=0)"; \
 	  echo; \
 	  echo "flash with:  make upload   or   bossac -i -e -w -R <file>.bin"; \
 	  echo; \

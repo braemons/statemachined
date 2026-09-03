@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Speaking fsmd's wire protocol from Robot Framework.
+"""Speaking statemachined's wire protocol from Robot Framework.
 
 Deliberately a *second* implementation of the framing rules rather than a
 binding to the firmware's. If both ends were the same code, a test could only
@@ -19,7 +19,7 @@ def crc16_ccitt(data, seed=0xFFFF):
     return crc
 
 
-def fsmd_line(body):
+def statemachined_line(body):
     """Close an object and append its CRC.
 
     `body` is the message without its closing brace, e.g. '{"t":"ping","seq":1'.
@@ -83,4 +83,4 @@ def line_codes(body):
     works -- so lines go in a byte at a time through `sysbus.sci2 WriteChar`,
     which does. See emulation/README.md.
     """
-    return [ord(c) for c in fsmd_line(body)] + [10]
+    return [ord(c) for c in statemachined_line(body)] + [10]

@@ -8,7 +8,7 @@
 #include "random/random_distribution.h"
 #include "random/rng.h"
 
-using namespace fsmd;
+using namespace statemachined;
 
 TEST_CASE("the same seed gives the same sequence") {
   Rng a(12345), b(12345);

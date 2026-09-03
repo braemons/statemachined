@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "io/input_conditioner.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace {
 /// Wraparound-safe elapsed time; the microsecond counter wraps every ~71
 /// minutes and a lever press must not care.
@@ -51,4 +51,4 @@ LineBitmask InputConditioner::apply(LineBitmask raw, Microseconds now_us) {
   return stable_;
 }
 
-}  // namespace fsmd
+}  // namespace statemachined

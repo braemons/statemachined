@@ -23,7 +23,7 @@
 #include "config.h"
 #include "graph/state_graph.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace demo {
 
 /// The lines the demo uses, which is what you wire.
@@ -66,4 +66,4 @@ constexpr Milliseconds kStepMs = 500;
 void build(StateGraph& g);
 
 }  // namespace demo
-}  // namespace fsmd
+}  // namespace statemachined

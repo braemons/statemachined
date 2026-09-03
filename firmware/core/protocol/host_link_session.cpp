@@ -3,7 +3,7 @@
 
 #include "protocol/crc16.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace {
 
 constexpr uint16_t kProtocolVersion = 1;
@@ -640,4 +640,4 @@ void HostLinkSession::send_unsolicited(JsonWriter& w) {
   out_.send_line(tx_, n);
 }
 
-}  // namespace fsmd
+}  // namespace statemachined

@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace fsmd {
+namespace statemachined {
 namespace {
 
 /// Where `p` sits in `g`'s option pool, or -1 if it is not in it at all. The
@@ -177,4 +177,4 @@ const char* graph_error_str(GraphError e) {
   return "unknown";
 }
 
-}  // namespace fsmd
+}  // namespace statemachined

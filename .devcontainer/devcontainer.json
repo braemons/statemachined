@@ -1,5 +1,5 @@
 {
-  "name": "fsmd",
+  "name": "statemachined",
   "build": {
     "dockerfile": "Dockerfile",
     "context": ".."
@@ -9,7 +9,7 @@
   // `make firmware`. Keeping it in a named volume means a container rebuild
   // costs seconds rather than that download again.
   "mounts": [
-    "source=fsmd-platformio,target=/home/vscode/.platformio,type=volume"
+    "source=statemachined-platformio,target=/home/vscode/.platformio,type=volume"
   ],
   "postCreateCommand": "sudo chown -R vscode:vscode /home/vscode/.platformio",
 

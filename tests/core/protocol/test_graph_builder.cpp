@@ -13,7 +13,7 @@
 #include "protocol/graph_builder.h"
 #include "trial/trial.h"
 
-using namespace fsmd;
+using namespace statemachined;
 
 namespace {
 

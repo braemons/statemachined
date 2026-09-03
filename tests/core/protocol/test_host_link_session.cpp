@@ -14,7 +14,7 @@
 #include "protocol/host_link_session.h"
 #include "trial/trial.h"
 
-using namespace fsmd;
+using namespace statemachined;
 
 namespace {
 

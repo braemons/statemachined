@@ -17,7 +17,7 @@
 #include "config.h"
 #include "graph/state_graph.h"
 
-namespace fsmd {
+namespace statemachined {
 
 class InputConditioner {
  public:
@@ -56,4 +56,4 @@ class InputConditioner {
   Microseconds since_us_[kMaxLines] = {0};
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

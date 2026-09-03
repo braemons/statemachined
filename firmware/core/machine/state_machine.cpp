@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "machine/state_machine.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace {
 /// Unsigned wraparound-safe elapsed time. micros() wraps every ~71 minutes on a
 /// 32-bit counter and a trial must not care.
@@ -308,4 +308,4 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   return ops;
 }
 
-}  // namespace fsmd
+}  // namespace statemachined

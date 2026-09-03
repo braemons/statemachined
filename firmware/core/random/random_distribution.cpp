@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "random/random_distribution.h"
 
-namespace fsmd {
+namespace statemachined {
 
 namespace {
 
@@ -62,4 +62,4 @@ Milliseconds RandomDistribution::draw(Rng& rng) const {
   return a;
 }
 
-}  // namespace fsmd
+}  // namespace statemachined

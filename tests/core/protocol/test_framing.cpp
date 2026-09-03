@@ -11,7 +11,7 @@
 #include "protocol/crc16.h"
 #include "protocol/framing.h"
 
-using namespace fsmd;
+using namespace statemachined;
 
 namespace {
 

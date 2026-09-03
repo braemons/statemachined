@@ -3,7 +3,7 @@
 
 #include "protocol/crc16.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace {
 
 /// An optional member: absent leaves `*out` alone, present-but-wrong is an
@@ -380,4 +380,4 @@ UploadError GraphBuilder::end(const JsonObject& m) {
   return UploadError::None;
 }
 
-}  // namespace fsmd
+}  // namespace statemachined

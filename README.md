@@ -1,4 +1,4 @@
-# fsmd — the trial state machine
+# statemachined — the trial state machine
 
 > **Status:** the portable core, the wire protocol and the Uno R4 Minima HAL are
 > implemented and tested — on the host, and on an emulated board under Renode.
@@ -7,7 +7,7 @@
 > [`dev/PLAN.md`](dev/PLAN.md) is still the argument for all of it, milestones
 > at the end, and it is meant to be argued with.
 
-**fsmd** is the part of a braemons rig that runs the *within-trial* state machine
+**statemachined** is the part of a braemons rig that runs the *within-trial* state machine
 on a microcontroller: it steps through a finite set of states, each with a map of
 triggers to a next state, a timeout, and output actions, and it **names the trial
 outcome**.
@@ -20,17 +20,17 @@ response windows, timeouts, reward, and an outcome.
 ```
    triald            configure / arm / result            slow bus · HTTP+JSON
   ┌────────┐  ◀────────────────────────────────▶  ┌──────────┐
-  │ triald │                                       │ fsmd     │  host bridge
+  │ triald │                                       │ statemachined     │  host bridge
   └────────┘                                       │ (bridge) │
   ═══════════════════════════════════════════════  └────┬─────┘
                                                         │ USB CDC · NDJSON
   ┌─────────┬─────────┬─────────┬──────────┬────────────┴──────┐
-  │ vstimd  │ soundd  │ optod   │  daqd    │  fsmd (firmware)  │
+  │ vstimd  │ soundd  │ optod   │  daqd    │  statemachined (firmware)  │
   └─────────┴─────────┴─────────┴──────────┴───────────────────┘
               coupled to each other by trigger edges
 ```
 
-**The division of authority.** fsmd is the *timing* authority — it debounces
+**The division of authority.** statemachined is the *timing* authority — it debounces
 inputs, timestamps in its own clock, drives the valve, and names the outcome.
 triald is the *decision* authority — it chooses the trial type, decides whether
 an outcome was *accepted*, and records what happened. **The firmware never learns
@@ -108,7 +108,7 @@ switch walks one LED across five outputs at 500 ms a step, and the trial ends as
 a `Hit` — or as `Cancelled` if you press abort on the way past.
 
 Every CI run publishes a flashable image as an artifact
-(`fsmd-uno_r4_minima-<sha>`), so a board can be brought up without a toolchain:
+(`statemachined-uno_r4_minima-<sha>`), so a board can be brought up without a toolchain:
 a **bench** image with demo mode on, a **rig** image with it compiled out, and a
 `MANIFEST.txt` recording the commit, sizes and checksums — a board in a rack
 cannot be asked which commit it is running. `make image` builds the same thing
@@ -120,7 +120,7 @@ It is the real engine on a real graph: the same `TrialRunner`, the same
 **not** a fallback paradigm — the first `hello` ends it for good and hands every
 line back, so a rig cannot quietly run the demo while somebody believes it is
 running an experiment. A deployed build can drop it entirely with
-`-DFSMD_DEMO=0`, which is worth 4.6 KB of SRAM.
+`-DSTATEMACHINED_DEMO=0`, which is worth 4.6 KB of SRAM.
 
 ## Target hardware
 

@@ -6,7 +6,7 @@
 #include "trial/trial.h"
 #include "trial/trial_runner.h"
 
-namespace fsmd::test {
+namespace statemachined::test {
 
 struct Builder {
   StateGraph g;
@@ -61,4 +61,4 @@ struct Builder {
 constexpr uint32_t bit(uint8_t n) { return 1u << n; }
 constexpr uint32_t ms(uint32_t n) { return n * 1000u; }
 
-}  // namespace fsmd::test
+}  // namespace statemachined::test

@@ -8,8 +8,8 @@
 #include "helpers.h"
 #include "machine/state_machine.h"
 
-using namespace fsmd;
-using namespace fsmd::test;
+using namespace statemachined;
+using namespace statemachined::test;
 
 namespace {
 void run_until(StateMachine& m, LineBitmask word, uint32_t& t, uint32_t until_us) {

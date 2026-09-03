@@ -7,7 +7,7 @@
 
 #include "config.h"
 
-namespace fsmd {
+namespace statemachined {
 
 enum class OutputActionKind : uint8_t { High = 0, Low = 1, Toggle = 2, Pulse = 3 };
 
@@ -25,4 +25,4 @@ struct OutputUpdate {
   LineBitmask set_low = 0;   ///< lines to drive low this scan
 };
 
-}  // namespace fsmd
+}  // namespace statemachined
