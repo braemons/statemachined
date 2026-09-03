@@ -59,6 +59,8 @@ OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask
 void StateMachine::enter(StateIndex state, Microseconds now_us, LineBitmask word) {
   current_ = state;
   entered_us_ = now_us;
+  // This state's transitions have never been looked at. See advance().
+  just_entered_ = true;
   const State& s = graph_->states[state];
 
   timeout_ms_ = (s.timeout_duration == kNoRandomDistribution)
@@ -219,11 +221,24 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   // transition is mid-hold. At 10 kHz the overwhelmingly common scan then costs
   // one compare. A transition accumulating a hold must still be re-checked, or
   // "both levers held for 200 ms" would never fire on a steady word.
+  //
+  // Entering a state is itself an event, and `just_entered_` is why. The word
+  // is machine-wide, not per-state, so a transition into a state on a steady
+  // input word left the new state's transitions unevaluated until something on
+  // the inputs happened to move. Edge-triggered transitions never noticed --
+  // they need a change by definition -- but a `level` transition whose
+  // predicate is already true at entry has no edge coming, and silently never
+  // fired. That is exactly the case `level` exists for: "wait until held",
+  // where the lever is already down and nothing is going to move. Found on
+  // hardware, by tools/bringup/tests/hardware/test_lines.py, because every host
+  // test for `level` entered its state at start() -- where have_last_word_ is
+  // false and the first scan therefore evaluated anyway.
   const bool word_changed = !have_last_word_ || word != last_word_;
   last_word_ = word;
   have_last_word_ = true;
-  const bool need_eval = word_changed || hold_pending_;
+  const bool need_eval = word_changed || hold_pending_ || just_entered_;
   hold_pending_ = false;
+  just_entered_ = false;
 
   // Only this state's transitions are evaluated -- cost is bounded by
   // transitions-per-state, never by graph size. Declaration order resolves ties:

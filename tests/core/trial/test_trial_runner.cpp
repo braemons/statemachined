@@ -479,3 +479,74 @@ TEST_CASE("micros() wraparound does not disturb a trial") {
   CHECK(e.run_record().path[0].duration_us >= ms(500));
   CHECK(e.run_record().path[0].duration_us < ms(501));
 }
+
+TEST_CASE("a level transition fires on entry even when the input word never moves") {
+  // The bug this is a regression test for: predicate evaluation is skipped on a
+  // scan where nothing on the inputs changed, which is what makes 10 kHz cheap.
+  // But the word is machine-wide, so *entering a state* on a steady word left
+  // the new state's transitions unevaluated -- and a `level` transition that is
+  // already true at entry has no edge coming to prompt a second look. It never
+  // fired.
+  //
+  // The case above ("level semantics fire immediately") did not catch it,
+  // because it enters its state at start(), where there is no previous word and
+  // the first scan therefore evaluates regardless. The distinguishing detail
+  // here is that the level transition is on the *second* state, reached from
+  // the first, with the line held high across the transition and nothing else
+  // on the word ever moving. Found on hardware first.
+  Builder b;
+  const uint8_t first = b.state();
+  const uint8_t held = b.state();
+  const uint8_t hit = b.terminal(TrialOutcome::Hit);
+  const uint8_t late = b.terminal(TrialOutcome::Late);
+
+  // first --(50 ms)--> held, and `held` leaves the moment it sees line 0 high,
+  // which it already is.
+  b.timeout(first, b.fixed(50), held);
+  b.timeout(held, b.fixed(1000), late);
+  Transition c;
+  c.all_high = bit(0);
+  c.target_state = hit;
+  c.fire_if_true_on_entry = true;
+  b.on(held, c);
+  b.g.entry = first;
+
+  TrialRunner e(b.g);
+  uint32_t t = 0;
+  e.start(1, 1, t, bit(0));
+  // Line 0 high for the whole run: after the first scan the word never changes
+  // again, so nothing but the state entry can prompt an evaluation.
+  run_until(e, bit(0), t, ms(300));
+
+  CHECK_FALSE(e.running());
+  CHECK(e.result().outcome == TrialOutcome::Hit);
+}
+
+TEST_CASE("entering a state does not let an edge transition fire on a stale predicate") {
+  // The other side of the same change: evaluating on entry must not turn an
+  // edge-triggered transition into a level one. Same graph as above with the
+  // flag off -- the line is already high when `held` is entered and never
+  // moves, so the trial must run out to its timeout instead.
+  Builder b;
+  const uint8_t first = b.state();
+  const uint8_t held = b.state();
+  const uint8_t hit = b.terminal(TrialOutcome::Hit);
+  const uint8_t late = b.terminal(TrialOutcome::Late);
+
+  b.timeout(first, b.fixed(50), held);
+  b.timeout(held, b.fixed(100), late);
+  Transition c;
+  c.all_high = bit(0);
+  c.target_state = hit;
+  c.fire_if_true_on_entry = false;
+  b.on(held, c);
+  b.g.entry = first;
+
+  TrialRunner e(b.g);
+  uint32_t t = 0;
+  e.start(1, 1, t, bit(0));
+  run_until(e, bit(0), t, ms(300));
+
+  CHECK_FALSE(e.running());
+  CHECK(e.result().outcome == TrialOutcome::Late);
+}

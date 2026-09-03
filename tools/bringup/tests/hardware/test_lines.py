@@ -132,8 +132,16 @@ def test_all_requires_every_line_named(device, loopback):
     graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})
     graph.action("entry", line=OUT_A, kind="high")
     graph.transition(target=2, all=bit(IN_A) | bit(IN_B))
-    # State 1 raises output B as well, so both inputs are high and it must fire.
+    # State 1 raises B *and re-raises A*, so that both inputs are high together.
+    #
+    # Re-raising A is not redundant. Exiting a state lowers every line that state
+    # raised, so without this the transition would swap A for B rather than add
+    # B to it, and `all` would never see the two lines high at once -- which is
+    # how this test failed the first time it ran against real wires.
+    # state_machine.cpp:158 lowers on exit only `& ~ops.set_high`, so a line the
+    # entering state also raises stays up across the transition without a glitch.
     graph.state(1, terminal=None, timeout=None)
+    graph.action("entry", line=OUT_A, kind="high")
     graph.action("entry", line=OUT_B, kind="high")
     graph.transition(target=2, all=bit(IN_A) | bit(IN_B))
     graph.state(2, terminal=int(Outcome.HIT), timeout=None)
@@ -181,19 +189,27 @@ def test_a_predicate_already_true_on_entry_does_not_fire(device, loopback):
     """The rising-edge rule, which BRINGUP.md §3 warns looks like a fault.
 
     A transition fires on its predicate's *rising edge*, so a lever the animal
-    is already holding must not end the trial the instant it begins. Line 0 is
-    left high by the state before, so the predicate is true the moment state 1
+    is already holding must not end the trial the instant it begins. Input A is
+    held high across the transition, so the predicate is true the moment state 1
     is entered -- and it must still wait for a change that never comes, ending
     on the cap.
+
+    Holding the line high across the transition is the whole setup, and it takes
+    both states raising it: a state lowers what it raised when it exits. An entry
+    action in state 1 alone could not produce this condition at all, because the
+    pin it drives is only read on the *next* scan -- that is a rising edge one
+    scan after entry, which is precisely the case that should fire.
     """
     graph = GraphUpload(device, version=15)
     graph.begin(n_states=3, entry=0)
     graph.dist(0, kind="fixed", a=50)
-    # State 0 raises output A and hands over with input A still high.
+    # State 0 raises output A and holds it for 50 ms.
     graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})
     graph.action("entry", line=OUT_A, kind="high")
-    # State 1's predicate is therefore already true on entry.
+    # State 1 raises it again, so it never drops; input A is therefore already
+    # high at the instant state 1 is entered, and the predicate already true.
     graph.state(1, terminal=None, timeout=None)
+    graph.action("entry", line=OUT_A, kind="high")
     graph.transition(target=2, all=bit(IN_A))
     graph.state(2, terminal=int(Outcome.HIT), timeout=None)
     ok = graph.end()
@@ -218,6 +234,7 @@ def test_level_makes_a_predicate_fire_on_entry(device, loopback):
     graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})
     graph.action("entry", line=OUT_A, kind="high")
     graph.state(1, terminal=None, timeout=None)
+    graph.action("entry", line=OUT_A, kind="high")  # held high, as above
     graph.transition(target=2, all=bit(IN_A), level=True)
     graph.state(2, terminal=int(Outcome.HIT), timeout=None)
     ok = graph.end()

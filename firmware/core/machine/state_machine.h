@@ -190,6 +190,11 @@ class StateMachine {
   bool has_pending_ = false;   ///< scans; applied on the next one
   bool hold_pending_ = false;  ///< a transition is accumulating a hold, so an
                                ///< unchanged input word still needs work
+  /// A state was just entered, so its transitions have never been evaluated --
+  /// which an unchanged input word would otherwise skip. `level` depends on
+  /// this: a predicate already true at entry fires on the *entry*, and there is
+  /// no edge coming to prompt a second look.
+  bool just_entered_ = false;
 };
 
 }  // namespace statemachined

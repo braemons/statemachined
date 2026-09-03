@@ -740,3 +740,41 @@ TEST_CASE("every upload error has a message") {
     CHECK(m[0] != '\0');
   }
 }
+
+TEST_CASE("`level` on a graph_transition reaches fire_if_true_on_entry") {
+  // The flag is what lets a transition fire on a predicate that was already
+  // true when its state was entered -- "wait until held" rather than "wait for
+  // the press". The engine's half is covered in test_trial_runner.cpp, which
+  // sets the struct field directly; nothing covered the *wire* half until a
+  // board did, and the two are only equivalent if this parse works.
+  SUBCASE("absent means edge-triggered, which is the default") {
+    Upload u;
+    minimal(u);
+    REQUIRE(u.send(R"({"msg_type":"graph_transition","message_id":5,"target":1,"all":1)") ==
+            UploadError::None);
+    REQUIRE(u.finish(1, 0) == UploadError::None);
+    CHECK_FALSE(u.builder.staged().transitions[0].fire_if_true_on_entry);
+  }
+
+  SUBCASE("true opts out of the rising edge") {
+    Upload u;
+    minimal(u);
+    REQUIRE(
+        u.send(
+            R"({"msg_type":"graph_transition","message_id":5,"target":1,"all":1,"level":true)") ==
+        UploadError::None);
+    REQUIRE(u.finish(1, 0) == UploadError::None);
+    CHECK(u.builder.staged().transitions[0].fire_if_true_on_entry);
+  }
+
+  SUBCASE("false is explicit and means the same as absent") {
+    Upload u;
+    minimal(u);
+    REQUIRE(
+        u.send(
+            R"({"msg_type":"graph_transition","message_id":5,"target":1,"all":1,"level":false)") ==
+        UploadError::None);
+    REQUIRE(u.finish(1, 0) == UploadError::None);
+    CHECK_FALSE(u.builder.staged().transitions[0].fire_if_true_on_entry);
+  }
+}
