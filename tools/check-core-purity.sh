@@ -50,11 +50,60 @@ if grep -rn 'Arduino\.h' firmware/core >/dev/null 2>&1; then
   grep -rn 'Arduino\.h' firmware/core >&2
 fi
 
+# Every line of the core as file:line:code, with the comments actually removed.
+#
+# The rules below look for words like `new` and `float`, and those words are
+# perfectly legitimate in prose -- "accept the new level" must not fail the
+# allocation check, while `int* p = new int;  // honest` must. So this strips
+# comments and tests what is left, rather than skipping lines that look like
+# comments.
+#
+# It tracks /* */ across lines and steps over string literals, because both are
+# ways a naive stripper gets it wrong: a block comment saying `new` would be a
+# false positive, and breaking at the // inside "http://..." would silently drop
+# real code after it and hide a violation. String *contents* are dropped for the
+# same reason comments are -- a literal is data, not an allocation. Block state
+# resets per file so an unterminated comment cannot swallow the next one.
+core_code() {
+  grep -rn '' firmware/core --include='*.h' --include='*.cpp' |
+    awk '
+      {
+        p = index($0, ":"); r = substr($0, p + 1)
+        q = index(r, ":")
+        file = substr($0, 1, p - 1)
+        prefix = substr($0, 1, p + q)
+        code = substr(r, q + 1)
+        if (file != lastfile) { inblock = 0; lastfile = file }
+
+        out = ""; i = 1; n = length(code); instr = 0
+        while (i <= n) {
+          ch = substr(code, i, 1); two = substr(code, i, 2)
+          if (inblock) {
+            if (two == "*/") { inblock = 0; i += 2 } else { i += 1 }
+            continue
+          }
+          if (instr) {
+            # The contents of a string literal are dropped, the quotes kept: a
+            # message that happens to contain "new" is not an allocation, and a
+            # path like "http://..." must not be read as starting a comment.
+            if (ch == "\\") { i += 2; continue }
+            if (ch == "\"") { instr = 0; out = out ch }
+            i += 1
+            continue
+          }
+          if (two == "/*") { inblock = 1; i += 2; continue }
+          if (two == "//") break
+          if (ch == "\"") { instr = 1; out = out ch; i += 1; continue }
+          out = out ch; i += 1
+        }
+        if (out ~ /[^ \t]/) print prefix out
+      }
+    '
+}
+
 # No allocation, and no standard library beyond the fixed-width integer types.
 for pattern in 'std::' '\bnew\b' '\bdelete\b' '\bmalloc\b' '\bcalloc\b' '\brealloc\b' '\bfree\b'; do
-  hits=$(grep -rnE "$pattern" firmware/core --include='*.h' --include='*.cpp' || true)
-  # Comments and doc text may say the words; code may not.
-  hits=$(printf '%s\n' "$hits" | grep -vE ':[[:space:]]*(//|\*|///)' || true)
+  hits=$(core_code | grep -E "$pattern" || true)
   if [ -n "$hits" ]; then
     report "firmware/core must not use $pattern:"
     printf '%s\n' "$hits" >&2
@@ -64,8 +113,7 @@ done
 # Floating point reaches no value that crosses the wire. The truncated
 # exponential is integer-only for exactly this reason: a float path would make
 # the native simulator's numbers merely close to the firmware's.
-floats=$(grep -rnE '\b(float|double)\b' firmware/core --include='*.h' --include='*.cpp' || true)
-floats=$(printf '%s\n' "$floats" | grep -vE ':[[:space:]]*(//|\*|///)' || true)
+floats=$(core_code | grep -E '\b(float|double)\b' || true)
 if [ -n "$floats" ]; then
   report 'firmware/core must not use float or double:'
   printf '%s\n' "$floats" >&2

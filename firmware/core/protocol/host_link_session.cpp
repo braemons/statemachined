@@ -342,7 +342,16 @@ void HostLinkSession::on_start(const JsonObject& m, uint16_t seq, Microseconds n
     return;
   }
 
-  runner_.start(armed_trial_id_, session_seed_, now_us);
+  // The entry state's output actions come back from start() and are owed to
+  // the pins. They are handed to the next advance_trial() rather than applied
+  // here, for the same reason a cancel's are: this is the link's thread of
+  // control and it drives nothing. Dropping them was a real bug -- "house light
+  // on at trial start" silently did nothing on a board -- and it survived the
+  // host tests because those call TrialRunner::start() and read the update
+  // themselves, so nothing ever asked whether the session passed it on.
+  const OutputUpdate entry_ops = runner_.start(armed_trial_id_, session_seed_, now_us);
+  pending_ops_.set_high = (pending_ops_.set_high | entry_ops.set_high) & ~entry_ops.set_low;
+  pending_ops_.set_low = (pending_ops_.set_low | entry_ops.set_low) & ~entry_ops.set_high;
   state_ = LinkState::Running;
 
   JsonWriter w(tx_, sizeof(tx_));
@@ -421,6 +430,25 @@ void HostLinkSession::on_state_request(uint16_t seq, Microseconds now_us) {
   // is debugging the rig rather than inferred from trials that did not happen.
   w.key_u32("dropped_lines", reader_.dropped());
   w.key_u32("bad_lines", bad_lines_);
+  // Nested rather than three more top-level members: a message is capped at
+  // kJsonMaxMembers, and that cap is a RAM decision about JsonObject's stack
+  // footprint rather than a formatting preference.
+  // The live pins, nested for the same reason `scan` is -- a message is capped
+  // at kJsonMaxMembers, and that cap bounds JsonObject's stack footprint.
+  //
+  // This is the only way anything outside the device can check that a graph's
+  // line numbers land on the pins somebody actually wired: there is no read-back
+  // path from a pin, and `out` is the engine's own shadow rather than a
+  // measurement. Under emulation it is what makes the pin map testable at all.
+  w.begin_object("io");
+  w.key_u32("in", last_word_);
+  w.key_u32("out", runner_.driven_levels());
+  w.end_object();
+  w.begin_object("scan");
+  w.key_u32("hz", scan_.hz);
+  w.key_u32("overruns", scan_.overruns);
+  w.key_u32("worst_gap", scan_.worst_gap);
+  w.end_object();
   send(w, seq);
 }
 
@@ -431,9 +459,26 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
     booted_us_ = now_us;
     have_boot_ = true;
   }
-  if (state_ != LinkState::Running) return OutputUpdate{};
+  // A pulse raised by the last act of a trial -- the ordinary way to write a
+  // reward -- falls due after the run has ended and the session is back to
+  // Idle. Returning an empty update here would leave the valve open until the
+  // next trial started.
+  last_word_ = word;
 
-  const OutputUpdate ops = runner_.advance(word, now_us);
+  // Anything a start() owed since the last scan.
+  const OutputUpdate owed = pending_ops_;
+  pending_ops_ = OutputUpdate{};
+
+  if (state_ != LinkState::Running) {
+    OutputUpdate idle = runner_.service_outputs(now_us);
+    idle.set_high = (owed.set_high | idle.set_high) & ~idle.set_low;
+    idle.set_low = (owed.set_low | idle.set_low) & ~idle.set_high;
+    return idle;
+  }
+
+  OutputUpdate ops = runner_.advance(word, now_us);
+  ops.set_high = (owed.set_high | ops.set_high) & ~ops.set_low;
+  ops.set_low = (owed.set_low | ops.set_low) & ~ops.set_high;
   if (!runner_.running()) {
     // The host learns of an outcome without having to ask for it. A trial that
     // ended silently would be indistinguishable from a hung one.
@@ -443,8 +488,30 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
   return ops;
 }
 
-OutputUpdate HostLinkSession::fail_safe() const {
+OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
   OutputUpdate ops;
+  pending_ops_ = OutputUpdate{};
+  if (state_ == LinkState::Running) {
+    runner_.cancel(TrialCancelReason::LinkLost, now_us);
+    // cancel() hands its outputs to the next scan rather than returning them,
+    // because a cancel normally arrives between scans. There is not going to be
+    // a next scan of this trial, so collect them here.
+    ops = runner_.advance(0, now_us);
+  }
+  // Back to Idle, not Greeting: the committed graph survives a reconnect, so a
+  // bridge that comes back does not have to re-upload one. It sends hello
+  // anyway, which is what brings a fresh session seed.
+  if (state_ != LinkState::Greeting) state_ = LinkState::Idle;
+  armed_trial_id_ = 0;
+  builder_.abandon();
+  reader_.reset();
+  guard_.forget();
+  return ops;
+}
+
+OutputUpdate HostLinkSession::fail_safe() {
+  OutputUpdate ops;
+  pending_ops_ = OutputUpdate{};
   const LineBitmask safe = have_graph_ ? live_graph_.output_safe_levels : 0;
   ops.set_high = safe;
   // Every line the board has, not only the ones some state raised: this runs
@@ -453,6 +520,9 @@ OutputUpdate HostLinkSession::fail_safe() const {
                               ? 0xFFFFFFFFu
                               : ((1u << identity_.output_line_count) - 1u);
   ops.set_low = all & ~safe;
+  // The engine's shadow of the levels is now wrong unless it is told. A Toggle
+  // is the only action whose meaning depends on where the line already was.
+  runner_.set_initial_levels(ops.set_high);
   return ops;
 }
 

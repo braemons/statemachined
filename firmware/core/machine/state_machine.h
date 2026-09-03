@@ -17,6 +17,13 @@
 // line outlives its state is a terminal state's entry actions -- nothing can
 // exit a terminal state, so those are carried in `raised_` and lowered by the
 // next start().
+//
+// It also owns the two output actions that need more than a level: a Pulse's
+// falling edge and a Toggle's direction. Both could have been left to the HAL,
+// and both are here instead, because a pulse width decided per board is a pulse
+// width nothing on the host can test and four HALs get subtly differently. The
+// HAL is left with "drive these lines high, drive those low", which is the one
+// thing it is actually better placed to do.
 #pragma once
 #include <cstdint>
 
@@ -71,6 +78,26 @@ class StateMachine {
   /// the first scan.
   OutputUpdate start(uint64_t seed, Microseconds now_us, LineBitmask word = 0);
 
+  /// Lines owed to the world irrespective of any run: a Pulse whose width has
+  /// elapsed, and the outputs owed by a force_end() that landed between scans.
+  ///
+  /// Call it every scan, whether or not a trial is in flight. A pulse on a
+  /// terminal state's entry -- the ordinary way to write a reward -- is raised
+  /// by the last act of a run, so if this only ticked while running, the valve
+  /// would stay open until the next trial started. advance() calls it first, so
+  /// a running machine needs nothing extra.
+  OutputUpdate service_outputs(Microseconds now_us);
+
+  /// Tell the machine what the pins are already at, so the first Toggle goes
+  /// the right way. The levels after a reset are the graph's safe levels, not
+  /// zero, and the machine cannot read a pin to find out.
+  void set_initial_levels(LineBitmask levels) { driven_ = levels; }
+
+  /// What the machine believes the output lines are at. Its own shadow, built
+  /// from what it has emitted -- if the HAL is driven by something else as
+  /// well, this is the machine's view and not the board's.
+  LineBitmask driven_levels() const { return driven_; }
+
   /// Move the run forward to `now_us`, given the input lines as they are at
   /// that instant. This is the whole scan loop and the only thing called
   /// periodically -- 10 kHz on the reference board.
@@ -88,7 +115,8 @@ class StateMachine {
   /// not changed.
   ///
   /// `word` is the *conditioned* input word: debounced, polarity normalised,
-  /// disabled lines zeroed. That is the HAL's job, not the machine's.
+  /// disabled lines zeroed. InputConditioner does all three -- the HAL reads a
+  /// port register and nothing more.
   OutputUpdate advance(LineBitmask word, Microseconds now_us);
 
   /// End the run now, from outside the graph -- a cancel, a lost link, the
@@ -125,7 +153,11 @@ class StateMachine {
   void enter(StateIndex state, Microseconds now_us, LineBitmask word);
   OutputUpdate leave(StateExitCause cause, TransitionIndex fired, Microseconds now_us);
   void record_visit(StateExitCause cause, TransitionIndex fired, Microseconds now_us);
-  OutputUpdate apply_actions(OutputActionIndex first, uint8_t count) const;
+  OutputUpdate apply_actions(OutputActionIndex first, uint8_t count, Microseconds now_us);
+
+  /// Fold an update into the shadow. Idempotent over an update that has already
+  /// been folded, so it can be applied again to a merged one.
+  void note(const OutputUpdate& ops);
 
   const StateGraph* graph_;
   Rng rng_;
@@ -138,6 +170,18 @@ class StateMachine {
   Microseconds started_us_ = 0;
   Milliseconds timeout_ms_ = -1;
   LineBitmask raised_ = 0;  ///< lines this state raised, lowered on exit
+
+  // Pulses. A deadline per line rather than a queue: a line can only be pulsing
+  // once, and re-pulsing a line that is already pulsing means the new width,
+  // which is what a graph re-entering a state means by it. 128 B on a 32-line
+  // board, and the hot path is one compare against `pulsing_` when nothing is.
+  LineBitmask pulsing_ = 0;
+  Microseconds pulse_deadline_us_[kMaxOutputLines] = {0};
+
+  /// The machine's shadow of the output levels. Needed for Toggle, which has no
+  /// meaning without knowing where the line is now.
+  LineBitmask driven_ = 0;
+
   LineBitmask last_word_ = 0;
   bool have_last_word_ = false;
   Milliseconds run_cap_ms_ = 0;

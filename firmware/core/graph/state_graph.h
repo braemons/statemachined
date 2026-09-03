@@ -89,6 +89,7 @@ enum class GraphError : uint8_t {
   BadTarget,        ///< a transition to a state that does not exist
   BadOutputLine,    ///< an action on a line the board cannot represent
   BadDistribution,  ///< a Choice with no options to choose from
+  BadPulse,         ///< a Pulse with no width, which would never come down
   NoTerminal,       ///< no terminal state reachable from the entry state
   UnreachableState,
 };

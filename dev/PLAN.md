@@ -496,6 +496,8 @@ fsmd/
 │   │   │   └── random_distribution.{h,cpp}  the four distributions
 │   │   ├── machine/              the scan loop. Knows nothing about trials
 │   │   │   └── state_machine.{h,cpp}
+│   │   ├── io/                   the pins, conditioned, before the machine sees them
+│   │   │   └── input_conditioner.{h,cpp}  debounce · invert · enable
 │   │   ├── trial/                the add-on that gives a run an outcome
 │   │   │   ├── trial.h                  the .tdr codes, the wire contract
 │   │   │   └── trial_runner.{h,cpp}
@@ -503,9 +505,15 @@ fsmd/
 │   │   │   ├── crc16.{h,cpp}        CRC-16/CCITT-FALSE, and the accumulator
 │   │   │   ├── framing.{h,cpp}      lines in, lines out, crc verified
 │   │   │   └── json.{h,cpp}         reader and writer, no allocation
-│   │   └── hal.h                 the interface below -- M3
+│   │   └── hal.h                 the whole hardware surface: seven functions
 │   ├── hal/                   renesas_ra4m1.cpp · native.cpp · teensy41.cpp
+│   │                          one file per board, each guarded by its own arch
 │   └── src/main.cpp           board entry point, deliberately thin
+├── emulation/                 the board under Renode, so firmware/hal/ has tests
+│   ├── fsmd-uno-r4.repl       Renode's own board file, plus a USB boot shim
+│   ├── fsmd.resc              loads the platform and the ELF
+│   └── tests/                 Robot: pin map, port registers, timer ISR, a whole
+│                              session over a real UART. Never timing
 ├── bridge/                    Python: serial ⇄ triald HTTP
 │   └── src/fsmd/              codec, link, the triald client, `fsmd` CLI
 ├── graphs/                    example graphs — go/no-go, 2AFC, fixation task
@@ -570,6 +578,25 @@ With names resolved to bit indices at upload and distributions in a shared pool:
 | Stack + core | | | ~2 kB |
 | | | **≈ 7.5 kB** | **~23% of SRAM** |
 
+> **Measured at M3, and this estimate was wrong by about a factor of three.**
+> The real figure is **11 928 B of `.data`+`.bss` (36.4%)**, and **21 144 B
+> committed (64.5%)** once the framework's 8 KB heap and the 1 KB main stack are
+> counted. It fits, with ~11 KB unclaimed.
+>
+> Two things the estimate missed, both structural rather than sloppy. The device
+> holds **two** graphs, not one — the live graph and the one an upload is
+> staging, which is what makes a failed upload leave the running graph intact —
+> and it keeps a full-line **retry cache** so a resent command can be answered
+> without acting twice. Neither is optional. Add the USB stack, which is not
+> ours, and the arithmetic above accounts for well under half of what is
+> actually there.
+>
+> A quarter of the SRAM is a heap the portable core never allocates from;
+> `BSP_CFG_HEAP_BYTES` is fixed at `0x2000` in the Arduino variant. Recovering it
+> means patching the framework and is worth doing only if something needs the
+> room. Full breakdown, and the reason the 1 KB declared stack is not the true
+> headroom, in **`dev/HARDWARE.md`**.
+
 A condition being three `uint32_t` masks and three bytes is why **TTL
 combinations are cheaper than per-line edge bookkeeping**, not more expensive.
 32 states and 64 conditions is a large paradigm; the Teensy gets 256/512 from the
@@ -614,6 +641,28 @@ returns the whole word rather than being called per line.
 
 The achieved rate is measured at boot and reported in `hello`, so the host knows
 the timing resolution it is actually getting rather than the one we hoped for.
+
+It is not enough on its own, because the boot measurement is a *floor*: it
+covers reading and conditioning the pins, and evaluating a state's transitions
+is on top of it and depends on the graph. So every `state_report` also carries
+`scan.overruns` and `scan.worst_gap` — scan periods that went by with no scan in
+them, counted rather than absorbed. A board that quietly misses scans looks
+exactly like a board that is fine, and a response window measured on a clock
+that skipped is the failure this is here to make visible.
+
+**The timer is a tick source, not the scan.** Bpod runs its state machine inside
+the ISR and is right to; we cannot, because this firmware parses JSON in the
+foreground, and an ISR advancing the trial while `loop()` is halfway through
+`receive()` shares the runner, the graph and the reply buffer with it. The
+alternatives are a critical section around every command — which stalls the scan
+for as long as a parse takes, the very thing it was protecting — or a lock-free
+handoff of every command the ISR must apply, which is a rewrite of the session.
+So the ISR counts and `loop()` scans: correct by construction, and the engine
+stays byte-identical to what the host tests exercise. The cost is jitter rather
+than rate, and jitter is what `scan.overruns` counts. If a board says the link
+stalls the scan too often, the fix is a command handoff in `firmware/src/
+main.cpp` and nothing in `core/` moves. The reasoning is written out at the top
+of that file.
 
 ---
 
@@ -712,11 +761,29 @@ the trial type store. **Open: which.**
 | **M0** | Repo, `platformio.ini` with `native` + `uno_r4_minima`, `dev/PROTOCOL.md`, a native build that compiles and does nothing |
 | **M1** | Core engine — conditions, timers, RNG, the four distributions — unit-tested on native. No serial, no hardware |
 | **M2** | Protocol codec: chunked graph upload, `configure`/`armed`/`result`/`cancel` over a pty against the native core |
-| **M3** | **Uno R4 Minima HAL** — direct RA4M1 port-register reads, `FspTimer` ISR at 10 kHz, real pins. Measure the achieved scan rate and the RAM high-water mark and put both in this document |
+| **M3** | **Uno R4 Minima HAL** — direct RA4M1 port-register reads, `FspTimer` ISR at 10 kHz, real pins. Measure the achieved scan rate and the RAM high-water mark and put both in this document. *Built and linking; RAM measured (see above and `dev/HARDWARE.md`). The scan rate needs a board* |
 | **M4** | Bridge to triald: a whole session on the R4, with `triald sim`'s simulated subject replaced by the real board |
 | **M5** | Example graphs, `dev/HARDWARE.md` with R4 pinout and wiring, virtual events and output overrides, sync line |
 | **M6** | Teensy 4.1 and ESP32 HALs; the golden reproducibility test green on all three boards |
 | **M7** | Packaging |
+
+### Emulation, and what it can and cannot settle
+
+`firmware/hal/` is the one part of this repo the host build cannot compile, so
+until M3 it was covered by nothing. It now runs under **Renode**, whose own
+platform files already describe the R7FA4M1A and the Uno R4 Minima: the pin map,
+the port-register access, the timer ISR and the protocol over a real UART
+peripheral are all tested in CI with no board attached. See
+`emulation/README.md`.
+
+That is worth having on its own evidence — it immediately found that the session
+dropped the entry state's output actions, so an action on the first state never
+reached a pin, which every host test missed.
+
+**It settles nothing about timing.** Renode runs on virtual time against a
+nominal MIPS figure, so a scan there takes exactly as long as it is told to.
+Emulation makes the HAL *correct*; only a board makes the 10 kHz claim *true*.
+That division is why the milestone below still stands as written.
 
 **M3 is the milestone that decides whether this plan is right.** The RAM budget
 and the 10 kHz claim are both arithmetic until a board runs them; if either is

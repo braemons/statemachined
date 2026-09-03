@@ -32,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       python3 \
       python3-venv \
       python3-pip \
+      python3-dev \
       udev \
       usbutils \
       srecord \
@@ -62,6 +63,33 @@ RUN pip install --no-cache-dir \
 # owned by the non-root user for the case where it does not.
 ENV PLATFORMIO_CORE_DIR=/home/vscode/.platformio
 RUN mkdir -p "$PLATFORMIO_CORE_DIR" && chown -R vscode:vscode "$PLATFORMIO_CORE_DIR" /opt/venv
+
+# Renode: whole-system emulation of the reference board, so the HAL has tests.
+#
+# It is the only way to exercise firmware/hal/ without hardware -- the pin map,
+# the timer ISR and a whole session over the UART are otherwise covered by
+# nothing, because they are exactly the code the host build cannot compile.
+#
+# What it does NOT give is timing. Renode runs on virtual time with a nominal
+# MIPS figure, so it will tell you a scan is correct and never how long one
+# takes. The 10 kHz claim needs a board; see dev/HARDWARE.md.
+#
+# The portable-dotnet tarball carries its own runtime, so this needs no mono and
+# no dotnet from apt. Pinned like everything else here.
+ARG RENODE_URL=https://github.com/renode/renode/releases/download/v1.16.1/renode-1.16.1.linux-portable-dotnet.tar.gz
+RUN curl -fsSL "$RENODE_URL" -o /tmp/renode.tar.gz \
+ && mkdir -p /opt/renode \
+ && tar xzf /tmp/renode.tar.gz -C /opt/renode --strip-components=1 \
+ && rm /tmp/renode.tar.gz \
+ && ln -s /opt/renode/renode /usr/local/bin/renode \
+ && ln -s /opt/renode/renode-test /usr/local/bin/renode-test
+
+# renode-test drives Robot Framework, which is Python and lives outside the
+# tarball. Renode pins these itself; take its list rather than guessing, or
+# renode-test fails on an import at the least useful possible moment. (The
+# pinned psutil predates cp312 wheels and builds from source, which is what
+# python3-dev is doing in the apt list above.)
+RUN pip install --no-cache-dir -r /opt/renode/tests/requirements.txt
 
 # Flashing a board from inside a container needs the device passed through and
 # these rules present on the *host* as well; see BUILD.md.

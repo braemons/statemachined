@@ -1,0 +1,27 @@
+:name: fsmd on an emulated Uno R4 Minima
+:description: The reference board under Renode, for testing firmware/hal/.
+
+# What this is for, and what it is not for:
+#
+# It exercises the code the host build physically cannot compile -- the pin map,
+# the port-register arithmetic, the timer ISR, and a whole session over a real
+# UART peripheral. That is otherwise covered by nothing at all.
+#
+# It says nothing about timing. Renode runs on virtual time against a nominal
+# MIPS figure, so a scan here takes however long we tell it to. The 10 kHz claim
+# needs a board. See dev/HARDWARE.md.
+
+$elf?=@.pio/build/uno_r4_minima_sci/firmware.elf
+
+using sysbus
+mach create "fsmd"
+machine LoadPlatformDescription $ORIGIN/fsmd-uno-r4.repl
+
+# The SCI build, not the USB one: the host is on SCI2 (D0/D1). See the note in
+# firmware/hal/renesas_ra4m1.cpp.
+sysbus LoadELF $elf
+
+# No `showAnalyzer sysbus.sci2` here on purpose: the Robot tests attach their own
+# terminal tester to that UART, and the two fight over it -- symptom is a device
+# that is demonstrably running and answering while the test sees nothing at all.
+# For interactive use, attach one yourself after including this file.

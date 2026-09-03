@@ -31,6 +31,7 @@ add_library(fsmd_engine
   firmware/core/graph/state_graph.cpp
   firmware/core/random/rng.cpp
   firmware/core/random/random_distribution.cpp
+  firmware/core/io/input_conditioner.cpp
   firmware/core/machine/state_machine.cpp
   firmware/core/trial/trial_runner.cpp
 )
@@ -55,3 +56,11 @@ endif()
 
 enable_testing()
 add_subdirectory(tests)
+
+# The host HAL, built here so that hal.h is compiled by something CI runs. It is
+# not linked into the tests: those drive StateMachine and HostLinkSession
+# directly, which is the seam that matters. This target exists to keep the
+# interface honest -- a board-only header rots between board builds.
+add_library(fsmd_hal_native firmware/hal/native.cpp)
+target_link_libraries(fsmd_hal_native PUBLIC fsmd_engine)
+target_compile_options(fsmd_hal_native PRIVATE -Wall -Wextra -Wpedantic -Werror)
