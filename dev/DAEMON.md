@@ -109,7 +109,7 @@ statemachined/
 │   └── tests/
 │       ├── unit/                 host-only. Runs in `make ci`
 │       └── hardware/             needs a board    ← tools/bringup/tests/hardware
-├── graphs/                    example graphs, authored against model/graph.py
+├── graphs/                    example graphs, and the reference rig's line map
 ├── packaging/                 see §6
 └── tools/check-core-purity.sh stays. It is the only thing left in tools/
 ```
@@ -149,8 +149,9 @@ The compiler between them is the daemon's main reason to exist.
   "name": "go-nogo",
   "entry": "Ready",
   "distributions": {
-    "foreperiod": { "kind": "uniform", "a": 300, "b": 700 },
-    "window":     { "kind": "fixed", "a": 1000 }
+    "foreperiod":      { "kind": "exponential", "minimum_ms": 500,
+                         "maximum_ms": 2500, "mean_ms": 900 },
+    "response_window": { "kind": "fixed", "duration_ms": 1000 }
   },
   "states": [
     { "name": "Ready",
@@ -159,21 +160,35 @@ The compiler between them is the daemon's main reason to exist.
         { "when": { "all": ["start_switch"], "none": ["abort"] },
           "goto": "Foreperiod" } ] },
     { "name": "Foreperiod",
-      "timeout": { "after": "foreperiod", "goto": "Window" },
+      "timeout": { "after": "foreperiod", "goto": "Cue" },
       "transitions": [
         { "when": { "any": ["lever_left", "lever_right"] },
           "goto": "Early" } ] },
     { "name": "Hit", "outcome": "HIT",
-      "on_entry": [ { "line": "valve", "kind": "pulse", "ms": 40 } ] }
+      "on_entry": [ { "line": "reward_valve", "kind": "pulse", "pulse_ms": 40 } ] }
   ]
 }
 ```
 
-`compile.py` turns that into `graph_begin` … `graph_end` per `PROTOCOL.md` §3.2:
-states in declaration order, each state's transitions and actions immediately
-after it (the ordering rule *is* the device's memory invariant), the shared
-distribution pool flattened and indexed, `invert`/`enable`/`safe`/`debounce_ms`
-taken from the line map, and the rolling `checksum` accumulated as it goes.
+**The parameters are named, where the wire's are positional.** A distribution on
+the wire carries `a`, `b` and `c`, whose meaning depends on `kind` — terse
+because the device has 32 KB. A person writing a foreperiod down should write
+`minimum_ms` and `mean_ms`, and exactly one place in the daemon should know
+which is which. That place is `compile.py`.
+
+`compile.py` turns the whole set into `set_begin` … `set_end` per `PROTOCOL.md`
+§3.2: the shared distribution pool first, then each graph as `graph_begin` …
+`graph_end` with its states in declaration order and each state's transitions
+and actions immediately after it (the ordering rule *is* the device's memory
+invariant). It produces a *plan* — an ordered list of messages — and touches no
+link, which is what lets the translation be tested message by message on a host
+with no board. The rolling `checksum` is accumulated by the uploader, over the
+bytes it actually sent.
+
+Two distributions that are written identically become **one pool entry**, shared
+across the set. Thirty-two entries is the scarcest thing on the board, two
+paradigms usually want the same foreperiod, and anything that differs in a
+parameter is a separate entry — so sharing can never change what a graph draws.
 
 **Validation happens twice, on purpose.** The daemon runs `PROTOCOL.md`'s rules
 host-side *and* checks the graph against the `caps` in `hello_ack` before sending
@@ -1010,7 +1025,7 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 | **M4a** ✅ | **The move, and nothing else.** `tools/bringup/` → `daemon/`, `statemachined_bringup` → `statemachined` with the wire under `device/`, `wire.py` made standalone with golden vectors against the emulator's copy *and* against `crc16.cpp`. The graph upload and result reassembly left `tests/hardware/harness.py` for `device/upload.py` and `device/result.py`, so the hardware suite now tests the daemon's codec rather than a copy of it. `make bringup` and `make test-hardware` unchanged in behaviour; `make test-daemon` is new and is in `make ci` and CI |
 | **M4b** ✅ | **Wiring config and the `visit` stream, in the firmware** (§3.3, §3.6). The wiring move plus a compile-time safe-level word closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships; the stream is a callback and a serialiser. They share a file and a protocol document, so they share a branch. **No data flash** — that is deferred to M7 |
 | **M4c** ✅ | **The graph set, in the firmware** (§3.2, §3.3): shared pools, `GraphEntry`, `set_begin`/`set_end`, a slot in `configure`, `max_graphs` in `caps`. The larger of the two firmware milestones and the one this plan's trial loop rests on. Covered by the native core, the Renode session and `PROTOCOL.md` message by message, all of which exist |
-| **M4d** | `model/` and `compile.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
+| **M4d** ✅ | `model/` and `compile.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4e** | `device/supervisor.py` and `clock.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core over a pty — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks |
 | **M4f** | FastAPI: device, lines, graphs, trial, config, state/stream; the triald client; `statemachined serve`. `dev/API.md` written first, the way `PROTOCOL.md` was |
 | **M4g** | The web UI and the `/elements/` contract; mDNS |

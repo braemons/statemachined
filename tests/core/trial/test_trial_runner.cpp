@@ -67,6 +67,39 @@ TEST_CASE("every visit reaches the sink, including the ones the ring drops") {
     CHECK(r.visit(i).entered_us == rec.visits[offset + i].entered_us);
 }
 
+TEST_CASE("a fired transition is reported by its position within the state") {
+  // Not by its index into the shared pool. The host holds the graph and reads
+  // it the way it wrote it -- "transition 1 of Foreperiod" -- and must never
+  // have to know where this state's slice of the pool happens to sit.
+  Builder b;
+  const uint8_t first = b.state();
+  const uint8_t second = b.state();
+  const uint8_t hit = b.terminal(TrialOutcome::Hit);
+  b.timeout(first, b.fixed(10), second);
+
+  // `second` owns pool transitions 0 and 1; only the second of them can fire.
+  Transition never;
+  never.all_high = bit(7);
+  never.target_state = first;
+  b.on(second, never);
+  Transition always;
+  always.all_high = bit(0);
+  always.target_state = hit;
+  b.on(second, always);
+  b.entry(first);
+
+  TrialRunner e(b.g);
+  uint32_t t = 0;
+  e.start(1, 1, t);
+  run_until(e, 0, t, ms(20));  // through the timeout, into `second`
+  run_until(e, bit(0), t, ms(40));
+
+  const StateMachineRunRecord& r = e.run_record();
+  REQUIRE(r.path_len >= 2);
+  CHECK(r.visit(1).cause == StateExitCause::Transition);
+  CHECK(r.visit(1).transition_index == 1);  // the second of that state's two
+}
+
 TEST_CASE("a machine with no sink records exactly as it did before") {
   // The sink is null by default and must stay optional: the native tests, the
   // demo runner and anything else that only wants the record must not have to

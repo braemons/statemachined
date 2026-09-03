@@ -139,7 +139,13 @@ void StateMachine::record_visit(StateExitCause cause, TransitionIndex fired,
   // the graph it selected.
   e.state_index = static_cast<StateIndex>(current_ - graph().first_state);
   e.cause = cause;
-  e.transition_index = fired;
+  // And within this state: "the n'th transition of Foreperiod", which is how a
+  // person reads a graph file and is what the host can resolve to a target
+  // without knowing where this state's slice of the shared pool happens to sit.
+  e.transition_index =
+      (fired == kNoTransition)
+          ? kNoTransition
+          : static_cast<TransitionIndex>(fired - set_->states[current_].first_transition);
   e.drawn_ms = timeout_ms_;
   e.entered_us = entered_us_;
   e.duration_us = since(entered_us_, now_us);

@@ -555,7 +555,7 @@ Each entry of `p` is a fixed six-element array, **not** an object:
 |---|---|---|
 | 0 | `u8` | Which state. An **index**, not a name — the bridge holds the graph and resolves names host-side, which is part of what keeps the device inside 32 KB |
 | 1 | string | `"timeout"` `"transition"` `"cancel"` `"terminal"` |
-| 2 | `u8` | Which transition fired, or `255` for an exit that was not one |
+| 2 | `u8` | Which of **this state's** transitions fired, counted from zero in declaration order, or `255` for an exit that was not one. Per state, like `state_index` is per graph: the host reads the graph the way it wrote it, and never has to know where a state's slice of the shared pool sits |
 | 3 | `i32` | The **realised** duration of the draw, in ms. Reported so a random timing is evidence in the record and not merely reproducible from the seed |
 | 4 | `u32` | Entry timestamp, device clock |
 | 5 | `u32` | Measured duration. This is what actually happened; position 3 is what was asked for |

@@ -44,8 +44,10 @@ namespace statemachined {
 struct StateVisit {
   StateIndex state_index = 0;
   StateExitCause cause = StateExitCause::Terminal;
-  TransitionIndex transition_index = kNoTransition;  ///< which transition fired,
-                                                     ///< if StateExitCause::Transition
+  /// Which of *this state's* transitions fired, counted from zero in
+  /// declaration order, if StateExitCause::Transition. Not an index into the
+  /// shared pool: the host holds the graph and reads it the way it wrote it.
+  TransitionIndex transition_index = kNoTransition;
   Milliseconds drawn_ms = 0;  ///< the realised duration, reported so that a
                               ///< random draw is evidence and not just
                               ///< reproducible

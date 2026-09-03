@@ -17,10 +17,16 @@ description = "Owns one statemachined device: the wire, the graphs, and the API 
 requires-python = ">=3.11"
 license = "LGPL-3.0-or-later"
 dependencies = [
-    # serial_for_url() is why this is the only dependency so far: it already
-    # speaks socket:// and rfc2217://, so the day a board is on a switch
-    # instead of a USB cable, nothing above device/link.py changes.
+    # serial_for_url() is why this one is here rather than a hand-written
+    # transport: it already speaks socket:// and rfc2217://, so the day a board
+    # is on a switch instead of a USB cable, nothing above device/link.py
+    # changes.
     "pyserial>=3.5",
+    # A graph arrives from a file somebody edited or from an HTTP request, and
+    # "refuse it, naming the field" is the whole job at that boundary. The same
+    # models become the API's schema at M4f, which is why this is pydantic
+    # rather than dataclasses plus hand-written checks.
+    "pydantic>=2.13.5",
 ]
 
 [project.scripts]

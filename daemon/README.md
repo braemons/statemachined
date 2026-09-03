@@ -1,9 +1,11 @@
 # statemachined — the daemon
 
-> **Where this is going:** [`dev/DAEMON.md`](../dev/DAEMON.md) is the plan. This
-> directory was `tools/bringup/`, and M4a moved it here unchanged in behaviour —
-> so what is written below is still true, and still all there is. `serve`, the
-> graph model, the API and the web UI arrive at M4d–M4g.
+> **Where this is going:** [`dev/DAEMON.md`](../dev/DAEMON.md) is the plan.
+> `src/statemachined/` now holds three layers: `device/` is the wire, `model/`
+> is a graph as a person authors it, and `compile.py` is the translation between
+> them. `cli.py` is still the bench instrument this directory started as, and
+> everything below is still true of it. `serve`, the supervisor, the API and the
+> web UI arrive at M4e–M4g.
 
 What exists today is the bench instrument [`dev/BRINGUP.md`](../dev/BRINGUP.md)
 §4 and §5 ask for: one command out, one reply back, and the numbers M3 is
@@ -13,9 +15,19 @@ waiting on printed in a shape somebody can paste into
 **The bench instrument is not the daemon**, and the split survives the move as a
 split between modules rather than between directories. `cli.py` sends one
 command and prints what came back; it knows nothing about paradigms, trials or
-graphs. `device/` is the wire, and it is what the daemon will be built out of —
-`upload.py` and `result.py` are already there, doing the *bridge's* job. Nothing
-that runs an experiment belongs in `cli.py`.
+graphs. Nothing that runs an experiment belongs in it.
+
+The layers below it:
+
+| | |
+|---|---|
+| `device/` | the wire, and only the wire. Framing, the session, the set upload, the result. Knows what an index is and never what a name is |
+| `model/` | a graph, a line map and a record as a *person* writes and reads them. Pydantic, because this is the boundary where a file somebody edited arrives and "refuse it, naming the field" is the whole job. Knows nothing about messages |
+| `compile.py` | the translation, and the only place that knows both. Names into indices, plus the check that the whole set fits the `caps` this board declared |
+
+That split is what the daemon exists for: the wire speaks indices because the
+device has 32 KB, a person speaks names, and neither should have to learn the
+other's vocabulary.
 
 ```sh
 make bringup ARGS="hello"                   # or, without the Makefile:
@@ -76,6 +88,23 @@ uv run --project daemon statemachined --hello state
 
 Nothing is ever retried. The protocol makes a blind resend safe, but a silent
 retry would hide exactly the stall §5 is measuring.
+
+## Graphs
+
+[`graphs/`](../graphs) holds the worked examples: a go/no-go and a
+two-alternative forced choice, plus the line map of the reference rig they are
+authored against. They are meant to be read as much as run — they are what a
+graph file *is*.
+
+```sh
+make test-daemon        # among other things, checks they still fit the board
+```
+
+A graph names states, lines and durations; nothing in it is an index, and
+nothing in it is specific to a board. What makes it runnable on a *particular*
+rig is the line map (which pin `lever_left` is) and that board's `caps` (whether
+the set fits), and both of those meet the graph in `compile.py` rather than in
+the file.
 
 ## The hardware test suite
 

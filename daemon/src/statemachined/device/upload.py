@@ -26,6 +26,42 @@ from .session import Session
 from .wire import CRC_INIT, command_line, covered_bytes, crc16_ccitt
 
 
+def send_compiled_upload_messages(
+    session: Session,
+    upload_messages: list,
+    timeout: float = 5.0,
+) -> dict:
+    """Put a compiled set on the wire and return the `set_ok`.
+
+    `upload_messages` is what `statemachined.compile` produced: an ordered list
+    of `(msg_type, fields)` from `set_begin` to `set_end`, with `set_end`'s
+    `checksum` left out because it is over bytes that did not exist yet.
+
+    This is the seam. The compiler knows what a name means and nothing about
+    framing; this knows the framing and nothing about names. The checksum is the
+    reason the two have to meet somewhere: it is folded over the CRC-covered
+    bytes of every message actually sent, so it can only be computed by whoever
+    sent them.
+    """
+    rolling_checksum = CRC_INIT
+    reply: dict = {}
+    for upload_message in upload_messages:
+        fields = dict(upload_message.fields)
+        is_set_end = upload_message.msg_type == MsgType.SET_END
+        if is_set_end:
+            fields["checksum"] = f"{rolling_checksum:04X}"
+
+        message_id = session._next_message_id()
+        line = command_line(upload_message.msg_type, message_id, **fields)
+        if not is_set_end:
+            # set_end carries the checksum and so cannot be inside it.
+            rolling_checksum = crc16_ccitt(covered_bytes(line), rolling_checksum)
+        reply = session.request_line(
+            line, message_id, timeout=timeout, what=str(upload_message.msg_type)
+        )
+    return reply
+
+
 class SetUpload:
     """One `set_begin` … `set_end`, against one greeted device.
 
