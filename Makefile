@@ -68,6 +68,18 @@ emulate:                    ## run the firmware under Renode, in Robot tests
 upload:                     ## flash the reference board
 	pio run -e $(BOARD) -t upload
 
+# The bench instrument dev/BRINGUP.md §4 and §5 ask for. Its one dependency
+# (pyserial) lives in tools/bringup/pyproject.toml rather than in whichever
+# python3 is on PATH, so `uv run --project` builds an environment for it on
+# first use and neither renode-test's interpreter nor the uv-tool sandboxes
+# above notice. TARGET is a device path, a host:port, or any pyserial URL --
+# the same tool reaches a board on a network as reaches one on a cable.
+TARGET ?= /dev/ttyACM0
+
+.PHONY: bringup
+bringup:                    ## talk to a board: make bringup ARGS="state"
+	uv run --project tools/bringup statemachined-bringup -t $(TARGET) $(ARGS)
+
 # Pinned to match .github/workflows/ci.yml. clang-format's output changes
 # between major versions, and `BasedOnStyle: Google` in .clang-format resolves
 # against whichever version is running, so an unpinned one reformats files CI

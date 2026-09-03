@@ -120,26 +120,27 @@ probe D2 and D10 together for input-to-output latency, and any step LED for the
 ## 4. Talk to it, and read the number this is all for
 
 Every line carries a CRC-16/CCITT-FALSE, so typing JSON into a serial monitor
-gets no reply. Use the repository's own framing helper — the same one CI drives
-the emulated board with:
+gets no reply. Use the repository's own bench instrument, which frames commands
+with the same helper CI drives the emulated board with
+([`tools/bringup/`](../tools/bringup/README.md)):
 
 ```sh
-uv pip install --system --break-system-packages pyserial
+make bringup ARGS="hello"
 ```
 
-```python
-import sys, serial
-sys.path.insert(0, "emulation/tests")
-from statemachined_protocol import statemachined_line
+`uv` builds its environment on first use; nothing lands in the system Python.
+The board is `/dev/ttyACM0` unless you say otherwise —
+`make bringup TARGET=... ARGS=...`, and `TARGET` also takes a `host:port` or a
+`socket://` URL for a device that is on a network rather than a cable.
 
-s = serial.Serial("/dev/ttyACM0", 115200, timeout=2)
-
-def cmd(body):
-    """`body` is the message without its closing brace; statemachined_line adds the CRC."""
-    s.write((statemachined_line(body) + "\n").encode())
-    return s.readline().decode().strip()
-
-print(cmd('{"t":"hello","seq":1,"proto":1,"seed":"0123456789ABCDEF"'))
+```
+hello_ack
+  seed           443ADD5C803378B8
+  board          uno_r4_minima   fw 0.1.0   proto 1
+  lines          8 in, 8 out
+  scan_hz        11234  (above the 10000 Hz target)
+  graph          none
+  caps           {"max_line": 512, ...}
 ```
 
 > **`scan_hz` in the `hello_ack` is the number M3 is waiting on.**
@@ -155,24 +156,40 @@ Sending `hello` also **ends demo mode for good until the next reset**. Every lin
 goes to its safe level and D13 stops blinking. That handover is deliberate: a rig
 must never be able to run the demo while somebody believes it is running an
 experiment. Note that *opening* the port is not enough — a serial monitor does
-that — it is the greeting that hands over.
+that — it is the greeting that hands over. Only `hello` and `report` greet the
+board; `make bringup ARGS="monitor"` watches the link and sends nothing, which
+is how you look at a board that is still running the demo.
 
 ---
 
 ## 5. Prove the pins reach the line numbers
 
-```python
-print(cmd('{"t":"state","seq":2'))
+```sh
+make bringup ARGS="state"
 ```
+
+If the board has not been greeted since it was reset it answers `not_ready`,
+because nothing but `hello` is accepted before a session exists. Use
+`ARGS="--hello state"` — which ends demo mode, as §4 says.
 
 `"io":{"in":N,"out":M}` is the only way anything outside the device can check
 that a graph's line numbers reach the pins somebody wired, because there is no
-read-back path. Hold the start switch and send it again: `in` goes from `0` to
-`1`. Hold both switches: `3`.
+read-back path. The tool prints both as a row of bits with line 0 on the left
+and names the pins from `HARDWARE.md`:
+
+```
+  in             1.......   high: 0 (D2)
+  out            .......1   high: 7 (A4)
+```
+
+Hold the start switch and ask again: `in` goes from `0` to `1`. Hold both
+switches: `3`. `ARGS="watch"` polls it a few times a second so you can do that
+with both hands on the wires.
 
 The same reply carries `scan.overruns` and `scan.worst_gap` — scan periods that
-went by with no scan in them, counted rather than absorbed. Send several commands
-in quick succession and look again.
+went by with no scan in them, counted rather than absorbed. `ARGS="load"` reads
+them, sends 200 pings back to back, and reads them again; it exits non-zero if
+the count moved.
 
 > **If overruns climb under link traffic, that is a finding.**
 
@@ -211,6 +228,13 @@ Three numbers settle M3, and everything after it assumes they held:
 | `scan.overruns` under link load | zero, or climbing |
 | Scope: D2 → D10 latency, and the step dwell | against 500 ms |
 
+The first two come out of one command, already as a markdown table:
+
+```sh
+make bringup ARGS="report" > /tmp/m3.md
+```
+
 Record them in [`HARDWARE.md`](HARDWARE.md) under the board they were measured
-on, the way the RAM figures are recorded there. A measurement that stays in
-somebody's terminal is one the next person has to take again.
+on, the way the RAM figures are recorded there — with the scope numbers added by
+hand, since no amount of serial traffic can produce those. A measurement that
+stays in somebody's terminal is one the next person has to take again.
