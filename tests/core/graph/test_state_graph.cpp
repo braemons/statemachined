@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Validation exists so a bad graph is refused at upload, never at trial 300 --
 // triald "refuses rather than failing later". These tests are that promise.
 #include "doctest.h"

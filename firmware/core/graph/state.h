@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // A state, and why one gets left.
 //
 // A state knows nothing about trials. Terminal states carry an opaque

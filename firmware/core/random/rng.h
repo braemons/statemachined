@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The deterministic PRNG. The distributions that draw from it are in
 // random_distribution.h.
 //

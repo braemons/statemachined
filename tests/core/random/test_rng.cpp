@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The PRNG carries the reproducibility claim, so these tests are stricter than
 // they look: a change that makes any of them fail changes recorded sessions.
 #include <map>

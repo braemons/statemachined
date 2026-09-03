@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // A JSON reader and writer for exactly the shapes dev/PROTOCOL.md defines, and
 // nothing else. No allocation, no floating point, one pass, and recursion
 // bounded to kJsonMaxDepth -- four frames, which the protocol never exceeds and

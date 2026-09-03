@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The protocol's line layer: bytes in, verified lines out, and the CRC put back
 // on the way out. Everything here is below JSON -- it knows a line has a `crc`
 // member last and nothing else about what a message means.

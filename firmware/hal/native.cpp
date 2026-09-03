@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The host. Not a board, and not a toy either: it is what lets a whole session
 // be played out at host speed with no hardware attached, and it is why hal.h is
 // compiled by CI rather than only by a board build.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Timing distributions: a duration a graph declares is a draw, not a number.
 //
 // The draw happens on state entry, on the device, from the trial's own stream.

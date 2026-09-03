@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 # Host build of the portable core, for unit tests in CI.
 #
 # The core is plain C++17 with no Arduino.h, so it compiles here exactly as it
@@ -34,6 +35,7 @@ add_library(fsmd_engine
   firmware/core/io/input_conditioner.cpp
   firmware/core/machine/state_machine.cpp
   firmware/core/trial/trial_runner.cpp
+  firmware/core/demo/demo_graph.cpp
 )
 target_include_directories(fsmd_engine PUBLIC firmware/core)
 target_compile_options(fsmd_engine PRIVATE -Wall -Wextra -Wpedantic -Werror)

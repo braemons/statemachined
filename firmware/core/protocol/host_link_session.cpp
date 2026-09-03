@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "protocol/host_link_session.h"
 
 #include "protocol/crc16.h"

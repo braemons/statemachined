@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 *** Settings ***
 Documentation     fsmd on an emulated Uno R4 Minima.
 ...

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Raw pins in, one clean input word out: polarity normalised, disabled lines
 // zeroed, every line debounced.
 //

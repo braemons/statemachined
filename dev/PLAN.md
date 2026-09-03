@@ -1,6 +1,12 @@
 # fsmd — the plan
 
-> **Status:** design only. Nothing is implemented. This document is for review.
+> **Status:** M0-M3 implemented. The portable core, the wire protocol and the
+> Uno R4 Minima HAL are written, unit-tested on the host (10 suites, green under
+> gcc/clang, ASan/UBSan and at `-O0`/`-O3`) and exercised on an emulated board
+> under Renode. **No physical board has run this yet**, so the 10 kHz scan rate
+> remains a claim; the RAM figure has been measured against a real link step and
+> is recorded below. Next up is **M4, the bridge to triald** — `bridge/` and
+> `graphs/` are still empty. Milestones and their state are at the end.
 
 ## What fsmd is
 
@@ -596,6 +602,13 @@ With names resolved to bit indices at upload and distributions in a shared pool:
 > means patching the framework and is worth doing only if something needs the
 > room. Full breakdown, and the reason the 1 KB declared stack is not the true
 > headroom, in **`dev/HARDWARE.md`**.
+>
+> **Demo mode adds 4 640 B on top of that**, taking the default build to
+> **16 568 B static / 25 784 B committed (78.7%)**. It is a second StateGraph
+> and a second TrialRunner, which is the price of the bench aid being the real
+> engine rather than a light show on a parallel code path. A rig build that
+> wants the headroom back compiles with `-DFSMD_DEMO=0` and returns to
+> 11 936 B. Both configurations are built in CI.
 
 A condition being three `uint32_t` masks and three bytes is why **TTL
 combinations are cheaper than per-line edge bookkeeping**, not more expensive.
@@ -624,7 +637,7 @@ graphs first. None of that touches the trial loop.
 
 **A Raspberry Pi fsmd would be a fifth HAL, not a second project.** Everything in
 `firmware/core/` is plain C++17 with no `Arduino.h`, and the entire hardware
-surface is four functions. A Linux backend reads the input word from a gpiochip
+surface is seven functions. A Linux backend reads the input word from a gpiochip
 line-request, writes outputs the same way, and takes `clock_gettime` for micros —
 `native.cpp` is most of the way there already. Same graph format, same protocol,
 same bridge, same golden vectors. The one real difference is that a Pi cannot
@@ -740,12 +753,22 @@ the trial type store. **Open: which.**
    every state change, 2 free-runs at 10 Hz. Mode 1 makes the whole state path
    recoverable from the ephys recording alone, which is stronger than anything
    this plan had. Confirm mode 1 is what Bremen's rigs want as the default.
-6. **License — settled, pending your agreement.** Bpod's firmware is GPLv3, so
-   borrowing from it makes fsmd's firmware GPLv3. That was already the proposal.
-   **Firmware GPLv3, bridge LGPLv3** so an experiment importing the bridge is not
-   placed under copyleft — the same split, and the same reason, as vstimd's
-   client. Every file we derive from Bpod carries its Sanworks copyright line
-   alongside ours; a `NOTICE` file records what came from where.
+6. **License — settled and applied.** **Firmware GPLv3-or-later, bridge
+   LGPLv3-or-later**, so an experiment importing the bridge is not placed under
+   copyleft — the same split, and the same reason, as vstimd's client. `LICENSE`,
+   `bridge/LICENSE`, `NOTICE`, and an `SPDX-License-Identifier` on every source
+   file are in the tree.
+
+   One correction to the reasoning this question was written with: it assumed
+   "Bpod's firmware is GPLv3, so borrowing from it makes fsmd's firmware GPLv3."
+   **Nothing was in fact borrowed.** Every mention of Bpod in these sources is a
+   comment comparing our design to theirs, usually to explain a divergence; no
+   Sanworks code is copied, translated or adapted, and no file carries a Sanworks
+   copyright line. GPLv3 was therefore not compelled and is a deliberate choice
+   to stay compatible with the system we take our ideas from. If Bpod source is
+   ever incorporated, that file takes the Sanworks notice alongside ours and
+   `NOTICE` says which file and what was taken.
+
 7. **`start_source`.** Proposed as a per-trial field taking `ttl`, `serial` or
    `either` — TTL on the rig so reaction times need no clock sync, serial as the
    desk-testing path. Confirm.
@@ -754,18 +777,16 @@ the trial type store. **Open: which.**
 
 ## Milestones
 
-| | |
-|---|---|
-| | |
-|---|---|
-| **M0** | Repo, `platformio.ini` with `native` + `uno_r4_minima`, `dev/PROTOCOL.md`, a native build that compiles and does nothing |
-| **M1** | Core engine — conditions, timers, RNG, the four distributions — unit-tested on native. No serial, no hardware |
-| **M2** | Protocol codec: chunked graph upload, `configure`/`armed`/`result`/`cancel` over a pty against the native core |
-| **M3** | **Uno R4 Minima HAL** — direct RA4M1 port-register reads, `FspTimer` ISR at 10 kHz, real pins. Measure the achieved scan rate and the RAM high-water mark and put both in this document. *Built and linking; RAM measured (see above and `dev/HARDWARE.md`). The scan rate needs a board* |
-| **M4** | Bridge to triald: a whole session on the R4, with `triald sim`'s simulated subject replaced by the real board |
-| **M5** | Example graphs, `dev/HARDWARE.md` with R4 pinout and wiring, virtual events and output overrides, sync line |
-| **M6** | Teensy 4.1 and ESP32 HALs; the golden reproducibility test green on all three boards |
-| **M7** | Packaging |
+| | | |
+|---|---|---|
+| **M0** | ✅ | Repo, `platformio.ini` with `native` + `uno_r4_minima`, `dev/PROTOCOL.md`, a native build that compiles and does nothing |
+| **M1** | ✅ | Core engine — conditions, timers, RNG, the four distributions — unit-tested on native. No serial, no hardware |
+| **M2** | ✅ | Protocol codec: chunked graph upload, `configure`/`armed`/`result`/`cancel`. Covered in-process by `test_host_link_session`, and end-to-end over a real UART peripheral under Renode rather than the pty this milestone first imagined |
+| **M3** | 🔶 | **Uno R4 Minima HAL** — direct RA4M1 port-register reads, `FspTimer` ISR at 10 kHz, real pins. Builds, links and runs emulated; RAM measured — see above and `dev/HARDWARE.md`. Demo mode (`firmware/core/demo/`) now runs a built-in graph before any host greets, so a bench board is observable with two switches and six LEDs. **The achieved scan rate still needs a board** |
+| **M4** | ▶️ | Bridge to triald: a whole session on the R4, with `triald sim`'s simulated subject replaced by the real board. `bridge/` is empty |
+| **M5** | ☐ | Example graphs, `dev/HARDWARE.md` with R4 pinout and wiring, virtual events and output overrides, sync line. `dev/HARDWARE.md` has the line map and the demo wiring; `graphs/` is still empty, and virtual events, output overrides and the sync line are untouched |
+| **M6** | ☐ | Teensy 4.1 and ESP32 HALs; the golden reproducibility test green on all three boards |
+| **M7** | ☐ | Packaging |
 
 ### Emulation, and what it can and cannot settle
 

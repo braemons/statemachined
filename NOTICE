@@ -1,0 +1,57 @@
+fsmd — the trial state machine
+Copyright © 2026 Joscha Schmiedt, University of Bremen.
+
+Licensed under the GNU General Public License v3.0 or later; the host bridge
+under the GNU Lesser General Public License v3.0 or later. See LICENSE,
+bridge/LICENSE, and the "Licensing" section of README.md.
+
+This file records what in this repository came from somewhere else.
+
+--------------------------------------------------------------------------
+Bpod (Sanworks LLC) — an intellectual ancestor, NOT a code ancestor
+--------------------------------------------------------------------------
+
+Bpod <https://sanworks.io> (Sanworks LLC, Josh Sanders, out of the Kepecs
+lab) is the direct intellectual ancestor of the model implemented here. The
+idea of a state matrix as the per-trial unit of configuration is Bpod's, and
+`dev/PLAN.md` sets out at length what we take from it and what we do
+differently.
+
+**No Bpod source code is copied, translated or adapted in this repository.**
+Every reference to Bpod in these sources is a comment comparing our design to
+theirs — usually to explain a deliberate divergence, such as sparse per-state
+transition lists in place of Bpod's dense [state][event] matrix, three-mask
+conditions over the whole input word in place of its one-channel/one-value
+Condition, and a foreground scan in place of its in-ISR state machine.
+
+Consequently no file here carries a Sanworks copyright line, and this
+project's GPLv3 licensing is a deliberate choice to stay compatible with the
+system it takes its ideas from, rather than an obligation inherited by
+copying its code. Should any Bpod source later be incorporated, that file
+must carry the Sanworks copyright notice alongside ours and this section must
+be amended to say which file and what was taken.
+
+--------------------------------------------------------------------------
+Third-party code included in this repository
+--------------------------------------------------------------------------
+
+tests/third_party/doctest.h
+    doctest, the unit-testing framework used by the host test suite.
+    Copyright (c) 2016-2023 Viktor Kirilov.
+    Distributed under the MIT Software License.
+    https://github.com/doctest/doctest
+
+    Test-only: it is not compiled into any firmware image.
+
+--------------------------------------------------------------------------
+Toolchains and platform code NOT redistributed here
+--------------------------------------------------------------------------
+
+Board builds link against the Arduino core for the Renesas RA4M1 (and, at
+M6, the Teensy and ESP32 cores). Those are fetched by PlatformIO at build
+time under their own licences and no part of them is contained in this
+repository. `firmware/hal/renesas_ra4m1.cpp` calls that core's public API;
+it does not copy it.
+
+Renode, used to run the firmware on an emulated board in CI, is likewise a
+build/test dependency and is not redistributed here.

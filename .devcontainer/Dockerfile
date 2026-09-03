@@ -30,8 +30,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       git \
       ca-certificates \
       python3 \
-      python3-venv \
-      python3-pip \
       python3-dev \
       udev \
       usbutils \
@@ -44,17 +42,22 @@ RUN update-alternatives --install /usr/bin/gcc  gcc  /usr/bin/gcc-13 100 \
  && update-alternatives --install /usr/bin/clang   clang   /usr/bin/clang-18   100 \
       --slave /usr/bin/clang++ clang++ /usr/bin/clang++-18
 
-# Ubuntu 24.04's system Python is externally managed (PEP 668), so pip refuses
-# to install into it. A venv on PATH is the honest way round that, and it also
-# keeps PlatformIO's dependency tree away from anything apt owns.
+# uv drives every Python install here -- CI does the same, via the Makefile's
+# install-* targets -- so the system pip and its PEP-668 "externally managed"
+# refusal never enter into it. Pinned like everything else in this file.
+COPY --from=ghcr.io/astral-sh/uv:0.11.13 /uv /uvx /usr/local/bin/
+
+# Ubuntu 24.04's system Python is externally managed (PEP 668), so tools still
+# want their own environment. A venv on PATH is the honest way round that, and
+# it also keeps PlatformIO's dependency tree away from anything apt owns.
 ENV VIRTUAL_ENV=/opt/venv
-RUN python3 -m venv "$VIRTUAL_ENV"
+RUN uv venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 # clang-format is pinned to exactly what .github/workflows/ci.yml installs. If
 # you bump one, bump both -- a mismatch shows up as a red format job on a diff
-# you never wrote.
-RUN pip install --no-cache-dir \
+# you never wrote. platformio matches Makefile's PLATFORMIO_PIN.
+RUN uv pip install --python "$VIRTUAL_ENV/bin/python" \
       platformio==6.1.16 \
       clang-format==23.1.0
 
@@ -89,7 +92,7 @@ RUN curl -fsSL "$RENODE_URL" -o /tmp/renode.tar.gz \
 # renode-test fails on an import at the least useful possible moment. (The
 # pinned psutil predates cp312 wheels and builds from source, which is what
 # python3-dev is doing in the apt list above.)
-RUN pip install --no-cache-dir -r /opt/renode/tests/requirements.txt
+RUN uv pip install --python "$VIRTUAL_ENV/bin/python" -r /opt/renode/tests/requirements.txt
 
 # Flashing a board from inside a container needs the device passed through and
 # these rules present on the *host* as well; see BUILD.md.

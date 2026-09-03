@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "io/input_conditioner.h"
 
 namespace fsmd {

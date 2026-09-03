@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 """Speaking fsmd's wire protocol from Robot Framework.
 
 Deliberately a *second* implementation of the framing rules rather than a

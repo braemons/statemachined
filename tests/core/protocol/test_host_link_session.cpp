@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // A whole session, played out on the host with no board attached.
 //
 // That this is possible at all is the design working: the session touches no

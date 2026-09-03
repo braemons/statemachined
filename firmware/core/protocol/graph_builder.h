@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Assembles a StateGraph from the upload messages, one message at a time.
 //
 // The upload is chunked because the device has 32 KB and a whole graph as JSON

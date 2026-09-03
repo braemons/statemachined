@@ -25,8 +25,9 @@ same environment CI uses and it is one command.
 > [!IMPORTANT]
 > **clang-format is pinned on purpose.** Its output changes between major
 > versions, so a distro-provided one can reformat files your CI check then
-> rejects — a red build on a diff you never wrote. Install it from pip
-> (`pip install clang-format==23.1.0`), not from your package manager.
+> rejects — a red build on a diff you never wrote. Install it with uv
+> (`uv tool install clang-format==23.1.0`, or just `make install-clang-format`),
+> not from your package manager.
 >
 > `make format` and `make format-check` **refuse to run** against any other
 > version and tell you how to fix it, so this is caught before you commit rather
@@ -93,23 +94,21 @@ simpler to build in the container and run `make upload` on the host.
 
 ```sh
 sudo apt update
-sudo apt install -y build-essential clang cmake ninja-build git \
-                    python3 python3-venv python3-pip
+sudo apt install -y build-essential clang cmake ninja-build git python3
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 That gives gcc 13, clang 18 and CMake 3.28 — all well past the floors above.
 
-PlatformIO and clang-format go in a virtualenv. Ubuntu 24.04's system Python is
-*externally managed* (PEP 668), so `pip install` into it will refuse:
+PlatformIO and clang-format go in via uv, which gives each its own environment
+with a shim on `PATH` — so Ubuntu 24.04's *externally managed* (PEP 668) system
+Python never enters into it:
 
 ```sh
-python3 -m venv ~/.venvs/fsmd
-source ~/.venvs/fsmd/bin/activate
-pip install platformio==6.1.16 clang-format==23.1.0
+make install-pio install-clang-format
+# equivalently: uv tool install platformio==6.1.16
+#               uv tool install clang-format==23.1.0
 ```
-
-Add `source ~/.venvs/fsmd/bin/activate` to your shell rc, or use
-`pipx install platformio` if you prefer the tools on `PATH` permanently.
 
 **For flashing,** install PlatformIO's udev rules and put yourself in the
 serial group:
@@ -124,8 +123,8 @@ sudo usermod -aG dialout "$USER"    # log out and back in
 ## Fedora 44+
 
 ```sh
-sudo dnf install -y gcc-c++ clang cmake ninja-build make git \
-                    python3 python3-pip
+sudo dnf install -y gcc-c++ clang cmake ninja-build make git python3
+curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 Fedora tracks upstream closely, so you get a much newer gcc and clang than
@@ -135,14 +134,12 @@ warning fires only on Fedora, it is still a real warning — fix it rather than
 waiting for CI to agree.
 
 > Do **not** `dnf install clang-tools-extra` for clang-format. It will give you a
-> version matching your system clang, which is not the pinned 23.1.0. Use pip.
+> version matching your system clang, which is not the pinned 23.1.0. Use uv.
 
-Fedora's Python is externally managed too, so the same venv applies:
+Fedora's Python is externally managed too, so the same uv route applies:
 
 ```sh
-python3 -m venv ~/.venvs/fsmd
-source ~/.venvs/fsmd/bin/activate
-pip install platformio==6.1.16 clang-format==23.1.0
+make install-pio install-clang-format
 ```
 
 **For flashing:**
@@ -297,8 +294,9 @@ one it was configured with. Use a separate tree for each --
 
 **`make format` refuses to run: "clang-format X, but this repo pins 23.1.0".**
 Working as intended — that version would format files differently from CI.
-`pip install clang-format==23.1.0` inside your venv, which shadows the system
-one. If you genuinely mean to use another version, pass
+`make install-clang-format` (or `uv tool install clang-format==23.1.0`) puts the
+pinned one on `PATH` ahead of the system one. If you genuinely mean to use
+another version, pass
 `CLANG_FORMAT_PIN=<your version>`.
 
 **`pio run` fails to download a platform.** PlatformIO fetches toolchains on

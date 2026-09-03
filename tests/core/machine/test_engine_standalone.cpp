@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The engine with no wire anywhere near it.
 //
 // This binary links against fsmd_engine alone -- no framing, no JSON, no

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // A trigger is a predicate over the whole input word, not an edge on one line.
 //
 // Three bitmasks over the input lines, evaluated in constant time with no

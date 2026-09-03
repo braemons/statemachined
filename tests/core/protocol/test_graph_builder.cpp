@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The graph upload. Everything a host can get wrong about it arrives here, and
 // a graph that is accepted is one the rig will run for the next three hundred
 // trials -- so these tests are mostly about refusal, and about refusing with a

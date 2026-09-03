@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // What a state does to the output lines, and what the machine hands back for
 // the HAL to apply. The machine never touches a pin: it returns an OutputUpdate
 // and the HAL drives it, which is what lets the whole thing run on the host.
