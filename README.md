@@ -97,6 +97,9 @@ the board runs a built-in demo graph until something greets it:
 make upload
 ```
 
+[`dev/BRINGUP.md`](dev/BRINGUP.md) is the step-by-step procedure, in the order
+that makes each stage fail on its own before the next one depends on it.
+
 With **nothing wired**, the on-board LED on D13 blinks once a second — the board
 booted, the timer ISR fires, the scan loop turns. With two switches and six LEDs
 (wiring, including the pull-downs you do need, in

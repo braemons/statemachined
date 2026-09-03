@@ -45,6 +45,10 @@ bridge checks a graph against them before uploading a byte of it.
 
 ### Demo mode — the bring-up wiring
 
+> The step-by-step procedure, including what to check at each stage and what to
+> write down afterwards, is [`BRINGUP.md`](BRINGUP.md). This section is the
+> wiring it refers to.
+
 Before any host says `hello`, the board runs a built-in graph so that a bench
 board is visibly alive (`firmware/core/demo/demo_graph.cpp`; compile it out with
 `-DFSMD_DEMO=0`). It uses two inputs and six outputs, and it is the cheapest way
