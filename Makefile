@@ -137,8 +137,11 @@ install-renode:             ## the pinned Renode, portable, into /opt/renode
 	sudo tar xzf /tmp/renode.tar.gz -C /opt/renode --strip-components=1
 	sudo ln -sf /opt/renode/renode-test /usr/local/bin/renode-test
 	# renode-test drives Robot Framework from whichever python3 is on PATH, so
-	# these have to land there rather than in a uv-tool sandbox.
-	uv pip install --system --break-system-packages -r /opt/renode/tests/requirements.txt
+	# these have to land in that interpreter's site-packages rather than in a
+	# uv-tool sandbox -- and that directory is root-owned, hence the sudo. uv is
+	# not on root's PATH, so hand it over explicitly.
+	sudo env "PATH=$$PATH" uv pip install --system --break-system-packages \
+		-r /opt/renode/tests/requirements.txt
 
 # --------------------------------------------------------------------------
 # A flashable image
