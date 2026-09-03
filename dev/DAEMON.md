@@ -38,7 +38,7 @@ MCU, holds the graphs, and answers for both.
 
 ## 1. What the daemon is for
 
-Four jobs, and the first is the only one `PLAN.md` names.
+Five jobs, and the first is the only one `PLAN.md` names.
 
 | | |
 |---|---|
@@ -46,9 +46,12 @@ Four jobs, and the first is the only one `PLAN.md` names.
 | **Compile** | a graph authored in *names* into the wire's *indices*. `PROTOCOL.md` puts names host-side deliberately; this is where host-side is |
 | **Hold** | the graphs, the line map, the rig's config. A graph outlives a reboot and a reflash |
 | **Answer** | what board is attached, what firmware it runs, what each line is wired to, what the machine is doing right now — over an API and a web UI |
+| **Trace** | a timestamped log of every state the machine entered, keyed by `trial_id`, kept whether or not anybody asked for it. §3.6 and §4.6 |
 
-The second and fourth are what make it worth a daemon rather than a library, and
-the fourth is what makes the difference on a bench at 2 a.m.
+The second and fourth are what make it worth a daemon rather than a library, the
+fourth is what makes the difference on a bench at 2 a.m., and the fifth is the
+one job that is *only* possible in a daemon: it has to be running and listening
+at the moment a state is entered, which no library invoked per trial is.
 
 ### What it is emphatically not
 
@@ -445,6 +448,104 @@ merely reproducible from the seed"*, and the measured `duration_us` at position
 > down would cost a round-trip on the slow bus for a number nobody else uses.
 > Needs an amendment to say which, rather than each document assuming its own.
 
+### 3.6 Transitions as they happen
+
+The device already records every state it visits and reports the lot at the end
+of a trial, chunked (`PROTOCOL.md` §4.3). That is the right *record* and it stays
+authoritative. What it is not is a **trace**: something with a timestamp on it
+that arrives while the trial is still running, that survives a truncated path,
+and that another instrument's data can be aligned against months later.
+
+So the device also emits one message per completed state visit, as it happens.
+
+#### The message
+
+```json
+{"msg_type":"visit","message_id":57,"trial_id":193,"seq":2,
+ "v":[1,"transition",2,0,500120,183044],"crc":"...."}
+```
+
+`v` is **the same six-element array** as a `result_path` entry —
+`[state_index, exit_cause, transition_index, drawn_ms, entered_us, duration_us]`
+— decoded by the same function on the host. Two shapes for one fact is how the
+two drift apart.
+
+It is called `visit`, not `transition`, for two reasons. `transition` is already
+this wire's noun for an edge in a graph (`graph_transition`), and what is being
+reported is a *completed visit* that happens to carry the transition that ended
+it. The firmware calls it a `StateVisit` too, so the name is the one already in
+the code.
+
+| Field | |
+|---|---|
+| `trial_id` | The id from `configure`. **`0` when there was no host-configured trial** — demo mode, the bench, a line-started run before anything assigned an id. This is the whole of the "the MCU needs to optionally know the trial id" requirement, and it is already met: `configure` carries `trial_id` today and `TrialRecord` holds it |
+| `seq` | Per run, from `0`. A gap is what makes a dropped visit **detectable** rather than a hole nobody notices |
+
+#### Emitted at exit, and what that costs
+
+The natural hook is `StateMachine::record_visit()`, which is called from
+`leave()` with every field already computed. That means a visit is reported when
+the state is **left**, not when it is entered — a visit's duration and exit cause
+do not exist before then.
+
+For the trace's purpose this is not a latency problem, because what matters is
+the *timestamp*, not the arrival time, and `entered_us` is exact. For a live UI
+it costs one state of lag on the very first state of a trial only: after that,
+each exit tells the daemon both when the state it is reporting ended and — since
+the daemon holds the graph and can resolve `transition_index` to its target —
+which state the machine is in now. The one entry with no preceding exit is the
+run's first, and it arrives when that state is left.
+
+Cost per trial is one queued outbound message per visited state — call it six on
+a go/no-go trial. Outbound messages go through `ReplyQueue` and are drained
+without blocking a scan, and the measured 2.5 ms per *command* on USB CDC was
+inbound-dominated: draining TinyUSB and reading, not writing. `tx_stalls` in
+`state_report` already counts the case where the queue could not keep up.
+
+**No switch in v1.** `event` is off by default because a word-on-change stream
+can fire every scan; a visit stream fires a handful of times per trial, and there
+is no rig configuration in which one would rather not have the record. A switch
+gets added if, and only if, `tx_stalls` on a real board says the queue suffers —
+and it would then live with the wiring config of §3.4, persisted, so a board
+never comes back from a power cut quietly not tracing.
+
+#### The stream is a preview; the result is the record
+
+A dropped visit must not become a missing row. So the daemon **reconciles**: it
+writes the trace live, and at `result_end` compares what it logged against the
+authoritative path. Missing entries are filled from the result; a `seq` gap the
+result does not fill is logged as an **error**, not passed over.
+
+This buys one thing back that the result cannot give. `result_begin` carries
+`truncated` for a run that visited more states than `kMaxPath` holds — *"a graph
+may loop, and a long trial degrades to a truncated path rather than to a corrupt
+one"*. **The live stream does not truncate.** For exactly the runs where the
+record is lossy, the trace is complete, which turns a looping graph from a
+recording problem into a normal one.
+
+#### The clock, and the wrap
+
+Device microseconds wrap every ~71 minutes, so a raw `entered_us` is meaningless
+in isolation — §4.5's whole reason for existing. The daemon sees every visit in
+order and so can **unwrap** into a monotonic device timeline; `seq` is what makes
+that trustworthy, because the one case it cannot resolve alone is a dropped visit
+that straddles a wrap, and reconciliation closes that. Every trace line carries
+the raw value *and* the host-clock estimate *and* the estimate's uncertainty. The
+raw value is the evidence; the correlation is an estimate and is labelled as one.
+
+#### What this changes below the daemon
+
+Small, and it belongs in the same firmware branch as §3.3's work — both touch
+`host_link_session.cpp` and both add to `PROTOCOL.md`, and reviewing them
+together is cheaper than sequencing them:
+
+| | |
+|---|---|
+| `machine/state_machine.cpp` | `record_visit()` gains an emit callback. The machine must not learn about the link, so it is a sink passed in, and `native` tests pass a vector |
+| `protocol/host_link_session.cpp` | serialise `visit`, queue it, never block on it |
+| `trial/trial_runner.cpp` | supplies `trial_id` to the sink; `0` when there is no trial |
+| `dev/PROTOCOL.md` | §4 gains `visit`, and §4.3 gains the sentence that the result is authoritative and the stream is a preview |
+
 ---
 
 ## 4. The API
@@ -498,12 +599,13 @@ triald drives; statemachined reports.
 | `POST /api/trial/cancel` | `{trial_id, reason:"host"}` |
 | `GET /api/state` · `WS /api/stream` | snapshot, and coalesced frames — triald's convention, and for the same reason: a slow browser tab must not hold up a session |
 
-**`configure` never uploads.** By §3.2 the set is already on the device, so this
-is a name lookup and one `configure` on the wire — bounded, and the same cost for
-every trial in a session whatever its graph. A `graph` naming something outside
-the committed set is **refused**, not uploaded on demand: an upload mid-session
-is exactly what the set exists to prevent, and silently doing one would hide a
-misconfigured trial type behind a trial that armed late.
+**`configure` uploads only when it must**, which under §3.2 is when the named
+graph is not the committed one — between trials, on a device that is idle, at the
+measured cost §3.2 budgets. A `graph` naming something the store does not hold is
+**refused** rather than guessed at, and one outside the set `POST
+/api/session/graphs` declared is refused too: a session that declared its graphs
+and then asks for a fourth has a misconfigured trial type, and uploading it
+anyway would hide that behind a trial that armed late.
 
 **`configure` is one call, not two, and that is deliberate.** triald names the
 graph it wants; the daemon compares it against the committed `graph_version`,
@@ -560,6 +662,54 @@ trial window in the host clock alongside the raw device values. The raw values
 are never discarded — they are the evidence; the correlation is an estimate and
 is labelled as one, with its uncertainty.
 
+### 4.6 The trace
+
+`GET /api/trace` · `GET /api/trace/trial/{trial_id}` · `WS /api/trace/stream`
+
+`device/trace.py` decodes `visit`, unwraps the device clock, resolves indices to
+**names** against the graph the daemon holds, and appends one line per visit to
+`/var/lib/statemachined/trace/` — NDJSON, one file per day, rotated by the
+logrotate config §6.2 already installs.
+
+```jsonc
+{"kind":"visit","seq":2,"trial_id":193,"graph":"go-nogo","graph_version":7,
+ "state":"Foreperiod","exit":"transition","transition":0,"to":"Cue",
+ "drawn_ms":500,"entered_us":500120,"duration_us":183044,
+ "entered_host":"2026-09-03T14:22:07.481932Z","clock_err_us":180}
+```
+
+NDJSON rather than SQLite, for the same reason the wire is NDJSON: it is
+append-only, so a crash mid-write costs the last line and not the file; it is
+greppable on the rig at 2 a.m. with no tooling; and it copies. A database would
+buy indexed queries the daemon does not need — the API's queries are *by trial*
+and *recent*, and a session's worth of trace is a megabyte.
+
+**`kind` is there because the device is not the only thing worth timestamping.**
+The daemon logs its own events into the same file: `configure`, `start`, `cancel`
+and their host times, link loss and reconnection, a graph upload and what it
+cost, a `seq` gap that reconciliation could not fill. Aligning an external signal
+to trial 193 needs to know when trial 193 was armed, not only which states it
+visited, and splitting that across two files means joining them later.
+
+**This is not the `.tdr` and must not grow into one.** triald writes the trial
+record; this is a finer-grained trace, one line per state visit rather than one
+per trial, and it **joins to the `.tdr` on `trial_id`** — which is the entire
+reason `trial_id` is on the wire. Nothing in it is a verdict; §1's "not a second
+decision authority" applies here more than anywhere, because a log is exactly
+where an opinion gets smuggled in unnoticed.
+
+**triald may pull it, or not.** Pull, not push — triald's own convention, and the
+one place in this plan where it is uncontested (unlike §4.3). If triald wants the
+trace stowed beside the session's `.tdr`, it fetches `/api/trace/trial/{id}`
+after the outcome; if it does not, the trace still exists on the rig. The daemon
+never pushes it and never assumes anybody read it.
+
+`WS /api/trace/stream` is the one stream that is **not coalesced**, unlike
+`/api/state`'s: coalescing a state snapshot loses nothing, coalescing a trace
+loses records. A client that cannot keep up gets its socket closed with the last
+`seq` it received, and re-fetches from `?since_seq=`. Slow-consumer buffering is
+how a monitoring aid becomes the thing that fills the Pi's memory.
+
 ---
 
 ## 5. The web UI
@@ -612,6 +762,7 @@ generated at boot.
 | **Lines** | the map. Rename, invert, enable, safe level, debounce. Shows which need a re-upload to take effect |
 | **Graphs** | the store, and the editor: states, timeouts, terminal outcomes, actions, and a predicate editor where the three masks are checkboxes over *named* lines. An SVG node diagram rendered from the graph, read-only in v1 |
 | **Session** | the current trial, the state the machine is in, the last result's path |
+| **Trace** | the live tail of §4.6, one row per state visit, filterable by `trial_id`. The one view that is useful with nobody in the room, because it is still there in the morning |
 | **Firmware** | running against available; the mismatch warning |
 
 ### The console
@@ -709,7 +860,7 @@ M4a–M4e; its M5–M7 shift down and need renumbering in that document.
 | | |
 |---|---|
 | **M4a** | **The move, and nothing else.** `tools/bringup/` → `daemon/`, package renamed, `wire.py` made standalone with golden vectors against the emulator's copy. `make bringup` and `make test-hardware` keep working, unchanged in behaviour. Reviewable as a pure move |
-| **M4b′** | **Wiring config and persistence, in the firmware** (§3.3, §3.4). The one firmware milestone here, and small. It closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships. Renode covers the HAL addition; `native.cpp` gets a file-backed stand-in so the host tests reach it too |
+| **M4b′** | **Wiring config, persistence, and the `visit` stream, in the firmware** (§3.3, §3.4, §3.6). The one firmware milestone here, and small. The first part closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships; the second is a callback and a serialiser. They share a file and a protocol document, so they share a branch. Renode covers the HAL addition; `native.cpp` gets a file-backed stand-in so the host tests reach it too |
 | **M4b** | `model/` and `compile.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4c** | `device/supervisor.py` and `clock.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core over a pty — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks |
 | **M4d** | FastAPI: device, lines, graphs, trial, config, state/stream; the triald client; `statemachined serve`. `dev/API.md` written first, the way `PROTOCOL.md` was |
@@ -753,9 +904,20 @@ diff.
 7. **Who authors the console**, and when. §5 defers it; it should not stay
    deferred long, since it is most of what makes three daemons feel like one rig.
 8. **The RA4M1 data-flash numbers** (§3.4): 8 KB and ~100 000 erase cycles are
-   from memory, not from the datasheet. Cheap to confirm, and #9 depends on the
+   from memory, not from the datasheet. Cheap to confirm, and #11 depends on the
    second one being roughly right.
-9. **Who is allowed to call `persist`, and how often.** "Explicit, never on
+9. **Trace retention on a rig nobody visits.** A session is about a megabyte,
+   so size is not the problem; rotating away a trace that no analysis has copied
+   yet is. logrotate with a generous keep is the mechanism; the policy question
+   is whether the daemon should refuse to rotate a file whose trials triald has
+   not fetched, which would make it stateful about a consumer it otherwise knows
+   nothing about. Leaning: no — rotate on time and size, and let §4.6's pull be
+   triald's job to actually do.
+10. **Does triald stow the trace beside the `.tdr`?** §4.6 leaves it optional and
+   that is right for the daemon, but "optional" across two daemons usually means
+   "nobody did it". If the answer is yes it is a triald change, and it lands with
+   the amendments in #3 and #5.
+11. **Who is allowed to call `persist`, and how often.** "Explicit, never on
    `graph_end`" is the rule that protects the part, and a rule enforced only by
    the daemon's good manners is one a future caller breaks. Worth a write counter
    in `state_report`, so the budget is observable rather than trusted — the same
