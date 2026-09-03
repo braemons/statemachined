@@ -150,12 +150,66 @@ Three things follow, and they are the point of measuring rather than estimating:
    RAM and the real gap before the heap is ~8.3 KB, but the declared figure is
    not the true headroom and nobody should read it as one.
 
-**Scan rate: not yet measured.** It needs a board, and there is not one attached
-to CI. The firmware measures the floor cost of a scan at boot and reports it in
-`hello_ack` as `scan_hz`; every `state_report` then carries `scan.overruns` and
-`scan.worst_gap`, so a rig that is missing scan periods says so rather than
-quietly measuring a response window on a clock that skipped. Fill this in from a
-board.
+### Scan rate and link cost — measured 2026-09-03
+
+On the board, with `tools/bringup` driving it over USB CDC.
+
+| | |
+|---|---|
+| `scan_hz` from `hello_ack` | **124 680 Hz** — 12× the 10 kHz timer |
+| `scan.overruns` under link load | **3.0 per command** (`ping`), **9.1** (`state`) |
+| `scan.worst_gap` | **9** periods |
+| `scan.tx_stalls` | 0 |
+
+`scan_hz` is the floor cost of reading and conditioning the pins — about 8 µs,
+against a 100 µs period — so the pins are not what limits this board.
+
+**The link is, and by a lot.** Servicing one command costs roughly 3 ms of CPU,
+and almost all of it is the vendor USB stack rather than anything here:
+
+| per command, at 10 kHz | µs |
+|---|---|
+| draining the link (TinyUSB) | 1240 |
+| reading the link (TinyUSB) | 754 |
+| `tud_task()`, via `link_up()` | 533 |
+| `HostLinkSession` — ours | 372 |
+| the scan itself | 7 |
+
+That measurement is why the scan runs in the timer ISR rather than in `loop()`:
+queued behind those milliseconds it was missing **9.9 periods per command**, and
+climbing for as long as a bridge kept talking. The reasoning, and the handoff
+that fixes it, are at the top of `firmware/src/main.cpp`.
+
+What is left — 3.0 periods per `ping` — is exactly the window in which the
+foreground holds the engine to parse a command and build its reply, and nothing
+else. It is bounded by our own code rather than by the USB stack's behaviour,
+which is the property worth having.
+
+These numbers are also a test now, rather than only a record: `make test-hardware`
+budgets a ping at 8 periods and a `state_report` at 20, against the 3.0 and 9.1
+measured here. Reverting the handoff fails it on the first assertion, which is
+the point — a measurement written down once is a measurement that quietly stops
+being true.
+
+### Trial timing — measured 2026-09-03
+
+A two-state graph uploaded over the link, `wait --(500 ms)--> Hit`, raising line
+2 on entry:
+
+| | |
+|---|---|
+| Declared dwell | 500 000 µs |
+| Measured (`duration_us` in `result_path`) | **500 078 µs**, +78 µs |
+
+78 µs is less than one scan period, which is the resolution the design claims
+and the first evidence from a board that it holds. The same run confirms the
+entry action reached the pin — `io.out` read 4 mid-trial — and that the result
+chunks, which the scan ISR pushes while the foreground drains them, arrive whole
+and in order with their rolling checksum intact.
+
+**Still not measured:** input-to-output latency and the step dwell as seen by a
+scope on D2 and D10. The figure above is the device's own clock reporting on
+itself, which is a different claim from a probe on a pin.
 
 **What *is* verified without a board:** the pin map above, the port-register
 reads and writes, the timer ISR, and a whole session over a real UART, all under

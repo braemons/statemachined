@@ -62,9 +62,16 @@ Microseconds micros_now();
 /// there is nothing, which is the common case on a scan.
 size_t link_read(char* dst, size_t max);
 
-/// Bytes to the host. May block if the host is not draining the port, which is
-/// why it is never called from the scan ISR -- see firmware/src/main.cpp.
-void link_write(const char* src, size_t n);
+/// Bytes to the host, as many as the link will take *right now*. Returns how
+/// many it took, which may be 0.
+///
+/// Never blocks, and that is the contract rather than a courtesy: the scan runs
+/// in the foreground, so a write that waits for the host to poll its endpoint
+/// costs scan periods. Measured on the reference board before this existed --
+/// roughly 10 missed periods for a 65-byte reply and 16 for a 290-byte one, on
+/// every command. Callers queue what is left (see core/io/reply_queue.h) and
+/// offer it again on the next pass.
+size_t link_write_some(const char* src, size_t n);
 
 /// Whether the host is there at all. On native USB CDC this is DTR, which goes
 /// false when the bridge closes the port -- the signal a rig needs to fail-safe

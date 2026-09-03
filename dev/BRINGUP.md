@@ -120,26 +120,27 @@ probe D2 and D10 together for input-to-output latency, and any step LED for the
 ## 4. Talk to it, and read the number this is all for
 
 Every line carries a CRC-16/CCITT-FALSE, so typing JSON into a serial monitor
-gets no reply. Use the repository's own framing helper — the same one CI drives
-the emulated board with:
+gets no reply. Use the repository's own bench instrument, which frames commands
+with the same helper CI drives the emulated board with
+([`tools/bringup/`](../tools/bringup/README.md)):
 
 ```sh
-uv pip install --system --break-system-packages pyserial
+make bringup ARGS="hello"
 ```
 
-```python
-import sys, serial
-sys.path.insert(0, "emulation/tests")
-from statemachined_protocol import statemachined_line
+`uv` builds its environment on first use; nothing lands in the system Python.
+The board is `/dev/ttyACM0` unless you say otherwise —
+`make bringup TARGET=... ARGS=...`, and `TARGET` also takes a `host:port` or a
+`socket://` URL for a device that is on a network rather than a cable.
 
-s = serial.Serial("/dev/ttyACM0", 115200, timeout=2)
-
-def cmd(body):
-    """`body` is the message without its closing brace; statemachined_line adds the CRC."""
-    s.write((statemachined_line(body) + "\n").encode())
-    return s.readline().decode().strip()
-
-print(cmd('{"t":"hello","seq":1,"proto":1,"seed":"0123456789ABCDEF"'))
+```
+hello_ack
+  seed           443ADD5C803378B8
+  board          uno_r4_minima   fw 0.1.0   proto 1
+  lines          8 in, 8 out
+  scan_hz        11234  (above the 10000 Hz target)
+  graph          none
+  caps           {"max_line": 512, ...}
 ```
 
 > **`scan_hz` in the `hello_ack` is the number M3 is waiting on.**
@@ -155,32 +156,98 @@ Sending `hello` also **ends demo mode for good until the next reset**. Every lin
 goes to its safe level and D13 stops blinking. That handover is deliberate: a rig
 must never be able to run the demo while somebody believes it is running an
 experiment. Note that *opening* the port is not enough — a serial monitor does
-that — it is the greeting that hands over.
+that — it is the greeting that hands over. Only `hello` and `report` greet the
+board; `make bringup ARGS="monitor"` watches the link and sends nothing, which
+is how you look at a board that is still running the demo.
 
 ---
 
 ## 5. Prove the pins reach the line numbers
 
-```python
-print(cmd('{"t":"state","seq":2'))
+```sh
+make bringup ARGS="state"
 ```
+
+If the board has not been greeted since it was reset it answers `not_ready`,
+because nothing but `hello` is accepted before a session exists. Use
+`ARGS="--hello state"` — which ends demo mode, as §4 says.
 
 `"io":{"in":N,"out":M}` is the only way anything outside the device can check
 that a graph's line numbers reach the pins somebody wired, because there is no
-read-back path. Hold the start switch and send it again: `in` goes from `0` to
-`1`. Hold both switches: `3`.
+read-back path. The tool prints both as a row of bits with line 0 on the left
+and names the pins from `HARDWARE.md`:
+
+```
+  in             1.......   high: 0 (D2)
+  out            .......1   high: 7 (A4)
+```
+
+Hold the start switch and ask again: `in` goes from `0` to `1`. Hold both
+switches: `3`. `ARGS="watch"` polls it a few times a second so you can do that
+with both hands on the wires.
 
 The same reply carries `scan.overruns` and `scan.worst_gap` — scan periods that
-went by with no scan in them, counted rather than absorbed. Send several commands
-in quick succession and look again.
+went by with no scan in them, counted rather than absorbed. `ARGS="load"` reads
+them, sends 200 pings back to back, and reads them again; it exits non-zero if
+the count moved.
 
-> **If overruns climb under link traffic, that is a finding.**
+> **If overruns climb steeply under link traffic, that is a finding.**
 
-It is the direct test of this design's central bet: the timer ISR only counts and
-`loop()` does the scan, which buys correctness-by-construction at the price of
-jitter. If a board says the link stalls the scan too often, the known fix is a
-command handoff in `firmware/src/main.cpp` and nothing in `core/` moves. The
-reasoning is written out at the top of that file.
+They did, on the reference board, and the fix is in: the scan runs in the timer
+ISR and the foreground holds the engine only while it is parsing a command. What
+remains is that hold — about **3 periods per command** on an Uno R4 Minima,
+against 9.9 before — and it is bounded by our own parse rather than by whatever
+the USB stack is doing. The measurement, and the reasoning, are at the top of
+`firmware/src/main.cpp`; the numbers are in [`HARDWARE.md`](HARDWARE.md).
+
+A board reporting *far* more than that, or a `worst_gap` in the hundreds, is
+still a finding. So is any non-zero `scan.tx_stalls`, which means a reply had to
+wait for the wire because the outbound queue was full.
+
+---
+
+## 5a. The same checks, automated
+
+Everything from §4 and §5 that does not need a person's eyes is a test suite:
+
+```sh
+make test-hardware                      # or TARGET=host:5000, as above
+```
+
+Connect the board and run it. It greets the device once — **which ends demo
+mode**, as §4 says — and then asserts what the sections above ask you to read:
+`scan_hz` against the 10 kHz target, what a command costs the scan, a drawn
+duration against the board's own clock, the framing rules against lines a
+well-behaved host would never send, and a whole trial's result arriving intact
+while the scan runs in the timer ISR.
+
+It is **not** part of `make ci`. A target that fails on every machine without a
+board attached is a target people learn to ignore.
+
+What it cannot do without three jumper wires is drive the board's *inputs*.
+Add them and seven more tests run — the ones that fire a transition from a
+predicate over several lines, which is otherwise the one part of the engine no
+test in this repository exercises on real silicon:
+
+| From | To | Drives |
+|---|---|---|
+| **D10** (output 0) | **D6** (input 4) | |
+| **D11** (output 1) | **D7** (input 5) | `all` over two lines, `any`, `none` |
+| **D12** (output 2) | **D8** (input 6) | the rising-edge rule, and `level` |
+
+The board then drives its own inputs through a graph's entry actions, one scan
+later, which is how "both levers released and pressed again within the same
+millisecond" becomes something a test can do. Without the wires those seven skip
+and say so; nothing else changes.
+
+**The inputs are D6–D8 and not D2–D5 on purpose.** §2 wires the switches as a
+contact to **5 V**, so a jumper driving one of those pins would be fighting the
+switch every time somebody pressed it — an output pin pulling low against 5 V
+through a closed contact. Inputs 4–6 are untouched by §2, so the demo wiring and
+the loopback harness can sit on the same board. Sharing the *output* pins is
+fine: a pin can drive an LED and a jumper at once.
+
+A run takes about 40 seconds and leaves the device idle.
 
 ---
 
@@ -211,6 +278,13 @@ Three numbers settle M3, and everything after it assumes they held:
 | `scan.overruns` under link load | zero, or climbing |
 | Scope: D2 → D10 latency, and the step dwell | against 500 ms |
 
+The first two come out of one command, already as a markdown table:
+
+```sh
+make bringup ARGS="report" > /tmp/m3.md
+```
+
 Record them in [`HARDWARE.md`](HARDWARE.md) under the board they were measured
-on, the way the RAM figures are recorded there. A measurement that stays in
-somebody's terminal is one the next person has to take again.
+on, the way the RAM figures are recorded there — with the scope numbers added by
+hand, since no amount of serial traffic can produce those. A measurement that
+stays in somebody's terminal is one the next person has to take again.

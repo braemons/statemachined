@@ -41,11 +41,13 @@ target_include_directories(statemachined_engine PUBLIC firmware/core)
 target_compile_options(statemachined_engine PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 add_library(statemachined_core
+  firmware/core/io/reply_queue.cpp
   firmware/core/protocol/crc16.cpp
   firmware/core/protocol/framing.cpp
   firmware/core/protocol/graph_builder.cpp
   firmware/core/protocol/host_link_session.cpp
   firmware/core/protocol/json.cpp
+  firmware/core/protocol/msg_type.cpp
 )
 target_link_libraries(statemachined_core PUBLIC statemachined_engine)
 target_compile_options(statemachined_core PRIVATE -Wall -Wextra -Wpedantic -Werror)

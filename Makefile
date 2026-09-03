@@ -68,6 +68,34 @@ emulate:                    ## run the firmware under Renode, in Robot tests
 upload:                     ## flash the reference board
 	pio run -e $(BOARD) -t upload
 
+# The bench instrument dev/BRINGUP.md §4 and §5 ask for. Its one dependency
+# (pyserial) lives in tools/bringup/pyproject.toml rather than in whichever
+# python3 is on PATH, so `uv run --project` builds an environment for it on
+# first use and neither renode-test's interpreter nor the uv-tool sandboxes
+# above notice. TARGET is a device path, a host:port, or any pyserial URL --
+# the same tool reaches a board on a network as reaches one on a cable.
+TARGET ?= /dev/ttyACM0
+
+.PHONY: bringup
+bringup:                    ## talk to a board: make bringup ARGS="state"
+	uv run --project tools/bringup statemachined-bringup -t $(TARGET) $(ARGS)
+
+# The only tests in this repository that need hardware. Everything else -- the
+# core on the host, the HAL under Renode -- runs in CI with no board attached,
+# and neither can answer what this does: the achieved scan rate, what a command
+# costs the scan, a drawn duration against a real clock, and a predicate driven
+# from real pins.
+#
+# Deliberately NOT part of `make ci`. A target that fails on every machine
+# without a board attached is a target people learn to ignore.
+#
+# Greeting the board ends demo mode until the next reset, which this cannot
+# avoid: the greeting is what hands over.
+.PHONY: test-hardware
+test-hardware:              ## the suite that needs a board: make test-hardware TARGET=...
+	uv run --project tools/bringup --group test \
+	  pytest tools/bringup/tests/hardware --target=$(TARGET) $(ARGS)
+
 # Pinned to match .github/workflows/ci.yml. clang-format's output changes
 # between major versions, and `BasedOnStyle: Google` in .clang-format resolves
 # against whichever version is running, so an unpinned one reformats files CI

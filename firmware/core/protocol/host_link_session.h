@@ -24,6 +24,7 @@
 #include "protocol/framing.h"
 #include "protocol/graph_builder.h"
 #include "protocol/json.h"
+#include "protocol/msg_type.h"
 #include "trial/trial_runner.h"
 
 namespace statemachined {
@@ -60,32 +61,38 @@ struct ScanHealth {
   uint32_t hz = 0;         ///< measured at boot, not declared
   uint32_t overruns = 0;   ///< scan periods that elapsed with no scan in them
   uint32_t worst_gap = 0;  ///< the most periods ever missed in a row
+  /// Times the reply queue was full and the foreground had to wait for the link
+  /// before it could hand over a line. Replies are queued and drained without
+  /// blocking, so this is the one remaining way the link can cost the scan its
+  /// periods -- and a burst big enough to do it means the queue is smaller than
+  /// this board's traffic, which is a number rather than a guess.
+  uint32_t tx_stalls = 0;
 };
 
 /// Makes a retried command idempotent.
 ///
 /// The bridge sends a command, times out waiting, and resends. Acting on it
 /// twice is the failure that matters -- a re-executed `start` runs a second
-/// trial -- so a command whose `seq` matches the one last answered gets that
-/// same answer back, byte for byte, and changes nothing.
+/// trial -- so a command whose `message_id` matches the one last answered gets
+/// that same answer back, byte for byte, and changes nothing.
 ///
 /// One command deep, not a window: this is strict request/response with one
 /// command in flight, and remembering more would mean storing that many
 /// complete replies at kMaxLine bytes each.
 class DuplicateCommandGuard {
  public:
-  bool is_repeat(uint16_t seq) const { return have_ && seq == last_seq_; }
+  bool is_repeat(uint16_t message_id) const { return have_ && message_id == last_message_id_; }
 
   const char* reply() const { return reply_; }
   size_t reply_len() const { return reply_len_; }
 
-  void remember(uint16_t seq, const char* line, size_t n);
+  void remember(uint16_t message_id, const char* line, size_t n);
   void forget() { have_ = false; }
 
  private:
   char reply_[kMaxLine];
   size_t reply_len_ = 0;
-  uint16_t last_seq_ = 0;
+  uint16_t last_message_id_ = 0;
   bool have_ = false;
 };
 
@@ -155,25 +162,43 @@ class HostLinkSession {
 
  private:
   void handle_line(const char* line, size_t n, Microseconds now_us);
-  void dispatch(const JsonObject& m, JsonSpan covered, uint16_t seq, Microseconds now_us);
+  void dispatch(const JsonObject& m, JsonSpan covered, uint16_t message_id,
+                Microseconds now_us);
 
   // One handler per host command. Each is responsible for sending exactly one
   // reply, which is what makes a retry decidable for the bridge.
-  void on_hello(const JsonObject& m, uint16_t seq);
-  void on_graph_message(const JsonObject& m, JsonSpan covered, uint16_t seq, JsonSpan type);
-  void on_configure(const JsonObject& m, uint16_t seq);
-  void on_start(const JsonObject& m, uint16_t seq, Microseconds now_us);
-  void on_cancel(const JsonObject& m, uint16_t seq, Microseconds now_us);
-  void on_ping(uint16_t seq, Microseconds now_us);
-  void on_state_request(uint16_t seq, Microseconds now_us);
+  void on_hello(const JsonObject& m, uint16_t message_id);
+  void on_graph_message(const JsonObject& m, JsonSpan covered, uint16_t message_id,
+                        MsgType type);
+  void on_configure(const JsonObject& m, uint16_t message_id);
+  void on_start(const JsonObject& m, uint16_t message_id, Microseconds now_us);
+  void on_cancel(const JsonObject& m, uint16_t message_id, Microseconds now_us);
+  void on_ping(uint16_t message_id, Microseconds now_us);
+  void on_state_request(uint16_t message_id, Microseconds now_us);
 
-  void send_error(uint16_t seq, const char* code, const char* message, const char* context);
-  void send_ack(uint16_t seq);
+  /// A refusal of a command whose `message_id` was read: carries
+  /// `in_reply_to`, and is remembered so that a resend of that command is
+  /// answered rather than re-executed.
+  void send_error(uint16_t message_id, const char* code, const char* message,
+                  const char* context);
+
+  /// A refusal of a line that never yielded a `message_id` -- too long, bad
+  /// crc, unparsable, or simply missing the member. It carries no
+  /// `in_reply_to` because there is genuinely nothing to name, and it is not
+  /// remembered, because a line that did not identify itself cannot be
+  /// recognised on a retry.
+  ///
+  /// Kept separate from send_error rather than signalled by passing 0: 0 is an
+  /// ordinary message_id -- the counter wraps through it -- and a sentinel
+  /// would silently give the session's first command the treatment meant for
+  /// junk.
+  void send_orphan_error(const char* code, const char* message, const char* context);
+  void send_ack(uint16_t message_id);
   void emit_result();
 
   /// Finish, frame and send whatever is in the transmit buffer, remembering it
-  /// as the answer to `seq` so a retry can be answered from the cache.
-  void send(JsonWriter& w, uint16_t seq);
+  /// as the answer to `message_id` so a retry can be answered from the cache.
+  void send(JsonWriter& w, uint16_t message_id);
   void send_unsolicited(JsonWriter& w);
 
   ReplySink& out_;
@@ -195,7 +220,7 @@ class HostLinkSession {
   bool start_from_serial_ = true;
 
   DuplicateCommandGuard guard_;
-  uint16_t tx_seq_ = 0;
+  uint16_t tx_message_id_ = 0;
   Microseconds booted_us_ = 0;
   bool have_boot_ = false;
   uint32_t bad_lines_ = 0;

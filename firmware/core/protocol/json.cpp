@@ -3,6 +3,7 @@
 
 #include "protocol/crc16.h"
 #include "protocol/framing.h"
+#include "protocol/msg_type.h"
 
 namespace statemachined {
 namespace {
@@ -563,14 +564,14 @@ void JsonWriter::key(const char* k) {
   put_raw("\":");
 }
 
-void JsonWriter::begin(const char* type, uint16_t seq) {
+void JsonWriter::begin(const char* msg_type, uint16_t message_id) {
   put('{');
   fresh_ = true;
-  key_str("t", type);
-  key_u32("seq", seq);
+  key_str(kMsgTypeKey, msg_type);
+  key_u32(kMessageIdKey, message_id);
 }
 
-void JsonWriter::req(uint16_t seq) { key_u32("req", seq); }
+void JsonWriter::in_reply_to(uint16_t message_id) { key_u32(kInReplyToKey, message_id); }
 
 void JsonWriter::key_u32(const char* k, uint32_t v) {
   key(k);

@@ -22,7 +22,7 @@ def crc16_ccitt(data, seed=0xFFFF):
 def statemachined_line(body):
     """Close an object and append its CRC.
 
-    `body` is the message without its closing brace, e.g. '{"t":"ping","seq":1'.
+    `body` is the message without its closing brace, e.g. '{"msg_type":"ping","message_id":1'.
     The CRC covers everything before the `,"crc":` that carries it, which is what
     lets the device find and check it by arithmetic from the end of the line
     before parsing a byte.

@@ -7,6 +7,7 @@ set(STATEMACHINED_TESTS
   graph/state_graph
   random/rng
   io/input_conditioner
+  io/reply_queue
   machine/state_machine
   trial/trial_runner
   demo/demo_graph
