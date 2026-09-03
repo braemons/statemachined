@@ -339,24 +339,92 @@ worse failure than a longer ITI, and it is harder to see.
 
 ### 3.3 What this changes below the daemon
 
-**Nothing, on the current plan.** The per-trial upload uses the protocol and the
+**Nothing for graph switching.** The per-trial upload uses the protocol and the
 firmware exactly as they stand, which is the strongest argument for doing it that
-way first. `dev/PROTOCOL.md` is unchanged and M2/M3 stay closed.
+way first. M2 and M3 stay closed on that count.
 
-The one exception worth taking regardless of the measurement is moving
-`InputConfig` and `output_safe_levels` out of `StateGraph` to device scope: they
-describe the wiring rather than the paradigm, and re-sending them with every
-graph is what makes "change the debounce" read as "re-upload the graph" in §4.1.
-Small, and it stands alone.
+**One change is worth taking regardless of any measurement**, and §3.4 turns it
+from tidiness into a fail-safe fix: move `InputConfig` and `output_safe_levels`
+out of `StateGraph` to device scope. They describe the wiring rather than the
+paradigm; re-sending them with every graph is what makes "change the debounce"
+read as "re-upload the graph" in §4.1, and keeping them only inside a graph is
+why a board with no graph cannot fail safe correctly.
 
-Should the graph set be needed, it is `config.h`, `graph/state_graph.h`,
+That, plus persistence, is one small firmware milestone — **M4b′** in §7:
+
+| | |
+|---|---|
+| `graph/state_graph.h` | `InputConfig` and `output_safe_levels` move out to device scope |
+| `core/hal.h` | an eighth function: read and write the data flash, on a boundary that already exists |
+| `hal/renesas_ra4m1.cpp` | the RA4M1 data-flash implementation. `native.cpp` gets a file-backed stand-in so the host tests still cover the path |
+| `src/main.cpp` | read the wiring config before the first `fail_safe()`, and the graph after it |
+| `protocol/host_link_session.cpp` | a `wiring` command, a `persist` command, both refused with `busy` during a trial |
+| `dev/PROTOCOL.md` | §3 gains those two; §4.1 `hello_ack` reports what was restored, so the daemon never guesses whether the board came up configured |
+
+Should the graph set of §3.2 also be needed, it is `config.h`,
+`graph/state_graph.h`,
 `protocol/graph_builder.cpp`, `protocol/host_link_session.cpp`, `PROTOCOL.md`
 §3.2/§3.3/§4.1/§4.2, and the Renode session — a milestone of its own, and not a
 Python one. `proto` would stay **1** on the precedent `PROTOCOL.md` set at M3 for
 the `seq` → `message_id` rename: no bridge has shipped, so there is no deployed
 peer to keep compatible.
 
-### 3.4 Randomised durations: already the design, and a contradiction
+### 3.4 Data flash: what a board should know before anybody greets it
+
+**A rig image boots into nothing, and drives every output low doing it.** Demo
+mode is compile-time — `STATEMACHINED_DEMO`, 1 by default, and `make
+firmware-rig` builds it out, which is why CI publishes a bench image and a rig
+image. The rig image has no graph at reset, so `main.cpp`:
+
+```c
+// Every line to its safe level before the first scan. With no graph yet that
+// is all low, and it is applied again the moment a graph is committed.
+apply(g_session->fail_safe());
+```
+
+`output_safe_levels` lives inside `StateGraph`. `fail_safe()`'s own comment says
+*"'off' is not always 'low', so this is data rather than a zeroed word"* — and at
+reset there is no data, so the device cannot honour the rule at the one moment it
+matters most. **An active-low valve driver is opened by every power cycle** until
+the daemon connects. That is a fail-safe hole, not an inconvenience, and it is
+the concrete reason to make the move §3.3 already argues for on tidiness grounds.
+
+The RA4M1 has **8 KB of data flash**, separate from the 256 KB of code flash and
+rated far higher — order 100 000 erase cycles against code flash's ~1 000
+(confirm against the datasheet before it is load-bearing). Nothing in the tree
+touches it today: there is no EEPROM, NVM or persistence of any kind. Two things
+go in it.
+
+**The wiring config, written when a rig is wired.** Invert, enable, debounce and
+the safe levels — ~80 B, changed when somebody re-wires the box and essentially
+never otherwise. This is what closes the hole above: the board reads it before
+the first scan and drives the pins the rig actually needs, with no host in the
+picture. Endurance is a non-question at this write rate.
+
+**The committed graph, on explicit request.** ~2.6 KB, so it fits with room to
+spare, and it means a board survives a power blip still running its paradigm
+rather than waiting on a reconnect.
+
+> **It must never be automatic on `graph_end`.** Under §3.2 the daemon uploads a
+> graph *per trial*. Persisting each one would spend the part's ~100 000 erase
+> cycles in about a hundred thousand-trial sessions — silently, and presenting as
+> a board that one day stops accepting graphs. So it is a distinct command the
+> daemon issues deliberately (at session setup, or from the UI), and `graph_end`
+> never writes flash on its own.
+
+**No flash write while a trial is in flight.** `PLAN.md` already names this
+hazard for the ESP32 — *"be careful of flash operations stalling interrupts"* —
+and it is the same class on the RA4M1: a data-flash write blocks the flash
+controller and can cost scans. Refused with `busy`, like the graph upload at
+`host_link_session.cpp:251`, and for the same reason.
+
+What this adds below the daemon: a `persist` message in `PROTOCOL.md` §3, a
+`hal::` entry point for the data flash (the HAL is *"seven functions"* and this
+makes it eight, on a boundary that already exists), a boot-time read in
+`main.cpp` before `fail_safe()`, and `hello_ack` reporting what was restored so
+the daemon never has to guess whether the board came up configured.
+
+### 3.5 Randomised durations: already the design, and a contradiction
 
 Timings are drawn **on the device**, and every realised value comes back per
 visited state. This needs no change — `result_path` entries carry `drawn_ms` at
@@ -393,14 +461,22 @@ which is what keeps the UI an honest test of it.
 |---|---|
 | `GET /api/device` | connected, board, `fw`, `proto`, measured `scan_hz`, `caps`, `has_graph`, `graph_version`, link counters, uptime |
 | `GET /api/device/lines` | per line: index, direction, pin label, **your name for it**, invert, enable, safe level, debounce, and its live level |
-| `PATCH /api/device/lines` | rename a line; change invert/enable/safe/debounce |
+| `PATCH /api/device/lines` | rename a line; change invert/enable/safe/debounce. Pushes the wiring config and persists it — §3.4 |
 | `GET /api/device/firmware` | the running version against what the installed package ships. See §6.3 |
 
-**A caveat that shapes the UI.** `invert`, `enable`, `safe` and `debounce_ms` are
-fields of `graph_begin` — the protocol has no standalone command for them. So
-changing one is a **re-upload of the current graph**, and the API says so rather
-than pretending it is a live setting. Renaming a line is free: names are the
-daemon's alone and never reach the wire.
+**Renaming a line is free** — names are the daemon's alone and never reach the
+wire. The rest is the *wiring*, which after §3.3 is a standalone command rather
+than four fields of `graph_begin`, so changing a debounce no longer reads as
+"re-upload the graph". It is written to data flash in the same call, because the
+whole point is that the board still has it after a power cycle with nobody
+connected.
+
+**What the daemon holds is a copy, not the truth.** `hello_ack` reports what the
+board restored from flash, and the daemon reconciles: agreement is the normal
+case, and a disagreement is surfaced rather than silently overwritten. A board
+that has been moved between rigs is exactly the case where the config on the
+bench and the config in the box differ, and quietly picking one is how a valve
+ends up inverted.
 
 ### 4.2 Graphs
 
@@ -633,6 +709,7 @@ M4a–M4e; its M5–M7 shift down and need renumbering in that document.
 | | |
 |---|---|
 | **M4a** | **The move, and nothing else.** `tools/bringup/` → `daemon/`, package renamed, `wire.py` made standalone with golden vectors against the emulator's copy. `make bringup` and `make test-hardware` keep working, unchanged in behaviour. Reviewable as a pure move |
+| **M4b′** | **Wiring config and persistence, in the firmware** (§3.3, §3.4). The one firmware milestone here, and small. It closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships. Renode covers the HAL addition; `native.cpp` gets a file-backed stand-in so the host tests reach it too |
 | **M4b** | `model/` and `compile.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4c** | `device/supervisor.py` and `clock.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core over a pty — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks |
 | **M4d** | FastAPI: device, lines, graphs, trial, config, state/stream; the triald client; `statemachined serve`. `dev/API.md` written first, the way `PROTOCOL.md` was |
@@ -675,3 +752,11 @@ diff.
    written so they are an addition rather than a rewrite.
 7. **Who authors the console**, and when. §5 defers it; it should not stay
    deferred long, since it is most of what makes three daemons feel like one rig.
+8. **The RA4M1 data-flash numbers** (§3.4): 8 KB and ~100 000 erase cycles are
+   from memory, not from the datasheet. Cheap to confirm, and #9 depends on the
+   second one being roughly right.
+9. **Who is allowed to call `persist`, and how often.** "Explicit, never on
+   `graph_end`" is the rule that protects the part, and a rule enforced only by
+   the daemon's good manners is one a future caller breaks. Worth a write counter
+   in `state_report`, so the budget is observable rather than trusted — the same
+   argument `overruns` won.
