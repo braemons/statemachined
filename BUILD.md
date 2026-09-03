@@ -307,6 +307,20 @@ To clear a half-downloaded platform: `rm -rf ~/.platformio/platforms/renesas-ra`
 membership have not taken effect. Group changes need a full logout, not just a
 new shell.
 
+**`dfu-util: Cannot open DFU device 2341:0369 ... LIBUSB_ERROR_ACCESS`.** The
+board is in DFU bootloader mode (blinking yellow LED) but your user cannot open
+the raw USB device. The PlatformIO udev rules above cover the serial port, not
+the R4's DFU VID. Add a rule for it:
+
+```bash
+printf 'SUBSYSTEM=="usb", ATTRS{idVendor}=="2341", MODE="0666"\n' \
+  | sudo tee /etc/udev/rules.d/99-arduino-uno-r4.rules
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+Then double-tap RESET to re-enter DFU and run `make upload` again — without
+`sudo`, since `pio` is installed for your user and is not on root's `PATH`.
+
 **CMake cannot find a compiler after switching containers.** A `build/` tree
 caches absolute compiler paths. Delete it and reconfigure — `make clean` removes
 all of them.
