@@ -82,7 +82,7 @@ void HostLinkSession::receive_byte(char c, Microseconds now_us) {
     // never get is worse than one told its line was unusable.
     ++bad_lines_;
     const char* code = reader_.status() == FrameError::TooLong ? "too_long" : "bad_json";
-    send_error(0, code, frame_error_str(reader_.status()), "line");
+    send_orphan_error(code, frame_error_str(reader_.status()), "line");
     return;
   }
   handle_line(reader_.line(), reader_.len(), now_us);
@@ -96,20 +96,20 @@ void HostLinkSession::handle_line(const char* line, size_t n, Microseconds now_u
     // part is the failure the whole line layer exists to prevent.
     ++bad_lines_;
     const char* code = fe == FrameError::BadCrc ? "bad_crc" : "bad_json";
-    send_error(0, code, frame_error_str(fe), "line");
+    send_orphan_error(code, frame_error_str(fe), "line");
     return;
   }
 
   JsonObject m(line, n);
   if (!m.valid()) {
     ++bad_lines_;
-    send_error(0, "bad_json", json_error_str(m.error()), "line");
+    send_orphan_error("bad_json", json_error_str(m.error()), "line");
     return;
   }
 
   uint16_t seq = 0;
   if (!m.u16("seq", &seq)) {
-    send_error(0, "bad_json", "no seq", "seq");
+    send_orphan_error("bad_json", "no seq", "seq");
     return;
   }
 
@@ -601,21 +601,43 @@ void HostLinkSession::emit_result() {
 
 // --------------------------------------------------------------- sending ---
 
-void HostLinkSession::send_error(uint16_t seq, const char* code, const char* message,
-                                 const char* context) {
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin("error", tx_seq_);
-  if (seq != 0) w.req(seq);
+namespace {
+
+/// The body every refusal shares, whether or not it can name a `seq`.
+void write_error_body(JsonWriter& w, const char* code, const char* message,
+                      const char* context) {
   w.key_str("code", code);
   w.key_str("message", message);
   // Every refusal names what to change; an empty context is a defect here
   // rather than a terse style.
   w.key_str("context", (context != nullptr && context[0] != '\0') ? context : code);
-  if (seq != 0) {
-    send(w, seq);
-  } else {
-    send_unsolicited(w);
-  }
+}
+
+}  // namespace
+
+void HostLinkSession::send_error(uint16_t seq, const char* code, const char* message,
+                                 const char* context) {
+  JsonWriter w(tx_, sizeof(tx_));
+  w.begin("error", tx_seq_);
+  w.req(seq);
+  write_error_body(w, code, message, context);
+  send(w, seq);
+}
+
+// Split from send_error rather than folded into it behind a sentinel value.
+// Zero is a perfectly ordinary seq -- the counter is a u16 that wraps through
+// it, and the bridge's first command of a session is usually numbered 0 -- so
+// a `seq != 0` test here answered a real command with a reply carrying no
+// `req` and remembered nothing for the retry guard, which is precisely the
+// command a bridge would resend and precisely the resend that must not
+// re-execute. Whether a seq was read is a fact about the line, and the only
+// thing that can know it is the caller.
+void HostLinkSession::send_orphan_error(const char* code, const char* message,
+                                        const char* context) {
+  JsonWriter w(tx_, sizeof(tx_));
+  w.begin("error", tx_seq_);
+  write_error_body(w, code, message, context);
+  send_unsolicited(w);
 }
 
 void HostLinkSession::send_ack(uint16_t seq) {

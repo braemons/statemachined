@@ -167,7 +167,20 @@ class HostLinkSession {
   void on_ping(uint16_t seq, Microseconds now_us);
   void on_state_request(uint16_t seq, Microseconds now_us);
 
+  /// A refusal of a command whose `seq` was read: carries `req`, and is
+  /// remembered so that a resend of that command is answered rather than
+  /// re-executed.
   void send_error(uint16_t seq, const char* code, const char* message, const char* context);
+
+  /// A refusal of a line that never yielded a `seq` -- too long, bad crc,
+  /// unparsable, or simply missing the member. It carries no `req` because
+  /// there is genuinely nothing to name, and it is not remembered, because a
+  /// line that did not identify itself cannot be recognised on a retry.
+  ///
+  /// Kept separate from send_error rather than signalled by passing seq 0: 0 is
+  /// an ordinary sequence number, and a sentinel would silently give the
+  /// session's first command the treatment meant for junk.
+  void send_orphan_error(const char* code, const char* message, const char* context);
   void send_ack(uint16_t seq);
   void emit_result();
 

@@ -598,6 +598,49 @@ TEST_CASE("every reply to a command carries the seq it answers") {
   CHECK(field(e[0], "req") == "2");
 }
 
+TEST_CASE("seq 0 is an ordinary sequence number, refusals included") {
+  // It is not a sentinel and cannot be one: seq is a u16 that wraps through
+  // zero, and a bridge's first command of a session is usually numbered 0. A
+  // refusal that dropped `req` for it would leave the bridge unable to tell
+  // which command was refused, and -- worse -- the reply would not be
+  // remembered, so the blind resend the protocol promises is safe would
+  // re-execute instead of being answered from the cache.
+  Host h;
+
+  SUBCASE("a refusal before the session exists names the seq it refuses") {
+    const auto r = h.send(R"({"t":"ping","seq":0)");
+    REQUIRE(r.size() == 1);
+    CHECK(type_of(r[0]) == "error");
+    CHECK(field(r[0], "code") == "not_ready");
+    CHECK(field(r[0], "req") == "0");
+  }
+
+  SUBCASE("and a resend of it is answered from the cache, not re-executed") {
+    greet(h);                                        // hello is seq 0 ...
+    h.send(R"({"t":"ping","seq":)" + h.next_seq());  // ... so move the guard off it
+    const std::string refused =
+        h.framed(R"({"t":"cancel","seq":0,"trial_id":9,"reason":"host")");
+    const auto first = h.send_raw(refused);
+    REQUIRE(first.size() == 1);
+    CHECK(type_of(first[0]) == "error");
+    CHECK(field(first[0], "req") == "0");
+
+    const auto again = h.send_raw(refused);
+    REQUIRE(again.size() == 1);
+    CHECK(again[0] == first[0]);  // byte for byte, from the cache
+  }
+
+  SUBCASE("a line with no seq at all still carries no req, since there is none") {
+    // The other half of the same rule: `req` is omitted only when the line
+    // genuinely never named itself.
+    greet(h);
+    const auto r = h.send(R"({"t":"ping")");
+    REQUIRE(r.size() == 1);
+    CHECK(field(r[0], "code") == "bad_json");
+    CHECK(r[0].find(R"("req":)") == std::string::npos);
+  }
+}
+
 TEST_CASE("a lost link cancels the trial in flight and lowers what it raised") {
   // There is nobody to send a result to, which is exactly why the outputs
   // cannot be left for the host to sort out. The trial ends through the
