@@ -67,6 +67,7 @@ make firmware    # build for the Uno R4 Minima
 make upload      # flash it
 make emulate     # run the firmware under Renode
 make format      # clang-format in place
+make image       # both flashable images, with a manifest
 make ci          # everything CI runs, except emulation
 make help        # the full list
 ```
@@ -102,6 +103,13 @@ booted, the timer ISR fires, the scan loop turns. With two switches and six LEDs
 [`dev/HARDWARE.md`](dev/HARDWARE.md)) the ready lamp lights, a press on the start
 switch walks one LED across five outputs at 500 ms a step, and the trial ends as
 a `Hit` — or as `Cancelled` if you press abort on the way past.
+
+Every CI run publishes a flashable image as an artifact
+(`fsmd-uno_r4_minima-<sha>`), so a board can be brought up without a toolchain:
+a **bench** image with demo mode on, a **rig** image with it compiled out, and a
+`MANIFEST.txt` recording the commit, sizes and checksums — a board in a rack
+cannot be asked which commit it is running. `make image` builds the same thing
+locally.
 
 It is the real engine on a real graph: the same `TrialRunner`, the same
 `validate()`, the same conditioned input word, built by

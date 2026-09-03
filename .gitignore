@@ -27,3 +27,7 @@ report.html
 *.swo
 *~
 
+
+# `image/` is where the image target stages what CI uploads; running it by
+# hand must not dirty the tree.
+/image/

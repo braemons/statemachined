@@ -77,6 +77,37 @@ jobs:
       # Compiled here too, or the #else half of that switch rots unnoticed.
       - run: make firmware-rig BOARD=${{ matrix.env }}
 
+  image:
+    name: a flashable image
+    # Only once the thing is known to work: an artifact somebody flashes onto a
+    # rig should not exist for a commit whose tests are red.
+    needs: [core-tests, emulation, firmware-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-uno_r4_minima-${{ hashFiles('platformio.ini') }}
+      - run: make install-pio
+      # Builds the bench and rig images and writes image/MANIFEST.txt, which
+      # records the commit, the sizes and the checksums next to the binaries --
+      # a board in a rack cannot be asked which commit it is running.
+      - run: make image
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fsmd-uno_r4_minima-${{ github.sha }}
+          path: image/
+          # Long enough to bisect a rig problem back through a few weeks of
+          # builds, short enough not to hoard binaries forever.
+          retention-days: 90
+
   emulation:
     name: the HAL runs on an emulated board
     runs-on: ubuntu-latest

@@ -131,6 +131,49 @@ install-renode:             ## the pinned Renode, portable, into /opt/renode
 	pip install -r /opt/renode/tests/requirements.txt
 
 # --------------------------------------------------------------------------
+# A flashable image
+# --------------------------------------------------------------------------
+#
+# Two images, because they are for two different people: the bench image runs
+# the demo graph with no host attached, the rig image drops it and gets the
+# SRAM back. Flashing the wrong one is a thing somebody will do, so they are
+# named rather than numbered, and what they are travels with them -- a board in
+# a rack cannot be asked which commit it is running.
+IMAGE_DIR ?= image
+IMAGE_SHA ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+
+.PHONY: image
+image:                      ## build both flashable images, with a manifest
+	rm -rf $(IMAGE_DIR)
+	mkdir -p $(IMAGE_DIR)
+	$(MAKE) firmware
+	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/fsmd-$(BOARD)-bench.bin
+	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/fsmd-$(BOARD)-bench.elf
+	$(MAKE) firmware-rig
+	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/fsmd-$(BOARD)-rig.bin
+	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/fsmd-$(BOARD)-rig.elf
+	@{ \
+	  echo "fsmd firmware for the $(BOARD)"; \
+	  echo; \
+	  echo "commit: $(IMAGE_SHA)"; \
+	  echo "built:  $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
+	  echo "pio:    $$(pio --version)"; \
+	  echo; \
+	  echo "fsmd-$(BOARD)-bench.bin  demo mode ON: runs a built-in graph until a"; \
+	  echo "                          host says hello. Wiring in dev/HARDWARE.md"; \
+	  echo "fsmd-$(BOARD)-rig.bin    demo mode OFF (-DFSMD_DEMO=0)"; \
+	  echo; \
+	  echo "flash with:  make upload   or   bossac -i -e -w -R <file>.bin"; \
+	  echo; \
+	  echo "sizes:"; \
+	  stat -c '  %n  %s bytes' $(IMAGE_DIR)/*.bin | sed 's|$(IMAGE_DIR)/||'; \
+	  echo; \
+	  echo "sha256:"; \
+	  sha256sum $(IMAGE_DIR)/*.bin $(IMAGE_DIR)/*.elf | sed 's|$(IMAGE_DIR)/|  |'; \
+	} > $(IMAGE_DIR)/MANIFEST.txt
+	@cat $(IMAGE_DIR)/MANIFEST.txt
+
+# --------------------------------------------------------------------------
 
 # Everything CI runs, in the order it runs it, minus the toolchain installs.
 # The point is that a red build can be reproduced with one command.
@@ -139,7 +182,7 @@ ci: check-core test sanitize golden format-check firmware firmware-rig  ## every
 
 .PHONY: clean
 clean:
-	rm -rf build build-san build-O0 build-O3 .pio
+	rm -rf build build-san build-O0 build-O3 .pio $(IMAGE_DIR)
 
 .PHONY: help
 help:
