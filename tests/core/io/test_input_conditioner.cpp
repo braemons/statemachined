@@ -5,8 +5,8 @@
 #include "helpers.h"
 #include "io/input_conditioner.h"
 
-using namespace fsmd;
-using namespace fsmd::test;
+using namespace statemachined;
+using namespace statemachined::test;
 
 namespace {
 InputConfig plain(NarrowMilliseconds debounce = 0) {

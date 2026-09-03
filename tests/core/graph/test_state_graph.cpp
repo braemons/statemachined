@@ -5,8 +5,8 @@
 #include "graph/state_graph.h"
 #include "helpers.h"
 
-using namespace fsmd;
-using namespace fsmd::test;
+using namespace statemachined;
+using namespace statemachined::test;
 
 TEST_CASE("a minimal well-formed graph validates") {
   Builder b;

@@ -22,7 +22,7 @@
 
 #include "config.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace hal {
 
 /// Pin directions, the serial link, and the scan timer. Called once, before
@@ -72,4 +72,4 @@ void link_write(const char* src, size_t n);
 bool link_up();
 
 }  // namespace hal
-}  // namespace fsmd
+}  // namespace statemachined

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "random/rng.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace {
 
 constexpr uint32_t rotl(uint32_t x, int k) { return (x << k) | (x >> (32 - k)); }
@@ -66,4 +66,4 @@ int32_t Rng::between(int32_t lo, int32_t hi) {
   return lo + static_cast<int32_t>(below(span));
 }
 
-}  // namespace fsmd
+}  // namespace statemachined

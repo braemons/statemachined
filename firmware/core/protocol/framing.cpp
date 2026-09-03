@@ -3,7 +3,7 @@
 
 #include "protocol/crc16.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace {
 
 // `,"crc":"XXXX"}` -- fixed width, which is the whole reason the protocol pins
@@ -119,4 +119,4 @@ bool LineReader::feed(char c) {
   return false;
 }
 
-}  // namespace fsmd
+}  // namespace statemachined

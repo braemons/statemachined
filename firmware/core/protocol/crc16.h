@@ -10,7 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace fsmd {
+namespace statemachined {
 
 /// Polynomial 0x1021, initial value 0xFFFF, no reflection, no final XOR.
 ///
@@ -28,4 +28,4 @@ void crc16_to_hex(uint16_t crc, char out[4]);
 /// digit -- a malformed CRC field is a bad line, not a zero CRC.
 bool crc16_from_hex(const char in[4], uint16_t* out);
 
-}  // namespace fsmd
+}  // namespace statemachined

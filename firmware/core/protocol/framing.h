@@ -10,7 +10,7 @@
 
 #include "config.h"
 
-namespace fsmd {
+namespace statemachined {
 
 enum class FrameError : uint8_t {
   None = 0,
@@ -81,4 +81,4 @@ class LineReader {
   bool complete_ = false;
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

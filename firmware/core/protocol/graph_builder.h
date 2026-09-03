@@ -23,7 +23,7 @@
 #include "graph/state_graph.h"
 #include "protocol/json.h"
 
-namespace fsmd {
+namespace statemachined {
 
 enum class UploadError : uint8_t {
   None = 0,
@@ -91,4 +91,4 @@ class GraphBuilder {
   const char* context_ = "";
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

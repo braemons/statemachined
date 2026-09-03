@@ -22,7 +22,7 @@
 
 #include "config.h"
 
-namespace fsmd {
+namespace statemachined {
 
 /// A view into the message buffer. Nothing here copies: the reader borrows the
 /// line for as long as the caller holds it, which on the device is until the
@@ -197,4 +197,4 @@ class JsonWriter {
   bool fresh_ = true;  ///< nothing written at this nesting level yet
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

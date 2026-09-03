@@ -10,7 +10,7 @@
 
 #include "config.h"
 
-namespace fsmd {
+namespace statemachined {
 
 /// Why a state was left. Note this is per *state*, not per trial: Terminal is
 /// simply the cause that happens to also end the run.
@@ -53,4 +53,4 @@ struct State {
   constexpr bool terminal() const { return terminal_code != kNotTerminal; }
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

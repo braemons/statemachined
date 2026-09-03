@@ -1,4 +1,4 @@
-# fsmd — hardware
+# statemachined — hardware
 
 Per-board pinouts, wiring, and the numbers actually measured on each one.
 
@@ -21,7 +21,7 @@ Eight in, eight out. The board has more usable pins than that, but D0/D1 are the
 UART and D13 carries the on-board LED; a line map that quietly includes either
 is one that surprises somebody at 2 a.m.
 
-| fsmd input | Pin | | fsmd output | Pin |
+| statemachined input | Pin | | statemachined output | Pin |
 |---|---|---|---|---|
 | 0 | D2 | | 0 | D10 |
 | 1 | D3 | | 1 | D11 |
@@ -51,10 +51,10 @@ bridge checks a graph against them before uploading a byte of it.
 
 Before any host says `hello`, the board runs a built-in graph so that a bench
 board is visibly alive (`firmware/core/demo/demo_graph.cpp`; compile it out with
-`-DFSMD_DEMO=0`). It uses two inputs and six outputs, and it is the cheapest way
+`-DSTATEMACHINED_DEMO=0`). It uses two inputs and six outputs, and it is the cheapest way
 to find out whether your wiring reaches the lines you think it does.
 
-| What | fsmd line | Pin | Wire it as |
+| What | statemachined line | Pin | Wire it as |
 |---|---|---|---|
 | Start switch | input 0 | **D2** | switch to **5 V**, plus a **10 kΩ pull-down to GND** |
 | Abort switch | input 1 | **D3** | the same |
@@ -128,7 +128,7 @@ Built with the PlatformIO env `uno_r4_minima`, 2026-09-02.
 | `InputConditioner` | 208 | |
 | USB CDC, tinyusb, FSP, core | ~2800 | not ours, not removable |
 | **`.data` + `.bss` + `.noinit`** | **11 928** | what `pio run` reports: 36.4% |
-| Framework heap (`BSP_CFG_HEAP_BYTES`) | 8192 | reserved by the variant. **fsmd never allocates** |
+| Framework heap (`BSP_CFG_HEAP_BYTES`) | 8192 | reserved by the variant. **statemachined never allocates** |
 | Main stack (`BSP_CFG_STACK_MAIN_BYTES`) | 1024 | declared; the physical gap below it is ~8.3 KB |
 | **Committed** | **21 144** | **64.5% of 32 KB** |
 

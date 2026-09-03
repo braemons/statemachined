@@ -1,4 +1,4 @@
-# fsmd — the plan
+# statemachined — the plan
 
 > **Status:** M0-M3 implemented. The portable core, the wire protocol and the
 > Uno R4 Minima HAL are written, unit-tested on the host (10 suites, green under
@@ -8,7 +8,7 @@
 > is recorded below. Next up is **M4, the bridge to triald** — `bridge/` and
 > `graphs/` are still empty. Milestones and their state are at the end.
 
-## What fsmd is
+## What statemachined is
 
 The **trial state machine** of a braemons rig, running on a microcontroller.
 It is the participant that `triald/dev/PLAN.md` calls "the MCU": the half of
@@ -22,19 +22,19 @@ name a trial outcome. Between trials it sits idle, waiting to be armed again.
 ```
    triald            configure / arm / result            slow bus · HTTP+JSON
   ┌────────┐  ◀────────────────────────────────▶  ┌──────────┐
-  │ triald │                                       │ fsmd     │  host bridge
+  │ triald │                                       │ statemachined     │  host bridge
   └────────┘                                       │ (bridge) │
   ═══════════════════════════════════════════════  └────┬─────┘
                                                         │ USB CDC · NDJSON
   ┌─────────┬─────────┬─────────┬──────────┬────────────┴──────┐
-  │ vstimd  │ soundd  │ optod   │  daqd    │  fsmd (firmware)  │
+  │ vstimd  │ soundd  │ optod   │  daqd    │  statemachined (firmware)  │
   │ armed   │ audio   │ laser   │ TTL ⇄ VTL│  states · outputs │
   │ anims   │         │         │          │  outcome · reward │
   └─────────┴─────────┴─────────┴──────────┴───────────────────┘
               coupled to each other by trigger edges
 ```
 
-**The division of authority is triald's, unchanged.** fsmd is the *timing*
+**The division of authority is triald's, unchanged.** statemachined is the *timing*
 authority: it debounces inputs, timestamps in its own clock, drives the valve,
 and names the outcome. triald is the *decision* authority: it chooses the trial
 type, decides whether the outcome was *accepted*, and records what happened.
@@ -44,11 +44,11 @@ reward duration. That is what keeps firmware stable while paradigms change.
 
 ### The name
 
-**`fsmd`** — the job, not the hardware. It follows the family's `<function>d`
+**`statemachined`** — the job, not the hardware. It follows the family's `<function>d`
 convention (`vstimd`, `triald`, `soundd`, `optod`, `daqd`), and an acronym plus
 `d` already has precedent in `daqd`.
 
-Deliberately **not** `mcu-fsmd`. vstimd ships `gpiochip-daqd`, and that name is
+Deliberately **not** `mcu-statemachined`. vstimd ships `gpiochip-daqd`, and that name is
 `<backend>-<daemon>`: `daqd` is the daemon and owns the protocol, gpiochip is one
 backend of it. Spending the generic slot on a backend would leave nothing to name
 the thing the backends have in common — which is most of this document.
@@ -61,9 +61,9 @@ fact this design exists to make irrelevant.
 
 | | |
 |---|---|
-| `fsmd` | The project, the wire protocol, the graph format, the host bridge |
-| `fsmd-firmware` | The portable core plus HALs; packaged per board — `fsmd-firmware-uno-r4`, `fsmd-firmware-teensy41` |
-| `gpiochip-fsmd` | *If ever needed* — the Linux/Pi backend, named exactly as `gpiochip-daqd` is |
+| `statemachined` | The project, the wire protocol, the graph format, the host bridge |
+| `statemachined-firmware` | The portable core plus HALs; packaged per board — `statemachined-firmware-uno-r4`, `statemachined-firmware-teensy41` |
+| `gpiochip-statemachined` | *If ever needed* — the Linux/Pi backend, named exactly as `gpiochip-daqd` is |
 
 ---
 
@@ -85,17 +85,17 @@ events to next states, and output actions; the device runs it and reports back
 the state path with timestamps. That shape is Bpod's, it is right, and we are not
 pretending otherwise.
 
-Where fsmd differs, and why:
+Where statemachined differs, and why:
 
-| | Bpod | fsmd |
+| | Bpod | statemachined |
 |---|---|---|
-| Host loop | MATLAB/Python owns the trial loop directly | triald owns it; fsmd is one participant on a trigger bus alongside vstimd, soundd, optod, daqd |
+| Host loop | MATLAB/Python owns the trial loop directly | triald owns it; statemachined is one participant on a trigger bus alongside vstimd, soundd, optod, daqd |
 | Outcome vocabulary | the state name is the result; the host interprets | terminal states name an `.tdr` outcome code from triald's fixed 11-code taxonomy, a wire contract with years of files behind it |
 | Coupling to stimuli | Bpod modules and TTL | vstimd Virtual Trigger Lines, bridged to real TTL by daqd |
 | Hardware | dedicated Bpod state machine boards | commodity boards — Uno R4 Minima first, then Teensy 4.1 and ESP32 — via a portable core |
 | Randomised timings | host-drawn, pushed per trial | device-drawn from a host-seeded deterministic PRNG, with every realised value reported back |
 
-If you already run Bpod, run Bpod. fsmd exists because the rest of the braemons
+If you already run Bpod, run Bpod. statemachined exists because the rest of the braemons
 stack — the VTL trigger bus, triald's acceptance and outcome accounting, the
 `.tdr` record — needs a participant shaped to *it*, on whatever board a lab
 happens to have.
@@ -104,7 +104,7 @@ happens to have.
 
 `Bpod_StateMachine_Firmware` (Sanworks LLC, **GPLv3**) is one ~3,000-line `.ino`
 per board. Reading it settled several questions and reopened one. **If we lift
-code, fsmd's firmware is GPLv3** — which is the proposal in *Open questions*
+code, statemachined's firmware is GPLv3** — which is the proposal in *Open questions*
 anyway, so there is no conflict to resolve.
 
 **Where it independently confirms us**
@@ -138,7 +138,7 @@ that cheap, and they are requirements, not optimisations:
    compare and a branch. Timers still tick.
 
 **A wart to avoid.** Bpod detects a transition with `NewState != CurrentState`,
-so a **self-transition is silently a no-op**. fsmd supports explicit
+so a **self-transition is silently a no-op**. statemachined supports explicit
 self-transitions: re-entering a state resets its timer and **redraws its random
 duration**, which makes a re-triggerable timeout expressible.
 
@@ -309,7 +309,7 @@ correctly. A valve left open because a graph forgot an `on_exit` is not an
 acceptable failure mode.
 
 Output lines are physical pins; where a rig wants them to reach vstimd, daqd
-bridges them to Virtual Trigger Lines. fsmd does not know the difference and
+bridges them to Virtual Trigger Lines. statemachined does not know the difference and
 should not.
 
 ### Randomised timings, drawn on the device
@@ -358,7 +358,7 @@ Implementation constraints, which exist for reproducibility rather than speed:
 
 triald already has `POST /api/trial/cancel` taking a `{reason}` and producing a
 record with outcome `CANCELLED` — *"recorded rather than dropped, so a gap in the
-numbering never has to be explained."* fsmd honours the same principle: a
+numbering never has to be explained."* statemachined honours the same principle: a
 cancelled trial reports like any other, with its state path and effective
 durations up to the cut.
 
@@ -384,7 +384,7 @@ stays anyway, because static analysis cannot distinguish "10 s foreperiod" from
 "hung".
 
 **The race resolves one way, explicitly: the first terminal decision wins, and
-fsmd reports what actually happened.** A cancel arriving after the FSM has
+statemachined reports what actually happened.** A cancel arriving after the FSM has
 already reached a terminal state gets the *real* outcome back, not a fabricated
 `CANCELLED`. triald must cope with asking to cancel and being told `HIT`. That is
 honest; the alternative is a record claiming a trial was cancelled when the
@@ -468,8 +468,8 @@ than a parallel implementation of it — the same lesson as triald's
 `SimulatedBehaviourSource` and its note that *the debug controls are not a second
 code path*.
 
-Capacities are compile-time constants per board (`FSMD_MAX_STATES`,
-`FSMD_MAX_CONDITIONS`, `FSMD_MAX_LINES`, `FSMD_JSON_CAPACITY`), so a graph that
+Capacities are compile-time constants per board (`STATEMACHINED_MAX_STATES`,
+`STATEMACHINED_MAX_CONDITIONS`, `STATEMACHINED_MAX_LINES`, `STATEMACHINED_JSON_CAPACITY`), so a graph that
 will not fit is refused at upload with a clear message rather than failing at
 trial 300.
 
@@ -483,7 +483,7 @@ sideways shows up in the diff rather than in a build failure two milestones
 later.
 
 ```
-fsmd/
+statemachined/
 ├── README.md                  what it is, the Bpod acknowledgement, quickstart
 ├── BUILD.md                   devcontainer, Ubuntu, Fedora, WSL
 ├── LICENSE
@@ -516,12 +516,12 @@ fsmd/
 │   │                          one file per board, each guarded by its own arch
 │   └── src/main.cpp           board entry point, deliberately thin
 ├── emulation/                 the board under Renode, so firmware/hal/ has tests
-│   ├── fsmd-uno-r4.repl       Renode's own board file, plus a USB boot shim
-│   ├── fsmd.resc              loads the platform and the ELF
+│   ├── statemachined-uno-r4.repl       Renode's own board file, plus a USB boot shim
+│   ├── statemachined.resc              loads the platform and the ELF
 │   └── tests/                 Robot: pin map, port registers, timer ISR, a whole
 │                              session over a real UART. Never timing
 ├── bridge/                    Python: serial ⇄ triald HTTP
-│   └── src/fsmd/              codec, link, the triald client, `fsmd` CLI
+│   └── src/statemachined/              codec, link, the triald client, `statemachined` CLI
 ├── graphs/                    example graphs — go/no-go, 2AFC, fixation task
 ├── tests/
 │   └── core/                  mirrors firmware/core, group for group
@@ -544,12 +544,12 @@ than a parallel implementation of it.
 
 An Arduino cannot POST to triald, and triald deliberately shed the hardware link
 (`SerialBehaviourSource` came off its roadmap). So the translator lives here:
-`fsmd` the host process opens the serial port, speaks the protocol, and calls
+`statemachined` the host process opens the serial port, speaks the protocol, and calls
 `POST /api/trial/next`, `/api/trial/outcome`, `/api/trial/cancel`. It also owns
 retry, the CRC, reconnection, and turning a device `result` into an
 `OutcomeReport`.
 
-It is the natural place for the fields fsmd cannot know: `precise_fixation` comes
+It is the natural place for the fields statemachined cannot know: `precise_fixation` comes
 from the eye monitor and `frame_loss` from vstimd, and both can veto acceptance
 on their own. The bridge merges them into the report, or leaves them at their
 defaults on a rig without them.
@@ -607,7 +607,7 @@ With names resolved to bit indices at upload and distributions in a shared pool:
 > **16 568 B static / 25 784 B committed (78.7%)**. It is a second StateGraph
 > and a second TrialRunner, which is the price of the bench aid being the real
 > engine rather than a light show on a parallel code path. A rig build that
-> wants the headroom back compiles with `-DFSMD_DEMO=0` and returns to
+> wants the headroom back compiles with `-DSTATEMACHINED_DEMO=0` and returns to
 > 11 936 B. Both configurations are built in CI.
 
 A condition being three `uint32_t` masks and three bytes is why **TTL
@@ -635,7 +635,7 @@ graphs first. None of that touches the trial loop.
 | `native` | host | — | Unit tests and the simulator, and the **first** thing that works. Not a toy: it runs the same `core/` |
 | `linux_gpiochip` | Raspberry Pi etc. | — | **Not planned, but not a new project either.** See below |
 
-**A Raspberry Pi fsmd would be a fifth HAL, not a second project.** Everything in
+**A Raspberry Pi statemachined would be a fifth HAL, not a second project.** Everything in
 `firmware/core/` is plain C++17 with no `Arduino.h`, and the entire hardware
 surface is seven functions. A Linux backend reads the input word from a gpiochip
 line-request, writes outputs the same way, and takes `clock_gettime` for micros —
@@ -709,7 +709,7 @@ attached.
 
 That document says the MCU receives "channels, windows and a reward duration",
 and places the branch structure — *"the millisecond values, the branch structure,
-the outcome names"* — in triald as declarative data. fsmd pushes the branch table
+the outcome names"* — in triald as declarative data. statemachined pushes the branch table
 down to the device as a graph.
 
 The reason it is still compatible: **the firmware does not learn the trial
@@ -760,7 +760,7 @@ the trial type store. **Open: which.**
    file are in the tree.
 
    One correction to the reasoning this question was written with: it assumed
-   "Bpod's firmware is GPLv3, so borrowing from it makes fsmd's firmware GPLv3."
+   "Bpod's firmware is GPLv3, so borrowing from it makes statemachined's firmware GPLv3."
    **Nothing was in fact borrowed.** Every mention of Bpod in these sources is a
    comment comparing our design to theirs, usually to explain a divergence; no
    Sanworks code is copied, translated or adapted, and no file carries a Sanworks

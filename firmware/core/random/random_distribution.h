@@ -13,7 +13,7 @@
 #include "config.h"
 #include "random/rng.h"
 
-namespace fsmd {
+namespace statemachined {
 
 enum class RandomDistributionKind : uint8_t {
   Fixed = 0,
@@ -35,4 +35,4 @@ struct RandomDistribution {
   Milliseconds draw(Rng& rng) const;
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

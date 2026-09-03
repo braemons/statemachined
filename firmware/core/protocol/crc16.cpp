@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "protocol/crc16.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace {
 
 // Nibble table: 32 bytes of flash against 8 shifts per byte. The bitwise form
@@ -51,4 +51,4 @@ bool crc16_from_hex(const char in[4], uint16_t* out) {
   return true;
 }
 
-}  // namespace fsmd
+}  // namespace statemachined

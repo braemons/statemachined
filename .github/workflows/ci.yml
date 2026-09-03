@@ -100,7 +100,7 @@ jobs:
       - run: make image
       - uses: actions/upload-artifact@v4
         with:
-          name: fsmd-uno_r4_minima-${{ github.sha }}
+          name: statemachined-uno_r4_minima-${{ github.sha }}
           path: image/
           # Long enough to bisect a rig problem back through a few weeks of
           # builds, short enough not to hoard binaries forever.

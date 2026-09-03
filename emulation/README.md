@@ -14,7 +14,7 @@ far faster than anything here could be. What is left over is precisely the code
 the host build **cannot compile**, and until this existed it was covered by
 nothing:
 
-- **the pin map** — that fsmd input line 0 is the pin somebody wired to D2. That
+- **the pin map** — that statemachined input line 0 is the pin somebody wired to D2. That
   arithmetic runs only on the board, and getting it wrong means a lever press
   arriving as a lick.
 - **the port-register access** — one `PCNTR2` read per port and a bit gather in,
@@ -42,10 +42,10 @@ Nothing in this directory should ever grow an assertion about microseconds.
 
 | | |
 |---|---|
-| `fsmd-uno-r4.repl` | Renode's own `arduino_uno_r4_minima.repl`, plus a USB boot shim |
-| `fsmd.resc` | loads the platform and the ELF |
-| `tests/fsmd.robot` | the suite |
-| `tests/fsmd_protocol.py` | the wire protocol, as Robot keywords |
+| `statemachined-uno-r4.repl` | Renode's own `arduino_uno_r4_minima.repl`, plus a USB boot shim |
+| `statemachined.resc` | loads the platform and the ELF |
+| `tests/statemachined.robot` | the suite |
+| `tests/statemachined_protocol.py` | the wire protocol, as Robot keywords |
 
 It runs the **`uno_r4_minima_sci`** build, where the host is on SCI2 (D0/D1)
 rather than USB CDC. tinyusb against an emulated `USBFS` is by far the most
@@ -53,7 +53,7 @@ fragile thing in the picture, and the point is to test our code. That build is
 independently useful for a rig that wants a hardware serial bridge, so it is not
 a test-only artefact.
 
-`tests/fsmd_protocol.py` is deliberately a **second implementation** of the
+`tests/statemachined_protocol.py` is deliberately a **second implementation** of the
 framing rules, written from `dev/PROTOCOL.md` rather than bound to
 `firmware/core/protocol/`. If both ends were the same code, these tests could
 only prove the device agreed with itself.

@@ -1,4 +1,4 @@
-# fsmd — bringing up a board
+# statemachined — bringing up a board
 
 The procedure for putting this firmware on an Arduino Uno R4 Minima for the
 first time, in the order that makes each stage fail loudly on its own before
@@ -27,13 +27,13 @@ make firmware
 or skip the toolchain entirely and take the image CI publishes on every run:
 
 ```sh
-gh run download --name fsmd-uno_r4_minima-<sha>
+gh run download --name statemachined-uno_r4_minima-<sha>
 ```
 
 Check `MANIFEST.txt` against the commit you believe you are testing. A board in
 a rack cannot be asked what it is running, which is why that file exists.
 
-**Take the `bench` image.** The `rig` image is built with `-DFSMD_DEMO=0` and has
+**Take the `bench` image.** The `rig` image is built with `-DSTATEMACHINED_DEMO=0` and has
 demo mode compiled out, so every step up to §4 will look like a dead board.
 
 ---
@@ -65,7 +65,7 @@ either: the fault is before the link is serviced.
 
 ## 2. Wire it
 
-| What | fsmd line | Pin | Wire it as |
+| What | statemachined line | Pin | Wire it as |
 |---|---|---|---|
 | Start switch | input 0 | **D2** | switch to **5 V**, plus a **10 kΩ pull-down to GND** |
 | Abort switch | input 1 | **D3** | the same |
@@ -130,13 +130,13 @@ uv pip install --system --break-system-packages pyserial
 ```python
 import sys, serial
 sys.path.insert(0, "emulation/tests")
-from fsmd_protocol import fsmd_line
+from statemachined_protocol import statemachined_line
 
 s = serial.Serial("/dev/ttyACM0", 115200, timeout=2)
 
 def cmd(body):
-    """`body` is the message without its closing brace; fsmd_line adds the CRC."""
-    s.write((fsmd_line(body) + "\n").encode())
+    """`body` is the message without its closing brace; statemachined_line adds the CRC."""
+    s.write((statemachined_line(body) + "\n").encode())
     return s.readline().decode().strip()
 
 print(cmd('{"t":"hello","seq":1,"proto":1,"seed":"0123456789ABCDEF"'))

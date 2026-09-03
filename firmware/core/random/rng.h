@@ -20,7 +20,7 @@
 
 #include "config.h"
 
-namespace fsmd {
+namespace statemachined {
 
 class Rng {
  public:
@@ -46,4 +46,4 @@ class Rng {
   uint32_t s_[4] = {0, 0, 0, 0};
 };
 
-}  // namespace fsmd
+}  // namespace statemachined

@@ -17,7 +17,7 @@
 
 #include "hal.h"
 
-namespace fsmd {
+namespace statemachined {
 namespace hal {
 namespace {
 LineBitmask inputs_ = 0;
@@ -79,6 +79,6 @@ void set_native_inputs(LineBitmask word) { inputs_ = word; }
 LineBitmask native_output_levels() { return levels_; }
 
 }  // namespace hal
-}  // namespace fsmd
+}  // namespace statemachined
 
 #endif  // !ARDUINO

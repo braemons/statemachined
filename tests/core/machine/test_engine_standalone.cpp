@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The engine with no wire anywhere near it.
 //
-// This binary links against fsmd_engine alone -- no framing, no JSON, no
+// This binary links against statemachined_engine alone -- no framing, no JSON, no
 // session object is on its command line. So it is a *link-time* proof, not a
 // claim in a comment: if the state machine ever grows a dependency on the
 // protocol, this fails to link.
@@ -15,8 +15,8 @@
 #include "helpers.h"
 #include "trial/trial_runner.h"
 
-using namespace fsmd;
-using namespace fsmd::test;
+using namespace statemachined;
+using namespace statemachined::test;
 
 TEST_CASE("a graph built in C++ runs with no protocol layer linked") {
   Builder b;

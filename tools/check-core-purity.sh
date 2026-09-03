@@ -36,13 +36,13 @@ echo "$bad_includes" | while IFS= read -r line; do
     *'<cstdint>'* | *'<cstddef>'*) ;;
     *) printf '%s\n' "$line" ;;
   esac
-done > /tmp/fsmd-bad-includes.$$ || true
+done > /tmp/statemachined-bad-includes.$$ || true
 
-if [ -s /tmp/fsmd-bad-includes.$$ ]; then
+if [ -s /tmp/statemachined-bad-includes.$$ ]; then
   report 'firmware/core may include only <cstdint> and <cstddef>:'
-  cat /tmp/fsmd-bad-includes.$$ >&2
+  cat /tmp/statemachined-bad-includes.$$ >&2
 fi
-rm -f /tmp/fsmd-bad-includes.$$
+rm -f /tmp/statemachined-bad-includes.$$
 
 # Arduino.h belongs in firmware/src and firmware/hal, never in the core. This is
 # what lets the core be compiled and tested on the host at all.

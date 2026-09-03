@@ -28,13 +28,13 @@
 //
 // Only the three link functions differ. Pins, timer and clock are the same
 // board either way.
-#if defined(FSMD_LINK_UART)
-#define FSMD_LINK Serial1
+#if defined(STATEMACHINED_LINK_UART)
+#define STATEMACHINED_LINK Serial1
 #else
-#define FSMD_LINK Serial
+#define STATEMACHINED_LINK Serial
 #endif
 
-namespace fsmd {
+namespace statemachined {
 namespace hal {
 namespace {
 
@@ -44,7 +44,7 @@ namespace {
 // are the UART and D13 carries the on-board LED, and a line map that quietly
 // includes either is a line map that surprises somebody at 2 a.m.
 //
-// Order is the fsmd line number: kInputPins[0] is input line 0. Changing this
+// Order is the statemachined line number: kInputPins[0] is input line 0. Changing this
 // table changes what every existing graph means, so it is a wire contract in
 // the same sense the protocol is -- see dev/HARDWARE.md.
 constexpr uint8_t kInputPins[] = {2, 3, 4, 5, 6, 7, 8, 9};
@@ -102,7 +102,7 @@ uint8_t in_slot_[kInputCount];
 
 PortGroup out_ports_[kOutputCount];
 uint8_t out_port_count_ = 0;
-/// For each output port slot, the fsmd lines that live on it.
+/// For each output port slot, the statemachined lines that live on it.
 LineBitmask out_lines_[kOutputCount];
 
 uint8_t intern_port(PortGroup* groups, uint8_t* count, uint8_t p) {
@@ -149,7 +149,7 @@ void init() {
   }
 
   // Real on a UART, ignored on native USB CDC, which runs at bus speed.
-  FSMD_LINK.begin(921600);
+  STATEMACHINED_LINK.begin(921600);
 }
 
 LineBitmask read_inputs() {
@@ -196,18 +196,18 @@ Microseconds micros_now() { return micros(); }
 
 size_t link_read(char* dst, size_t max) {
   size_t n = 0;
-  while (n < max && FSMD_LINK.available() > 0) {
-    const int c = FSMD_LINK.read();
+  while (n < max && STATEMACHINED_LINK.available() > 0) {
+    const int c = STATEMACHINED_LINK.read();
     if (c < 0) break;
     dst[n++] = static_cast<char>(c);
   }
   return n;
 }
 
-void link_write(const char* src, size_t n) { FSMD_LINK.write(src, n); }
+void link_write(const char* src, size_t n) { STATEMACHINED_LINK.write(src, n); }
 
 bool link_up() {
-#if defined(FSMD_LINK_UART)
+#if defined(STATEMACHINED_LINK_UART)
   // A UART has no DTR and no carrier: there is nothing to ask. Link loss on
   // this build is detectable only by the heartbeat lapsing, which is the
   // bridge's job, so saying "up" here is the honest answer rather than an
@@ -216,7 +216,7 @@ bool link_up() {
 #else
   // USB CDC: false the moment the bridge closes the port. This is what a rig
   // should fail-safe on -- it is immediate, where a heartbeat timeout is not.
-  return static_cast<bool>(FSMD_LINK);
+  return static_cast<bool>(STATEMACHINED_LINK);
 #endif
 }
 
@@ -238,6 +238,6 @@ bool start_scan_timer(uint32_t hz, void (*callback)()) {
 }
 
 }  // namespace hal
-}  // namespace fsmd
+}  // namespace statemachined
 
 #endif  // ARDUINO_ARCH_RENESAS

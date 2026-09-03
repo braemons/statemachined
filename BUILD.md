@@ -1,4 +1,4 @@
-# Building fsmd
+# Building statemachined
 
 There are two builds in this repo and they do not know about each other:
 
@@ -73,8 +73,8 @@ devcontainer exec --workspace-folder . make test
 **Plain Docker,** if you want no devcontainer tooling at all:
 
 ```sh
-docker build -f .devcontainer/Dockerfile -t fsmd-dev .
-docker run --rm -it -v "$PWD":/w -w /w fsmd-dev make test
+docker build -f .devcontainer/Dockerfile -t statemachined-dev .
+docker run --rm -it -v "$PWD":/w -w /w statemachined-dev make test
 ```
 
 It pins Ubuntu 24.04, gcc 13, clang 18, CMake 3.28, PlatformIO 6.1.16 and
@@ -164,7 +164,7 @@ wsl --install -d Ubuntu-24.04
 
 Two things differ, and one of them will bite you:
 
-**Keep the repo on the Linux filesystem.** Clone into `~/code/fsmd`, not
+**Keep the repo on the Linux filesystem.** Clone into `~/code/statemachined`, not
 `/mnt/c/Users/...`. Builds across the Windows filesystem boundary are slower by
 a large factor, and file-watching tools miss changes there.
 

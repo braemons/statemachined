@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "trial/trial_runner.h"
 
-namespace fsmd {
+namespace statemachined {
 
 OutputUpdate TrialRunner::start(uint32_t trial_id, uint64_t session_seed, Microseconds now_us,
                                 LineBitmask word) {
@@ -36,4 +36,4 @@ void TrialRunner::latch_outcome() {
   }
 }
 
-}  // namespace fsmd
+}  // namespace statemachined
