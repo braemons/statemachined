@@ -2,7 +2,7 @@
 """statemachined: the host side of one statemachined device.
 
 `device/` is the wire -- framing, the session, the graph upload, the result --
-and is what dev/DAEMON.md builds the daemon out of. `cli.py` is the bench
+and is what dev/DAEMON.md builds the daemon out of. `command_line_interface.py` is the bench
 instrument dev/BRINGUP.md §4 and §5 ask for: it sends one command at a time,
 prints what came back, and knows nothing about paradigms, trials or graphs.
 Anything that starts to look like it is running an experiment belongs below

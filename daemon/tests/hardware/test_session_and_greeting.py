@@ -11,7 +11,7 @@ import time
 
 import pytest
 from conftest import SCAN_HZ_TARGET
-from statemachined.device.messages import ErrorCode, Field, MsgType
+from statemachined.device.message_vocabulary import ErrorCode, Field, MsgType
 
 PROTO = 1
 

@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """Reassembling `result_begin` … `result_path`* … `result_end`.
 
-Was tests/hardware/harness.py, for the reason upload.py records. Lines are
-parsed here rather than through `Session.request`, for the checksum: the device
+Was tests/hardware/hardware_test_harness.py, for the reason graph_set_upload.py records. Lines are
+parsed here rather than through `RequestResponseSession.request`, for the checksum: the device
 folds the covered bytes of every result line before `result_end`, so the host
 has to fold the same bytes, and a parsed dict has already thrown them away.
 """
@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import time
 
-from .messages import Field, MsgType
-from .session import Session
-from .wire import CRC_INIT, covered_bytes, crc16_ccitt, parse_reply
+from .message_vocabulary import Field, MsgType
+from .request_response_session import RequestResponseSession
+from .message_framing import CRC_INIT, covered_bytes, crc16_ccitt, parse_reply
 
 
-class Visit:
+class StateVisitRow:
     """One row of `result_path`, named. The wire form is a bare array.
 
     The same six-element shape the `visit` stream will carry, decoded by the
@@ -37,7 +37,7 @@ class Visit:
         ) = row
 
 
-class Result:
+class ReassembledTrialResult:
     """A trial's result, reassembled and checked against its own checksum."""
 
     def __init__(self, begin: dict, rows: list[list], end: dict, computed: int):
@@ -58,11 +58,11 @@ class Result:
     def checksum_matches(self) -> bool:
         return self.end.get("checksum", "").upper() == f"{self.computed:04X}"
 
-    def visit(self, n: int) -> Visit:
-        return Visit(self.rows[n])
+    def visit(self, n: int) -> StateVisitRow:
+        return StateVisitRow(self.rows[n])
 
 
-def read_result(session: Session, timeout: float = 15.0) -> Result:
+def read_trial_result(session: RequestResponseSession, timeout: float = 15.0) -> ReassembledTrialResult:
     """Collect one whole result off the link.
 
     Ordering is checked as strictly as the protocol states it -- a chunk that
@@ -84,7 +84,7 @@ def read_result(session: Session, timeout: float = 15.0) -> Result:
         line = session.link.read_line()
         if line is None:
             continue
-        msg = parse_reply(line)  # a WireError here is a finding, not a retry
+        msg = parse_reply(line)  # a FramingError here is a finding, not a retry
         msg_type = msg.get(Field.MSG_TYPE)
 
         if msg_type == MsgType.RESULT_BEGIN:
@@ -105,4 +105,4 @@ def read_result(session: Session, timeout: float = 15.0) -> Result:
         else:
             session.on_unsolicited(msg)
 
-    return Result(begin, rows, end, rolling)
+    return ReassembledTrialResult(begin, rows, end, rolling)

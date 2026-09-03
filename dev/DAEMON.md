@@ -83,29 +83,29 @@ statemachined/
 │   ├── pyproject.toml            name = "statemachined", version sentinel 0.0.0
 │   ├── LICENSE                   LGPL-3.0-or-later, moved from bridge/
 │   ├── src/statemachined/
-│   │   ├── cli.py                `statemachined serve`, and the bench commands
-│   │   ├── board.py              pin labels per board, for what the CLI prints
-│   │   ├── config.py             /etc/braemons/statemachined.toml
-│   │   ├── device/               everything that touches the wire
-│   │   │   ├── link.py              pyserial transport        ← tools/bringup
-│   │   │   ├── wire.py              framing, CRC              ← tools/bringup
-│   │   │   ├── messages.py          MsgType/Field/ErrorCode   ← tools/bringup
-│   │   │   ├── session.py           request/response, retry   ← tools/bringup
-│   │   │   ├── upload.py            the chunked graph upload  ← tests/hardware/harness.py
-│   │   │   ├── result.py            result reassembly         ← tests/hardware/harness.py
-│   │   │   ├── supervisor.py        NEW: owns the port, reconnect, seed, watchdog
-│   │   │   ├── clock.py             NEW: device µs ⇄ host clock
-│   │   │   └── trace.py             NEW: the visit ring, and the NDJSON tail
-│   │   ├── model/                pydantic — the graph as a person authors it
-│   │   │   ├── graph.py             Graph, State, Transition, Action, Distribution
-│   │   │   ├── lines.py             LineMap: names, pins, invert/enable/safe/debounce
-│   │   │   ├── record.py            TrialResult and its path
-│   │   │   └── outcome.py           the eleven .tdr codes
-│   │   ├── compile.py            names → indices, and the caps check
-│   │   ├── store.py              graphs on disk under /var/lib/statemachined
-│   │   ├── triald.py             the client: POST /api/trial/outcome
-│   │   ├── api/                  FastAPI routers — see §4
-│   │   └── web/                  index.html · app.js · style.css · elements/
+│   │   ├── command_line_interface.py   `statemachined serve`, and the bench commands
+│   │   ├── board_pin_labels.py         pin labels per board, for what the CLI prints
+│   │   ├── daemon_configuration.py     /etc/braemons/statemachined.toml
+│   │   ├── device/                     everything that touches the wire
+│   │   │   ├── serial_link.py                pyserial transport   ← tools/bringup
+│   │   │   ├── message_framing.py            framing, CRC         ← tools/bringup
+│   │   │   ├── message_vocabulary.py         MsgType/Field/Error  ← tools/bringup
+│   │   │   ├── request_response_session.py   one in flight, retry ← tools/bringup
+│   │   │   ├── graph_set_upload.py           the chunked set upload
+│   │   │   ├── trial_result_reassembly.py    result reassembly
+│   │   │   ├── device_supervisor.py          NEW: owns the port, reconnect, seed, watchdog
+│   │   │   ├── device_clock_correlation.py   NEW: device µs ⇄ host clock
+│   │   │   └── state_visit_trace.py          NEW: the visit ring, and the NDJSON tail
+│   │   ├── model/                      pydantic — the graph as a person authors it
+│   │   │   ├── graph_definition.py     Graph, State, Transition, Action, Distribution
+│   │   │   ├── line_map.py             names, pins, invert/enable/safe/debounce
+│   │   │   ├── trial_record.py         a result and its path, read back into names
+│   │   │   └── trial_outcome.py        the eleven .tdr codes
+│   │   ├── graph_set_compiler.py       names → indices, and the caps check
+│   │   ├── graph_store.py              graphs on disk under /var/lib/statemachined
+│   │   ├── triald_client.py            POST /api/trial/outcome
+│   │   ├── api/                        FastAPI routers — see §4
+│   │   └── web/                        index.html · app.js · style.css · elements/
 │   └── tests/
 │       ├── unit/                 host-only. Runs in `make ci`
 │       └── hardware/             needs a board    ← tools/bringup/tests/hardware
@@ -114,8 +114,15 @@ statemachined/
 └── tools/check-core-purity.sh stays. It is the only thing left in tools/
 ```
 
+**The file names are long on purpose.** A module called `compile.py` tells a
+reader nothing about what it compiles or into what, and this tree has three
+things that could plausibly be called a graph. So a file says what it is:
+`graph_set_compiler.py` compiles a graph set, `trial_result_reassembly.py`
+reassembles a trial result, `message_framing.py` frames messages. The cost is
+paid at the import line and once; the alternative is paid by every reader.
+
 `tools/bringup/` disappears as a directory. Its README argued that the graph
-upload and result reassembly in `tests/hardware/harness.py` are *"the bridge's
+upload and result reassembly in `tests/hardware/hardware_test_harness.py` are *"the bridge's
 job and should move there when `bridge/` exists — at which point this suite
 tests the bridge's codec against real hardware, which is strictly better than
 testing a copy of it."* That is exactly what the move does, and it was the
@@ -131,7 +138,7 @@ framing (as `tools/bringup/wire.py` does today) was acceptable for a bench tool
 run from a checkout. It is **not** acceptable for an installed package: a `.deb`
 has no `emulation/` directory.
 
-So `daemon/src/statemachined/device/wire.py` becomes a real third
+So `daemon/src/statemachined/device/message_framing.py` becomes a real third
 implementation. That is a cost, and it is the right one: the alternative is
 shipping the test suite inside the daemon package. The two are kept honest by a
 golden-vector test — a fixed set of lines with known CRCs, asserted by both.
@@ -174,9 +181,9 @@ The compiler between them is the daemon's main reason to exist.
 the wire carries `a`, `b` and `c`, whose meaning depends on `kind` — terse
 because the device has 32 KB. A person writing a foreperiod down should write
 `minimum_ms` and `mean_ms`, and exactly one place in the daemon should know
-which is which. That place is `compile.py`.
+which is which. That place is `graph_set_compiler.py`.
 
-`compile.py` turns the whole set into `set_begin` … `set_end` per `PROTOCOL.md`
+`graph_set_compiler.py` turns the whole set into `set_begin` … `set_end` per `PROTOCOL.md`
 §3.2: the shared distribution pool first, then each graph as `graph_begin` …
 `graph_end` with its states in declaration order and each state's transitions
 and actions immediately after it (the ordering rule *is* the device's memory
@@ -201,7 +208,7 @@ not land cannot leave the device confidently running the old paradigm.
 
 > **This answers PLAN.md open question 2, "Who authors a graph?"** — *"A Python
 > builder in the bridge is cheap; a visual editor in triald's web UI is not, and
-> triald has a no-build-step, no-CDN rule."* The builder is `model/graph.py`, and
+> triald has a no-build-step, no-CDN rule."* The builder is `model/graph_definition.py`, and
 > the visual editor turns out to be affordable after all, because it lives here
 > and obeys the same rule. See §5.
 
@@ -1022,10 +1029,10 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 
 | | |
 |---|---|
-| **M4a** ✅ | **The move, and nothing else.** `tools/bringup/` → `daemon/`, `statemachined_bringup` → `statemachined` with the wire under `device/`, `wire.py` made standalone with golden vectors against the emulator's copy *and* against `crc16.cpp`. The graph upload and result reassembly left `tests/hardware/harness.py` for `device/upload.py` and `device/result.py`, so the hardware suite now tests the daemon's codec rather than a copy of it. `make bringup` and `make test-hardware` unchanged in behaviour; `make test-daemon` is new and is in `make ci` and CI |
+| **M4a** ✅ | **The move, and nothing else.** `tools/bringup/` → `daemon/`, `statemachined_bringup` → `statemachined` with the wire under `device/`, `wire.py` made standalone with golden vectors against the emulator's copy *and* against `crc16.cpp`. The graph upload and result reassembly left `tests/hardware/hardware_test_harness.py` for `device/graph_set_upload.py` and `device/trial_result_reassembly.py`, so the hardware suite now tests the daemon's codec rather than a copy of it. `make bringup` and `make test-hardware` unchanged in behaviour; `make test-daemon` is new and is in `make ci` and CI |
 | **M4b** ✅ | **Wiring config and the `visit` stream, in the firmware** (§3.3, §3.6). The wiring move plus a compile-time safe-level word closes a fail-safe hole that exists today on any rig whose outputs are not active-high, so it is worth doing whether or not the daemon ever ships; the stream is a callback and a serialiser. They share a file and a protocol document, so they share a branch. **No data flash** — that is deferred to M7 |
 | **M4c** ✅ | **The graph set, in the firmware** (§3.2, §3.3): shared pools, `GraphEntry`, `set_begin`/`set_end`, a slot in `configure`, `max_graphs` in `caps`. The larger of the two firmware milestones and the one this plan's trial loop rests on. Covered by the native core, the Renode session and `PROTOCOL.md` message by message, all of which exist |
-| **M4d** ✅ | `model/` and `compile.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
+| **M4d** ✅ | `model/` and `graph_set_compiler.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4e** | `device/supervisor.py` and `clock.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core over a pty — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks |
 | **M4f** | FastAPI: device, lines, graphs, trial, config, state/stream; the triald client; `statemachined serve`. `dev/API.md` written first, the way `PROTOCOL.md` was |
 | **M4g** | The web UI and the `/elements/` contract; mDNS |
@@ -1092,7 +1099,7 @@ diff.
 5. **`TrialType.graph` is triald's field to add**, alongside or replacing
    `time_sequence`. Same amendment as #3, and probably the same patch.
 6. **Global timers** (`PLAN.md` open question 3, still open) are the one feature
-   likely to change `model/graph.py`'s shape. Not in v1, but the model should be
+   likely to change `model/graph_definition.py`'s shape. Not in v1, but the model should be
    written so they are an addition rather than a rewrite.
 7. **Who authors the console**, and when. §5 defers it; it should not stay
    deferred long, since it is most of what makes three daemons feel like one rig.

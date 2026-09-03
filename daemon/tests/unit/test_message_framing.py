@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The framing, against fixed bytes -- and against the other implementation.
 
-`statemachined.device.wire` is the third implementation of dev/PROTOCOL.md's
+`statemachined.device.message_framing` is the third implementation of dev/PROTOCOL.md's
 framing in this repository. It exists because an installed package cannot
 import `emulation/tests/statemachined_protocol.py`, and its risk is that the
 two drift. This is the test that makes a drift fail here, in `make ci`, on a
@@ -28,9 +28,9 @@ from pathlib import Path
 
 import pytest
 
-from statemachined.device.wire import (
+from statemachined.device.message_framing import (
     CRC_INIT,
-    WireError,
+    FramingError,
     command_line,
     covered_bytes,
     crc16_ccitt,
@@ -144,17 +144,17 @@ def test_parse_reply_accepts_a_good_line():
 def test_parse_reply_refuses_a_bad_crc():
     good = LINES[0]["line"]
     bad = good[: good.rindex('"crc":"') + 7] + "0000" + '"}'
-    with pytest.raises(WireError, match="crc mismatch"):
+    with pytest.raises(FramingError, match="crc mismatch"):
         parse_reply(bad)
 
 
 def test_parse_reply_refuses_a_non_ascii_line():
     # A byte >= 0x80 is a framing error, not a character set question: the
     # protocol is ASCII and the CRC is over ASCII bytes.
-    with pytest.raises(WireError, match="0x80"):
+    with pytest.raises(FramingError, match="0x80"):
         parse_reply('{"msg_type":"log","message_id":1,"m":"café","crc":"0000"}')
 
 
 def test_parse_reply_refuses_a_line_with_no_crc_member():
-    with pytest.raises(WireError, match="no trailing crc"):
+    with pytest.raises(FramingError, match="no trailing crc"):
         parse_reply('{"msg_type":"ping","message_id":1}')

@@ -35,8 +35,8 @@ from dataclasses import dataclass, field
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .device.messages import MsgType
-from .model.graph import (
+from .device.message_vocabulary import MsgType
+from .model.graph_definition import (
     ChoiceDuration,
     DurationDistribution,
     ExponentialDuration,
@@ -46,8 +46,8 @@ from .model.graph import (
     StateDefinition,
     UniformDuration,
 )
-from .model.lines import LineMap
-from .model.outcome import terminal_outcome_for_name
+from .model.line_map import LineMap
+from .model.trial_outcome import terminal_outcome_for_name
 
 #: `kNoTransition` on the wire, and what a `graph_state` with no timeout omits.
 NO_TRANSITION_FIRED = 255

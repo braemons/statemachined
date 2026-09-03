@@ -13,14 +13,14 @@ import random
 import time
 from collections.abc import Callable
 
-from .link import Link
-from .messages import UNSOLICITED, Field, MsgType
-from .wire import DeviceError, WireError, command_line, parse_reply
+from .serial_link import SerialLink
+from .message_vocabulary import UNSOLICITED, Field, MsgType
+from .message_framing import DeviceRefusedTheCommand, FramingError, command_line, parse_reply
 
 PROTO = 1
 
 
-class Timeout(Exception):
+class NoReplyInTime(Exception):
     """No reply carrying our `in_reply_to` arrived before the deadline."""
 
 
@@ -33,10 +33,10 @@ def random_seed() -> str:
     return f"{random.getrandbits(64):016X}"
 
 
-class Session:
+class RequestResponseSession:
     def __init__(
         self,
-        link: Link,
+        link: SerialLink,
         on_unsolicited: Callable[[dict], None] | None = None,
         on_junk: Callable[[str, str], None] | None = None,
     ):
@@ -102,7 +102,7 @@ class Session:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise Timeout(
+                raise NoReplyInTime(
                     f"no reply to {what} (message_id {message_id}) within {timeout:g}s"
                 )
             raw = self.link.read_line()
@@ -117,7 +117,7 @@ class Session:
                         self.on_junk(
                             raw, "an error naming no message_id; taken as the reply anyway"
                         )
-                    raise DeviceError(msg)
+                    raise DeviceRefusedTheCommand(msg)
                 return msg
             # A reply to somebody else's command, or one whose id we already
             # gave up on. Worth seeing rather than swallowing.
@@ -132,7 +132,7 @@ class Session:
             return None
         try:
             msg = parse_reply(line)
-        except WireError as exc:
+        except FramingError as exc:
             self.on_junk(line, str(exc))
             return None
         if msg.get(Field.MSG_TYPE) in UNSOLICITED:

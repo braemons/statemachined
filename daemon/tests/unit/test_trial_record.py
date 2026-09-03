@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from statemachined.model.outcome import TrialOutcome, terminal_outcome_for_name
-from statemachined.model.record import (
+from statemachined.model.trial_outcome import TrialOutcome, terminal_outcome_for_name
+from statemachined.model.trial_record import (
     NO_TRANSITION_FIRED,
     TrialResultRecord,
     decode_state_visit_row,

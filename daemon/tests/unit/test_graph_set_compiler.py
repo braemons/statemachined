@@ -12,14 +12,14 @@ from __future__ import annotations
 
 import pytest
 
-from statemachined.compile import (
+from statemachined.graph_set_compiler import (
     DeviceCapabilities,
     GraphSetCompilationError,
     compile_graph_set_for_device,
 )
-from statemachined.device.messages import MsgType
-from statemachined.model.graph import GraphDefinition
-from statemachined.model.lines import LineMap
+from statemachined.device.message_vocabulary import MsgType
+from statemachined.model.graph_definition import GraphDefinition
+from statemachined.model.line_map import LineMap
 
 
 def reference_board_capabilities(**overrides) -> DeviceCapabilities:

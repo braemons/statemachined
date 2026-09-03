@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .outcome import TrialCancelReason, TrialOutcome
+from .trial_outcome import TrialCancelReason, TrialOutcome
 
 #: `transition_index` when the state was not left by a transition. The wire's
 #: `kNoTransition`, and the reason position 2 of a row is not simply an int.
@@ -88,7 +88,7 @@ def decode_state_visit_row(
     """One wire row into a named visit.
 
     `state_names_by_index` and `transition_target_names_by_state_index` come from
-    the compiled graph -- see `statemachined.compile` -- so decoding is only
+    the compiled graph -- see `statemachined.graph_set_compiler` -- so decoding is only
     possible against the graph the trial actually ran, which is the property
     that keeps a renamed state from silently mislabelling last week's data.
 

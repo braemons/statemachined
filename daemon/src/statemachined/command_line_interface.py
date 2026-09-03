@@ -17,11 +17,11 @@ import sys
 import time
 
 from . import __version__
-from .board import high_lines, word_bits
-from .device.link import DEFAULT_BAUD, DEFAULT_TARGET, DEFAULT_TIMEOUT, Link
-from .device.messages import ErrorCode, Field, MsgType
-from .device.session import Session, Timeout, random_seed
-from .device.wire import DeviceError, WireError, parse_reply, statemachined_line
+from .board_pin_labels import high_lines, word_bits
+from .device.serial_link import DEFAULT_BAUD, DEFAULT_TARGET, DEFAULT_TIMEOUT, SerialLink
+from .device.message_vocabulary import ErrorCode, Field, MsgType
+from .device.request_response_session import RequestResponseSession, NoReplyInTime, random_seed
+from .device.message_framing import DeviceRefusedTheCommand, FramingError, parse_reply, statemachined_line
 
 SCAN_HZ_TARGET = 10_000  # dev/PLAN.md M3, and the number §4 is waiting on.
 
@@ -118,7 +118,7 @@ def print_hello_ack(ack: dict) -> None:
 # ---------------------------------------------------------------- helpers ---
 
 
-def line_counts(session: Session, args) -> tuple[str | None, int, int]:
+def line_counts(session: RequestResponseSession, args) -> tuple[str | None, int, int]:
     """How many lines to render, and whose pinout to name them with.
 
     From `hello_ack` when this run said hello, otherwise from the flags --
@@ -133,16 +133,16 @@ def line_counts(session: Session, args) -> tuple[str | None, int, int]:
     )
 
 
-def open_session(args) -> tuple[Link, Session]:
-    link = Link(args.target, baud=args.baud, timeout=args.timeout)
+def open_session(args) -> tuple[SerialLink, RequestResponseSession]:
+    link = SerialLink(args.target, baud=args.baud, timeout=args.timeout)
     link.reset_input()
-    return link, Session(link, on_unsolicited=show_unsolicited, on_junk=show_junk)
+    return link, RequestResponseSession(link, on_unsolicited=show_unsolicited, on_junk=show_junk)
 
 
 # --------------------------------------------------------------- commands ---
 
 
-def cmd_hello(args, session: Session) -> int:
+def cmd_hello(args, session: RequestResponseSession) -> int:
     seed = args.seed or random_seed()
     note("hello ends demo mode for good until the next reset.")
     ack = session.hello(seed=seed)
@@ -152,7 +152,7 @@ def cmd_hello(args, session: Session) -> int:
     return 0
 
 
-def cmd_state(args, session: Session) -> int:
+def cmd_state(args, session: RequestResponseSession) -> int:
     report = session.state()
     board, n_in, n_out = line_counts(session, args)
     print("state_report")
@@ -160,7 +160,7 @@ def cmd_state(args, session: Session) -> int:
     return 0
 
 
-def cmd_ping(args, session: Session) -> int:
+def cmd_ping(args, session: RequestResponseSession) -> int:
     for i in range(args.count):
         started = time.monotonic()
         pong = session.ping()
@@ -171,7 +171,7 @@ def cmd_ping(args, session: Session) -> int:
     return 0
 
 
-def cmd_watch(args, session: Session) -> int:
+def cmd_watch(args, session: RequestResponseSession) -> int:
     """§5: hold a switch, watch `io.in` change. Ctrl-C to stop."""
     board, n_in, n_out = line_counts(session, args)
     note("watching io; hold a switch and watch `in`. Ctrl-C to stop.")
@@ -193,7 +193,7 @@ def cmd_watch(args, session: Session) -> int:
         return 0
 
 
-def cmd_load(args, session: Session) -> int:
+def cmd_load(args, session: RequestResponseSession) -> int:
     """§5's real question: does link traffic cost the board scans?
 
     The design bets that a timer ISR which only counts, with `loop()` doing the
@@ -223,7 +223,7 @@ def cmd_load(args, session: Session) -> int:
     return 0
 
 
-def cmd_report(args, session: Session) -> int:
+def cmd_report(args, session: RequestResponseSession) -> int:
     """The three numbers M3 wants, in a shape that pastes into HARDWARE.md.
 
     A measurement that stays in somebody's terminal is one the next person has
@@ -251,7 +251,7 @@ def cmd_report(args, session: Session) -> int:
           f"({gained:+d} during load) | zero |")
     print(f"| `scan.worst_gap` | {scan.get('worst_gap')} | zero |")
     print(f"| `scan.tx_stalls` | {scan.get('tx_stalls')} | zero |")
-    print(f"| Link errors | dropped {after.get('dropped_lines')}, "
+    print(f"| SerialLink errors | dropped {after.get('dropped_lines')}, "
           f"bad {after.get('bad_lines')} | zero |")
     print(f"| Firmware | `{ack.get('fw')}` | the commit you believe you flashed |")
     print()
@@ -262,7 +262,7 @@ def cmd_report(args, session: Session) -> int:
     return 0
 
 
-def cmd_raw(args, session: Session) -> int:
+def cmd_raw(args, session: RequestResponseSession) -> int:
     """Send a body without its closing brace; the CRC is added here.
 
     The escape hatch for everything this tool does not have a subcommand for --
@@ -287,7 +287,7 @@ def cmd_raw(args, session: Session) -> int:
     return 1
 
 
-def cmd_monitor(args, session: Session) -> int:
+def cmd_monitor(args, session: RequestResponseSession) -> int:
     """Read and check whatever the device says, sending nothing.
 
     Deliberately silent on the wire: on a bench board this is the one way to
@@ -301,7 +301,7 @@ def cmd_monitor(args, session: Session) -> int:
                 continue
             try:
                 parse_reply(line)
-            except WireError as exc:
+            except FramingError as exc:
                 note(f"  bad line ({exc})")
             print(line, flush=True)
     except KeyboardInterrupt:
@@ -406,13 +406,13 @@ def main(argv: list[str] | None = None) -> int:
                 note("hello ends demo mode for good until the next reset.")
                 session.hello(seed=args.seed or random_seed())
             return args.func(args, session)
-    except DeviceError as exc:
+    except DeviceRefusedTheCommand as exc:
         note(f"device refused it: {exc}")
         if exc.code == ErrorCode.NOT_READY and exc.context == "hello":
             note("       The device answers nothing but `hello` before a session exists.")
             note("       Add --hello to greet it first -- which ends demo mode until reset.")
         return 1
-    except Timeout as exc:
+    except NoReplyInTime as exc:
         note(f"timeout: {exc}")
         note("       Nothing was retried on purpose -- a silent retry would hide exactly")
         note("       the stall this is here to find. If the board is in demo mode it is")

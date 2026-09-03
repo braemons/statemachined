@@ -2,8 +2,8 @@
 
 > **Where this is going:** [`dev/DAEMON.md`](../dev/DAEMON.md) is the plan.
 > `src/statemachined/` now holds three layers: `device/` is the wire, `model/`
-> is a graph as a person authors it, and `compile.py` is the translation between
-> them. `cli.py` is still the bench instrument this directory started as, and
+> is a graph as a person authors it, and `graph_set_compiler.py` is the translation between
+> them. `command_line_interface.py` is still the bench instrument this directory started as, and
 > everything below is still true of it. `serve`, the supervisor, the API and the
 > web UI arrive at M4e–M4g.
 
@@ -13,7 +13,7 @@ waiting on printed in a shape somebody can paste into
 [`dev/HARDWARE.md`](../dev/HARDWARE.md).
 
 **The bench instrument is not the daemon**, and the split survives the move as a
-split between modules rather than between directories. `cli.py` sends one
+split between modules rather than between directories. `command_line_interface.py` sends one
 command and prints what came back; it knows nothing about paradigms, trials or
 graphs. Nothing that runs an experiment belongs in it.
 
@@ -23,7 +23,7 @@ The layers below it:
 |---|---|
 | `device/` | the wire, and only the wire. Framing, the session, the set upload, the result. Knows what an index is and never what a name is |
 | `model/` | a graph, a line map and a record as a *person* writes and reads them. Pydantic, because this is the boundary where a file somebody edited arrives and "refuse it, naming the field" is the whole job. Knows nothing about messages |
-| `compile.py` | the translation, and the only place that knows both. Names into indices, plus the check that the whole set fits the `caps` this board declared |
+| `graph_set_compiler.py` | the translation, and the only place that knows both. Names into indices, plus the check that the whole set fits the `caps` this board declared |
 
 That split is what the daemon exists for: the wire speaks indices because the
 device has 32 KB, a person speaks names, and neither should have to learn the
@@ -49,13 +49,13 @@ the Makefile installs there.
 | `socket://host:5000`, `rfc2217://host:5000` | any pyserial URL, spelled out |
 
 The protocol is lines of ASCII with a CRC, which is as true over TCP as over a
-tty, so the transport is one class (`link.py`) and nothing above it knows which
+tty, so the transport is one class (`serial_link.py`) and nothing above it knows which
 it got. The part that is *not* transport-independent is fail-safe: BRINGUP.md §6
 turns on `hal::link_up()` going false when a USB port closes, and a device on a
 switch has to decide for itself what a dead peer looks like — a missed `ping`,
 most likely. That is a firmware question, not one this tool can answer.
 
-The pin labels in `board.py` are keyed by the `board` string in `hello_ack`. An
+The pin labels in `board_pin_labels.py` are keyed by the `board` string in `hello_ack`. An
 unknown board prints bare line numbers rather than somebody else's pinout.
 
 ## Commands
@@ -103,7 +103,7 @@ make test-daemon        # among other things, checks they still fit the board
 A graph names states, lines and durations; nothing in it is an index, and
 nothing in it is specific to a board. What makes it runnable on a *particular*
 rig is the line map (which pin `lever_left` is) and that board's `caps` (whether
-the set fits), and both of those meet the graph in `compile.py` rather than in
+the set fits), and both of those meet the graph in `graph_set_compiler.py` rather than in
 the file.
 
 ## The hardware test suite
@@ -123,18 +123,18 @@ is a target people learn to ignore.
 
 | File | What only a board can answer |
 |---|---|
-| `test_session.py` | `scan_hz` against the 10 kHz target; what the greeting declares |
+| `test_session_and_greeting.py` | `scan_hz` against the 10 kHz target; what the greeting declares |
 | `test_framing.py` | a corrupt line, an over-long one, a resend — against real silicon and a real buffer |
 | `test_trial.py` | a drawn 500 ms served to within 2 ms on the board's own clock; a result arriving whole from the ISR |
 | `test_scan_health.py` | what a command costs the scan, as a regression test on the ISR handoff |
-| `test_lines.py` | predicates over several real pins — **needs three jumper wires** |
+| `test_line_predicates.py` | predicates over several real pins — **needs three jumper wires** |
 
 The graph upload and the result reassembly this suite needs used to live in
-`harness.py`, with a note that they were the bridge's job and should move when
-`bridge/` existed. They have: they are `device/upload.py` and `device/result.py`,
+`hardware_test_harness.py`, with a note that they were the bridge's job and should move when
+`bridge/` existed. They have: they are `device/graph_set_upload.py` and `device/trial_result_reassembly.py`,
 and the suite imports them. So it now tests the daemon's own codec against real
 hardware rather than a copy of it, which is the whole reason M4a went first.
-What is left in `harness.py` is what is genuinely test-only — raw-line access,
+What is left in `hardware_test_harness.py` is what is genuinely test-only — raw-line access,
 deliberate refusals, and the enums a bench instrument has no use for.
 
 ### The loopback harness
@@ -162,13 +162,13 @@ those seven skip and name the wires.
 
 ## Framing
 
-`device/wire.py` is the **third** implementation of the framing in this
+`device/message_framing.py` is the **third** implementation of the framing in this
 repository, after the firmware's and the emulator tests'. Until M4a it was not:
 it imported `emulation/tests/statemachined_protocol.py`, on the grounds that a
 third copy would not add a third opinion, only somewhere for the rules to drift.
 
 An installed package cannot do that — a `.deb` has no `emulation/` directory —
-so the rules are written out, and `tests/unit/test_wire.py` is what replaces the
+so the rules are written out, and `tests/unit/test_message_framing.py` is what replaces the
 guarantee: a fixed set of lines with known CRCs, checked against both Python
 implementations in one run, and against a third set of bytes generated on the
 spot so the agreement is not just about five memorised lines. The CRCs in

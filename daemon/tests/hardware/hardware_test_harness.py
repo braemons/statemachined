@@ -2,7 +2,7 @@
 """What the hardware tests need beyond the daemon's own modules.
 
 The graph upload and the result reassembly that used to live here are now
-`statemachined.device.upload` and `.result`, and this suite imports them --
+`statemachined.device.graph_set_upload` and `.result`, and this suite imports them --
 which is the whole point of the move: these tests now check the daemon's codec
 against real hardware instead of a copy of it. What is left here is what is
 genuinely test-only: raw-line access, deliberate refusals, and the enums a
@@ -14,14 +14,14 @@ from __future__ import annotations
 import time
 from enum import IntEnum
 
-from statemachined.device.link import Link
-from statemachined.device.messages import Field, MsgType
-from statemachined.device.result import Result, Visit, read_result  # noqa: F401  re-exported
-from statemachined.device.session import Session
-from statemachined.device.upload import GraphUpload  # noqa: F401  re-exported
-from statemachined.device.wire import (  # noqa: F401  re-exported
+from statemachined.device.serial_link import SerialLink
+from statemachined.device.message_vocabulary import Field, MsgType
+from statemachined.device.trial_result_reassembly import ReassembledTrialResult, StateVisitRow, read_trial_result  # noqa: F401  re-exported
+from statemachined.device.request_response_session import RequestResponseSession
+from statemachined.device.graph_set_upload import SingleGraphSetUploader  # noqa: F401  re-exported
+from statemachined.device.message_framing import (  # noqa: F401  re-exported
     CRC_INIT,
-    DeviceError,
+    DeviceRefusedTheCommand,
     covered_bytes,
     parse_reply,
 )
@@ -43,7 +43,7 @@ class LinkState(IntEnum):
 class Outcome(IntEnum):
     """`result_begin.outcome`, mirroring TrialOutcome in firmware/core/trial/trial.h.
 
-    Here rather than in `statemachined.device.messages` because the CLI has no
+    Here rather than in `statemachined.device.message_vocabulary` because the CLI has no
     use for it: a bench instrument reads pins and scan health, and the moment it
     starts interpreting how a trial ended it has become the bridge. The tests
     need the names, so the tests keep them.
@@ -68,14 +68,14 @@ class CancelReason(IntEnum):
 class Device:
     """One greeted board, with the reads the tests need.
 
-    Wraps `Session` rather than replacing it: the request/reply rules, the
+    Wraps `RequestResponseSession` rather than replacing it: the request/reply rules, the
     unsolicited routing and the no-retry policy are the CLI's and are not
     re-decided here. What this adds is the ability to see *raw lines*, which
-    `Session` hides -- a result's rolling checksum is over bytes, so a test
+    `RequestResponseSession` hides -- a result's rolling checksum is over bytes, so a test
     that only saw parsed dicts could not check it.
     """
 
-    def __init__(self, link: Link, session: Session):
+    def __init__(self, link: SerialLink, session: RequestResponseSession):
         self.link = link
         self.session = session
         #: Unsolicited messages that arrived while waiting for a reply. Kept
@@ -94,7 +94,7 @@ class Device:
     def state(self, timeout: float = 5.0) -> dict:
         return self.session.state(timeout=timeout)
 
-    def refuse(self, msg_type: MsgType, timeout: float = 5.0, **fields) -> DeviceError:
+    def refuse(self, msg_type: MsgType, timeout: float = 5.0, **fields) -> DeviceRefusedTheCommand:
         """Send a command that must be refused, and return the refusal.
 
         A command that is *answered* fails the test here rather than three
@@ -104,7 +104,7 @@ class Device:
         """
         try:
             reply = self.request(msg_type, timeout=timeout, **fields)
-        except DeviceError as exc:
+        except DeviceRefusedTheCommand as exc:
             return exc
         raise AssertionError(f"{msg_type} was accepted, not refused: {reply}")
 
@@ -136,7 +136,7 @@ class Device:
 
         For lines the device could not attribute to a `message_id` -- a bad
         CRC, an over-long line -- which it answers with an `error` carrying no
-        `in_reply_to` at all (PROTOCOL.md §5). `Session.request` cannot be used
+        `in_reply_to` at all (PROTOCOL.md §5). `RequestResponseSession.request` cannot be used
         for those, since there is no id to match on.
         """
         deadline = time.monotonic() + timeout

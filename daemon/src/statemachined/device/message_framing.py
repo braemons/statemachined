@@ -10,7 +10,7 @@ imported the test's copy rather than adding a third opinion.
 
 An installed package cannot do that: a .deb has no emulation/ directory, and a
 daemon that only runs from a checkout is not a daemon. So the rules are written
-out here, and what keeps the three honest is tests/unit/test_wire.py: a fixed
+out here, and what keeps the three honest is tests/unit/test_message_framing.py: a fixed
 set of lines with known CRCs, asserted against this module *and* against
 emulation/tests/statemachined_protocol.py in the same run. A drift between the
 two now fails a host-only test in `make ci` rather than a hardware suite
@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 
-from .messages import Field
+from .message_vocabulary import Field
 
 #: Both rolling checksums in this protocol -- the graph upload's and the
 #: result's -- start here and fold the CRC-covered bytes of each line in order.
@@ -83,7 +83,7 @@ def rolling_checksum(lines: list[str], seed: int = CRC_INIT) -> int:
     return crc
 
 
-class WireError(Exception):
+class FramingError(Exception):
     """A line came back that is not a message: bad CRC, bad JSON, non-ASCII."""
 
 
@@ -115,22 +115,22 @@ def parse_reply(line: str) -> dict:
     """
     line = line.strip()
     if not line.isascii():
-        raise WireError("line contains a byte >= 0x80, which is a framing error")
+        raise FramingError("line contains a byte >= 0x80, which is a framing error")
     marker = ',"crc":"'
     at = line.rfind(marker)
     if at < 0 or not line.endswith('"}'):
-        raise WireError(f"no trailing crc member: {line!r}")
+        raise FramingError(f"no trailing crc member: {line!r}")
     claimed = line[at + len(marker) : -2]
     actual = f"{crc16_ccitt(line[:at].encode('ascii')):04X}"
     if claimed.upper() != actual:
-        raise WireError(f"crc mismatch: line says {claimed}, bytes say {actual}")
+        raise FramingError(f"crc mismatch: line says {claimed}, bytes say {actual}")
     try:
         return json.loads(line)
     except ValueError as exc:
-        raise WireError(f"crc was good but the line is not JSON: {exc}") from exc
+        raise FramingError(f"crc was good but the line is not JSON: {exc}") from exc
 
 
-class DeviceError(Exception):
+class DeviceRefusedTheCommand(Exception):
     """The device refused a command, which is a normal outcome and not a bug.
 
     Every refusal names what to change (PROTOCOL.md §5), so the `context` is

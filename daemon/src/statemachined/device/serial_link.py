@@ -44,7 +44,7 @@ def to_url(target: str) -> str:
     return target
 
 
-class Link:
+class SerialLink:
     """A line channel to exactly one device."""
 
     def __init__(
@@ -88,7 +88,7 @@ class Link:
     def close(self) -> None:
         self._port.close()
 
-    def __enter__(self) -> "Link":
+    def __enter__(self) -> "SerialLink":
         return self
 
     def __exit__(self, *exc) -> None:

@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.scripts]
-statemachined = "statemachined.cli:main"
+statemachined = "statemachined.command_line_interface:main"
 
 # pytest is a dependency of the test suites, not of the package, so it lives in
 # a group rather than in `dependencies`: `uv run --project` installs it for

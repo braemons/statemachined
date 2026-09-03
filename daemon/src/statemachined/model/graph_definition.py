@@ -2,7 +2,7 @@
 """A graph as somebody writes it down: states with names, lines with names.
 
 This is the authored form -- what lives in /var/lib/statemachined/graphs/, what
-the web UI edits, and what `statemachined.compile` turns into the indices
+the web UI edits, and what `statemachined.graph_set_compiler` turns into the indices
 dev/PROTOCOL.md 3.2 puts on the wire. Nothing here has an index in it, and that
 is the point: an index is a fact about one device's pools, and a paradigm should
 outlive the board it was first run on.
@@ -22,7 +22,7 @@ The shape of a graph is the firmware's, one level up:
 What this refuses is a graph that could not be run: an unknown state name, a
 terminal state with a timeout leading out of it, a pulse with no width. What it
 cannot refuse is a graph too big for a particular board -- that needs the
-device's `caps`, so it lives in `statemachined.compile`.
+device's `caps`, so it lives in `statemachined.graph_set_compiler`.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .outcome import DECLARABLE_TERMINAL_OUTCOMES
+from .trial_outcome import DECLARABLE_TERMINAL_OUTCOMES
 
 # ------------------------------------------------------------ durations ---
 
@@ -269,7 +269,7 @@ class GraphDefinition(BaseModel):
     """A whole paradigm, as authored.
 
     Everything checkable without a device is checked here. What is left for
-    `statemachined.compile` is everything that needs one: whether the line names
+    `statemachined.graph_set_compiler` is everything that needs one: whether the line names
     exist on this rig, and whether the whole set fits this board's pools.
     """
 

@@ -11,7 +11,7 @@ not there at all.
 Three consequences of "one real device" are worth stating, because they shape
 every file here:
 
-* **Session scope, not function scope.** A `hello` costs a round trip and, on a
+* **RequestResponseSession scope, not function scope.** A `hello` costs a round trip and, on a
   bench board, ends demo mode for good; doing it per test would say nothing new
   twenty times. The greeting happens once and the tests share it.
 * **Tests must not leave a trial running.** The device refuses a graph upload
@@ -28,12 +28,12 @@ from __future__ import annotations
 
 import pytest
 import serial
-from statemachined.device.link import DEFAULT_BAUD, DEFAULT_TARGET, Link
-from statemachined.device.messages import Field, MsgType
-from statemachined.device.session import Session, Timeout, random_seed
-from statemachined.device.wire import DeviceError
+from statemachined.device.serial_link import DEFAULT_BAUD, DEFAULT_TARGET, SerialLink
+from statemachined.device.message_vocabulary import Field, MsgType
+from statemachined.device.request_response_session import RequestResponseSession, NoReplyInTime, random_seed
+from statemachined.device.message_framing import DeviceRefusedTheCommand
 
-from harness import Device, GraphUpload, LinkState
+from hardware_test_harness import Device, SingleGraphSetUploader, LinkState
 
 #: dev/PLAN.md M3, and what dev/BRINGUP.md §4 is waiting on.
 SCAN_HZ_TARGET = 10_000
@@ -66,7 +66,7 @@ def target(pytestconfig) -> str:
 
 
 @pytest.fixture(scope="session")
-def link(pytestconfig, target) -> Link:
+def link(pytestconfig, target) -> SerialLink:
     """The one open port, for the whole run.
 
     A device that is not there ends the run rather than failing every test in
@@ -74,7 +74,7 @@ def link(pytestconfig, target) -> Link:
     sentence that says what to do about it.
     """
     try:
-        link = Link(
+        link = SerialLink(
             target,
             baud=pytestconfig.getoption("--baud"),
             timeout=pytestconfig.getoption("--read-timeout"),
@@ -97,18 +97,18 @@ def link(pytestconfig, target) -> Link:
 
 @pytest.fixture(scope="session")
 def board(link) -> Device:
-    """The one `Session` for the whole run, greeted or not.
+    """The one `RequestResponseSession` for the whole run, greeted or not.
 
     There is exactly one, and that is load-bearing rather than tidy. The device
     keeps a one-deep duplicate-command guard keyed on `message_id`, so a second
-    `Session` on the same link -- with its own counter, also starting at 1 --
+    `RequestResponseSession` on the same link -- with its own counter, also starting at 1 --
     does not merely renumber things: its first command is read as a *resend* of
     the first session's, and answered from the cache. That is the guard working
     exactly as PROTOCOL.md §1.2 specifies, and it cost an afternoon here, where
     a probe and a greeting each opened their own session and `hello` came back
     as the probe's `state_report`.
     """
-    return Device(link, Session(link))
+    return Device(link, RequestResponseSession(link))
 
 
 @pytest.fixture(scope="session")
@@ -123,9 +123,9 @@ def pre_hello_probe(board) -> dict | None:
     """
     try:
         board.state(timeout=3.0)
-    except DeviceError as exc:
+    except DeviceRefusedTheCommand as exc:
         return {"code": exc.code, "context": exc.context, "message": exc.message}
-    except Timeout:
+    except NoReplyInTime:
         return None
     return None
 
@@ -137,7 +137,7 @@ def greeted(board, pre_hello_probe) -> Device:
     seed = random_seed()
     try:
         ack = device.session.hello(seed=seed, timeout=5.0)
-    except (Timeout, DeviceError) as exc:
+    except (NoReplyInTime, DeviceRefusedTheCommand) as exc:
         pytest.exit(f"the board did not answer hello: {exc}", returncode=2)
     device.seed = seed
     device.ack = ack
@@ -164,7 +164,7 @@ def device(greeted) -> Device:
     greeted.settle(0.1)
     try:
         report = greeted.state()
-    except (Timeout, DeviceError):
+    except (NoReplyInTime, DeviceRefusedTheCommand):
         return  # the test itself will have failed; nothing to add here
 
     link_state = report.get("link_state")
@@ -173,7 +173,7 @@ def device(greeted) -> Device:
         try:
             greeted.request(MsgType.CANCEL, trial_id=trial_id)
             greeted.settle(0.5)  # the result burst a cancel produces
-        except (Timeout, DeviceError):
+        except (NoReplyInTime, DeviceRefusedTheCommand):
             pass
         pytest.fail(
             f"this test left trial {trial_id} running. It has been cancelled so the rest "
@@ -195,7 +195,7 @@ def two_state_graph(device):
     is the smallest thing that puts a real duration on a real clock and drives
     a real pin, which is the only part the host suite cannot reach.
     """
-    graph = GraphUpload(device.session, version=1)
+    graph = SingleGraphSetUploader(device.session, version=1)
     graph.begin(n_states=2, entry=0)
     graph.dist(0, kind="fixed", a=500)
     graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})
@@ -222,7 +222,7 @@ def loopback(greeted) -> dict[int, int]:
     from test_lines import LOOPBACK
 
     device = greeted
-    graph = GraphUpload(device.session, version=99)
+    graph = SingleGraphSetUploader(device.session, version=99)
     graph.begin(n_states=2, entry=0)
     graph.dist(0, kind="fixed", a=250)
     graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})

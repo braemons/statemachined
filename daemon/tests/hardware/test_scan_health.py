@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import time
 
-from statemachined.device.messages import MsgType
+from statemachined.device.message_vocabulary import MsgType
 
 #: Commands per measurement. Enough that a per-command figure is not dominated
 #: by the two `state` reads that bracket it.

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """A graph set, sent message by message, with the rolling checksum kept.
 
-Was tests/hardware/harness.py, which said of it: *"Both are things the bridge
+Was tests/hardware/hardware_test_harness.py, which said of it: *"Both are things the bridge
 does, not things a bench instrument does… they stay in the tests"* -- and
 daemon/README.md, that anything which starts to look like it is running an
 experiment belongs in the bridge. The bridge is this package now, so it does.
@@ -21,19 +21,19 @@ the device folded the same ones.
 
 from __future__ import annotations
 
-from .messages import MsgType
-from .session import Session
-from .wire import CRC_INIT, command_line, covered_bytes, crc16_ccitt
+from .message_vocabulary import MsgType
+from .request_response_session import RequestResponseSession
+from .message_framing import CRC_INIT, command_line, covered_bytes, crc16_ccitt
 
 
 def send_compiled_upload_messages(
-    session: Session,
+    session: RequestResponseSession,
     upload_messages: list,
     timeout: float = 5.0,
 ) -> dict:
     """Put a compiled set on the wire and return the `set_ok`.
 
-    `upload_messages` is what `statemachined.compile` produced: an ordered list
+    `upload_messages` is what `statemachined.graph_set_compiler` produced: an ordered list
     of `(msg_type, fields)` from `set_begin` to `set_end`, with `set_end`'s
     `checksum` left out because it is over bytes that did not exist yet.
 
@@ -62,7 +62,7 @@ def send_compiled_upload_messages(
     return reply
 
 
-class SetUpload:
+class GraphSetUploader:
     """One `set_begin` … `set_end`, against one greeted device.
 
     Counts are counted rather than passed in, because a caller that has to state
@@ -70,7 +70,7 @@ class SetUpload:
     the firmware.
     """
 
-    def __init__(self, session: Session, version: int = 1, n_graphs: int = 1,
+    def __init__(self, session: RequestResponseSession, version: int = 1, n_graphs: int = 1,
                  timeout: float = 5.0):
         self.session = session
         self.version = version
@@ -164,7 +164,7 @@ class SetUpload:
         )
 
 
-class GraphUpload:
+class SingleGraphSetUploader:
     """A set of exactly one graph.
 
     What a bench session, a demo and most of the hardware suite want: they have
@@ -173,8 +173,8 @@ class GraphUpload:
     multi-graph session's uploader produces.
     """
 
-    def __init__(self, session: Session, version: int = 1, timeout: float = 5.0):
-        self.set = SetUpload(session, version=version, n_graphs=1, timeout=timeout)
+    def __init__(self, session: RequestResponseSession, version: int = 1, timeout: float = 5.0):
+        self.set = GraphSetUploader(session, version=version, n_graphs=1, timeout=timeout)
 
     @property
     def version(self) -> int:

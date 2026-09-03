@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from statemachined.model.lines import LineMap
+from statemachined.model.line_map import LineMap
 
 
 def rig_line_map() -> LineMap:

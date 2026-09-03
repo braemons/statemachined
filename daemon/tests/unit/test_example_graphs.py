@@ -19,9 +19,9 @@ from pathlib import Path
 
 import pytest
 
-from statemachined.compile import DeviceCapabilities, compile_graph_set_for_device
-from statemachined.model.graph import GraphDefinition
-from statemachined.model.lines import LineMap
+from statemachined.graph_set_compiler import DeviceCapabilities, compile_graph_set_for_device
+from statemachined.model.graph_definition import GraphDefinition
+from statemachined.model.line_map import LineMap
 
 EXAMPLE_GRAPH_DIRECTORY = Path(__file__).resolve().parents[3] / "graphs"
 EXAMPLE_GRAPH_NAMES = ["go-nogo", "two-alternative-forced-choice"]

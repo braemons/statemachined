@@ -13,7 +13,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from statemachined.model.graph import (
+from statemachined.model.graph_definition import (
     ChoiceDuration,
     GraphDefinition,
     OutputActionSpecification,
