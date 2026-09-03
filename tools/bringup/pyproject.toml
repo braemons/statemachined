@@ -19,6 +19,25 @@ dependencies = [
 [project.scripts]
 statemachined-bringup = "statemachined_bringup.cli:main"
 
+# pytest is a dependency of the hardware suite, not of the CLI, so it lives in
+# a group rather than in `dependencies`: `uv run --project` installs it for
+# `make test-hardware` and leaves it out of anything that just wants to talk to
+# a board.
+[dependency-groups]
+test = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+# The suite is under tests/hardware and needs a board; there is deliberately no
+# host-only test directory here, because the CLI's framing comes from
+# emulation/tests/ and is tested there.
+testpaths = ["tests/hardware"]
+markers = [
+    "loopback: needs output-to-input jumper wires; see tests/hardware/test_lines.py",
+]
+# One device, one order. Without this, a plugin that reorders or parallelises
+# would have several tests arming the same board at once.
+addopts = "-p no:randomly"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

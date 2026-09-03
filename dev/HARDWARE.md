@@ -185,6 +185,12 @@ foreground holds the engine to parse a command and build its reply, and nothing
 else. It is bounded by our own code rather than by the USB stack's behaviour,
 which is the property worth having.
 
+These numbers are also a test now, rather than only a record: `make test-hardware`
+budgets a ping at 8 periods and a `state_report` at 20, against the 3.0 and 9.1
+measured here. Reverting the handoff fails it on the first assertion, which is
+the point — a measurement written down once is a measurement that quietly stops
+being true.
+
 ### Trial timing — measured 2026-09-03
 
 A two-state graph uploaded over the link, `wait --(500 ms)--> Hit`, raising line

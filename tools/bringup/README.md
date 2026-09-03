@@ -68,6 +68,59 @@ uv run --project tools/bringup statemachined-bringup --hello state
 Nothing is ever retried. The protocol makes a blind resend safe, but a silent
 retry would hide exactly the stall §5 is measuring.
 
+## The hardware test suite
+
+`tests/hardware/` is the automated half of BRINGUP.md §4 and §5 — everything
+those sections ask a person to read off the screen, asserted instead.
+
+```sh
+make test-hardware                        # TARGET=... for a board elsewhere
+make test-hardware ARGS="-k trial -v"     # ARGS goes straight to pytest
+```
+
+Connect a board and run it; there is no other setup. It greets the device once
+— **which ends demo mode** — and takes about 40 seconds. It is deliberately not
+part of `make ci`, because a target that fails on every machine without a board
+is a target people learn to ignore.
+
+| File | What only a board can answer |
+|---|---|
+| `test_session.py` | `scan_hz` against the 10 kHz target; what the greeting declares |
+| `test_framing.py` | a corrupt line, an over-long one, a resend — against real silicon and a real buffer |
+| `test_trial.py` | a drawn 500 ms served to within 2 ms on the board's own clock; a result arriving whole from the ISR |
+| `test_scan_health.py` | what a command costs the scan, as a regression test on the ISR handoff |
+| `test_lines.py` | predicates over several real pins — **needs three jumper wires** |
+
+The tests share `Session` and its framing with the CLI, and add two things in
+`harness.py` that a bench instrument has no business having: a graph upload and
+a result reassembled against its rolling checksum. Both are the *bridge's* job
+by the rule at the top of this file, and both should move there when `bridge/`
+exists — at which point this suite tests the bridge's codec against real
+hardware, which is strictly better than testing a copy of it.
+
+### The loopback harness
+
+Nothing in this repository drives a *predicate* from real pins. The host suite
+covers the three masks thoroughly and Renode checks that an input pin arrives as
+the right line number, but both hardware trials — Renode's and this suite's —
+end on a timeout. Three jumper wires close that gap, by letting the board drive
+its own inputs through a graph's entry actions:
+
+| | | |
+|---|---|---|
+| **D10** → **D6** | output 0 → input 4 | |
+| **D11** → **D7** | output 1 → input 5 | `all` over two lines, `any`, `none` |
+| **D12** → **D8** | output 2 → input 6 | the rising-edge rule, and `level` |
+
+Inputs 4–6 rather than 0–2 because BRINGUP.md §2 wires the demo's switches as a
+contact to **5 V**, and a jumper driving one of those pins would fight the switch
+when it closed. As it stands the demo wiring and this harness share a board.
+
+The wires are probed, not declared — a flag saying "the harness is attached"
+would one day be passed against a board with a wire hanging loose, and the tests
+would then read as though the firmware could not see its inputs. Without them,
+those seven skip and name the wires.
+
 ## Framing
 
 Shared with the emulator tests (`emulation/tests/statemachined_protocol.py`)

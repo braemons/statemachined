@@ -206,6 +206,51 @@ wait for the wire because the outbound queue was full.
 
 ---
 
+## 5a. The same checks, automated
+
+Everything from §4 and §5 that does not need a person's eyes is a test suite:
+
+```sh
+make test-hardware                      # or TARGET=host:5000, as above
+```
+
+Connect the board and run it. It greets the device once — **which ends demo
+mode**, as §4 says — and then asserts what the sections above ask you to read:
+`scan_hz` against the 10 kHz target, what a command costs the scan, a drawn
+duration against the board's own clock, the framing rules against lines a
+well-behaved host would never send, and a whole trial's result arriving intact
+while the scan runs in the timer ISR.
+
+It is **not** part of `make ci`. A target that fails on every machine without a
+board attached is a target people learn to ignore.
+
+What it cannot do without three jumper wires is drive the board's *inputs*.
+Add them and seven more tests run — the ones that fire a transition from a
+predicate over several lines, which is otherwise the one part of the engine no
+test in this repository exercises on real silicon:
+
+| From | To | Drives |
+|---|---|---|
+| **D10** (output 0) | **D6** (input 4) | |
+| **D11** (output 1) | **D7** (input 5) | `all` over two lines, `any`, `none` |
+| **D12** (output 2) | **D8** (input 6) | the rising-edge rule, and `level` |
+
+The board then drives its own inputs through a graph's entry actions, one scan
+later, which is how "both levers released and pressed again within the same
+millisecond" becomes something a test can do. Without the wires those seven skip
+and say so; nothing else changes.
+
+**The inputs are D6–D8 and not D2–D5 on purpose.** §2 wires the switches as a
+contact to **5 V**, so a jumper driving one of those pins would be fighting the
+switch every time somebody pressed it — an output pin pulling low against 5 V
+through a closed contact. Inputs 4–6 are untouched by §2, so the demo wiring and
+the loopback harness can sit on the same board. Sharing the *output* pins is
+fine: a pin can drive an LED and a jumper at once.
+
+A run takes about 40 seconds and leaves the device idle.
+
+---
+
 ## 6. Fail-safe, physically
 
 With a trial in flight, **pull the USB cable.** On the USB CDC build
