@@ -549,10 +549,27 @@ An Arduino cannot POST to triald, and triald deliberately shed the hardware link
 retry, the CRC, reconnection, and turning a device `result` into an
 `OutcomeReport`.
 
-It is the natural place for the fields statemachined cannot know: `precise_fixation` comes
-from the eye monitor and `frame_loss` from vstimd, and both can veto acceptance
-on their own. The bridge merges them into the report, or leaves them at their
-defaults on a rig without them.
+**It is not where the veto fields are merged.** `precise_fixation` from the eye
+monitor and `frame_loss` from vstimd can each veto acceptance on their own, and
+an earlier draft of this section had the bridge collecting them. That was wrong,
+and for a reason this document states two sections earlier: deciding whether an
+outcome was *accepted* is triald's authority, not the translator's. A bridge
+that applied a veto would be a second decision authority.
+
+triald collects them instead. It starts and ends trials, so it is the only
+process that knows the window to ask about, and it already talks to vstimd and
+the eye monitor — whereas a merging bridge would grow a client per daemon and,
+worse, have to be told which of them this particular rig has. "Leaves them at
+their defaults on a rig without them" is rig topology, and it does not belong in
+a process whose whole job is one device and one protocol.
+
+What this makes load-bearing is the **clock**. The device timestamps in its own
+microseconds; `PROTOCOL.md` §6 leaves correlating that with the host clock to the bridge,
+which is right — the bridge is what can see the link's round-trip behaviour. But
+it is no longer a convenience for reading logs: triald can only ask vstimd
+"was there frame loss during trial 42" if trial 42's window arrives in a clock
+vstimd shares. Hand over raw device microseconds and the question cannot be
+asked at all, so the veto data can never be aligned.
 
 ### Fitting on 32 KB
 
