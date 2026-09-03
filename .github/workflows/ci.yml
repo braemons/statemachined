@@ -61,15 +61,15 @@ jobs:
         env: [uno_r4_minima]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      # uv, not the runner's system Python: the Makefile's install targets shell
+      # out to `uv tool install`, and this puts uv (and its tool shims) on PATH.
+      - uses: astral-sh/setup-uv@v6
       - name: Cache PlatformIO
         uses: actions/cache@v4
         with:
           path: |
             ~/.platformio
-            ~/.cache/pip
+            ~/.cache/uv
           key: pio-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
       - run: make install-pio
       - run: make firmware BOARD=${{ matrix.env }}
@@ -85,15 +85,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
       - name: Cache PlatformIO
         uses: actions/cache@v4
         with:
           path: |
             ~/.platformio
-            ~/.cache/pip
+            ~/.cache/uv
           key: pio-uno_r4_minima-${{ hashFiles('platformio.ini') }}
       - run: make install-pio
       # Builds the bench and rig images and writes image/MANIFEST.txt, which
@@ -113,15 +111,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
       - name: Cache PlatformIO
         uses: actions/cache@v4
         with:
           path: |
             ~/.platformio
-            ~/.cache/pip
+            ~/.cache/uv
           key: pio-uno_r4_minima_sci-${{ hashFiles('platformio.ini') }}
       - run: make install-pio
       # Renode's version is pinned in the Makefile: the Robot keyword library
@@ -147,9 +143,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
       # The version is pinned in the Makefile, which also refuses to run
       # against any other, so the two cannot drift apart.
       - run: make install-clang-format

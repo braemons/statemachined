@@ -124,7 +124,7 @@ gets no reply. Use the repository's own framing helper — the same one CI drive
 the emulated board with:
 
 ```sh
-pip install pyserial
+uv pip install --system --break-system-packages pyserial
 ```
 
 ```python

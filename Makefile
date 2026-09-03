@@ -71,7 +71,8 @@ upload:                     ## flash the reference board
 # Pinned to match .github/workflows/ci.yml. clang-format's output changes
 # between major versions, and `BasedOnStyle: Google` in .clang-format resolves
 # against whichever version is running, so an unpinned one reformats files CI
-# then rejects. Install it from pip, not from a package manager.
+# then rejects. Install it with uv (see install-clang-format), not from a
+# package manager.
 CLANG_FORMAT      ?= clang-format
 CLANG_FORMAT_PIN  := 23.1.0
 
@@ -109,14 +110,21 @@ format-check: check-clang-format  ## verify formatting the way CI does, changing
 # CI calls these instead of carrying its own copy of each version. A pin
 # written down twice is a pin that drifts, and the failure mode is a CI job
 # rejecting output no contributor can reproduce.
+#
+# The Python tools go in via `uv tool install`, not the system pip: uv gives
+# each one its own isolated environment with a shim on PATH, so this works the
+# same on a PEP-668 "externally managed" distro as in CI, and touches nothing
+# apt owns. Pinned to the same versions .devcontainer/Dockerfile bakes in.
+
+PLATFORMIO_PIN := 6.1.16
 
 .PHONY: install-pio
 install-pio:                ## PlatformIO, for the board and emulation builds
-	pip install platformio
+	uv tool install platformio==$(PLATFORMIO_PIN)
 
 .PHONY: install-clang-format
-install-clang-format:       ## the pinned clang-format, from pip not the distro
-	pip install clang-format==$(CLANG_FORMAT_PIN)
+install-clang-format:       ## the pinned clang-format, via uv not the distro
+	uv tool install clang-format==$(CLANG_FORMAT_PIN)
 
 # The Robot keyword library ships inside Renode, so a different Renode is a
 # different set of keywords. Pinned to the devcontainer's version.
@@ -128,7 +136,9 @@ install-renode:             ## the pinned Renode, portable, into /opt/renode
 	mkdir -p /opt/renode
 	sudo tar xzf /tmp/renode.tar.gz -C /opt/renode --strip-components=1
 	sudo ln -sf /opt/renode/renode-test /usr/local/bin/renode-test
-	pip install -r /opt/renode/tests/requirements.txt
+	# renode-test drives Robot Framework from whichever python3 is on PATH, so
+	# these have to land there rather than in a uv-tool sandbox.
+	uv pip install --system --break-system-packages -r /opt/renode/tests/requirements.txt
 
 # --------------------------------------------------------------------------
 # A flashable image
