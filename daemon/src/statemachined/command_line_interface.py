@@ -327,6 +327,7 @@ def cmd_serve(args) -> int:
 
     from .api.application import create_application
     from .daemon_configuration import DEFAULT_CONFIGURATION_PATH, DaemonConfiguration
+    from .mdns_service_advertisement import MdnsServiceAdvertisement
 
     configuration = DaemonConfiguration.load_from_toml_file(
         Path(args.config) if args.config else DEFAULT_CONFIGURATION_PATH
@@ -336,9 +337,24 @@ def cmd_serve(args) -> int:
     if args.target_was_given:
         configuration.device_target = args.target
 
+    # A console discovers a rig rather than being hand-configured with URLs,
+    # which is what a Pi whose hostname is generated at boot needs. Off with
+    # --no-mdns for a bench box that should not appear in somebody's console.
+    advertisement = (
+        None
+        if args.no_mdns
+        else MdnsServiceAdvertisement(
+            port=args.port,
+            device_target=configuration.device_target,
+            version=__version__,
+            report=note,
+        )
+    )
+
     note(f"statemachined serving on {args.host}:{args.port}, device {configuration.device_target}")
+    note(f"           web UI  http://{args.host}:{args.port}/")
     uvicorn.run(
-        create_application(configuration),
+        create_application(configuration, advertisement=advertisement),
         host=args.host,
         port=args.port,
         log_level="warning",
@@ -434,6 +450,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="the TOML to read (default: /etc/braemons/statemachined.toml, and its "
         "absence means the built-in defaults)",
+    )
+    s.add_argument(
+        "--no-mdns",
+        action="store_true",
+        help="do not advertise _statemachined._tcp. The API and the web UI are unaffected; "
+        "a console will need this rig's address by hand",
     )
     s.set_defaults(func=cmd_serve)
 

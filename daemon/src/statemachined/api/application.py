@@ -15,20 +15,38 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from ..daemon_configuration import DaemonConfiguration
+from ..mdns_service_advertisement import MdnsServiceAdvertisement
 from . import configuration_routes, device_routes, graph_routes, state_and_trace_routes
-from . import trial_routes
+from . import trial_routes, web_user_interface_routes
 from .rig_service import RigService
 
 
-def create_application(configuration: DaemonConfiguration) -> FastAPI:
+def create_application(
+    configuration: DaemonConfiguration,
+    advertisement: MdnsServiceAdvertisement | None = None,
+) -> FastAPI:
+    """The whole surface: the API, the UI that uses only the API, and the record
+    that says this rig exists.
+
+    The mDNS advertisement is passed in rather than built here because only the
+    caller knows the port the server was actually told to listen on -- and a
+    record advertising a port nothing is listening on is worse than no record.
+    """
     service = RigService(configuration)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         service.start()
+        # After the service, and withdrawn before it stops: a console that finds
+        # a rig should find one that can answer. Advertising is never fatal --
+        # see mdns_service_advertisement.py -- so nothing here is guarded.
+        if advertisement is not None:
+            advertisement.start()
         try:
             yield
         finally:
+            if advertisement is not None:
+                advertisement.stop()
             service.stop()
 
     application = FastAPI(
@@ -55,6 +73,10 @@ def create_application(configuration: DaemonConfiguration) -> FastAPI:
     application.include_router(state_and_trace_routes.router)
     application.include_router(state_and_trace_routes.trace_router)
     application.include_router(configuration_routes.router)
+    # Last, because its `/ui/{path}` and `/elements/{path}` are the only
+    # catch-all routes in the app and a router that matched before them would be
+    # shadowed. Nothing here is a private route: the UI uses only what is above.
+    application.include_router(web_user_interface_routes.router)
 
     @application.get("/api/health", tags=["device"])
     def read_health() -> dict:

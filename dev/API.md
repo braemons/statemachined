@@ -376,3 +376,31 @@ whether to arm automatically on connect, `graph_mode` (DAEMON.md §3.2) and
 
 A `PATCH` that changes the device target reconnects; one that changes the line
 map pushes the wiring. Both are refused while a trial is armed.
+
+---
+
+## 9. The pages this daemon serves
+
+Not part of the API, and listed here because they share its origin and its CORS
+rules. dev/DAEMON.md §5 is the design.
+
+| | |
+|---|---|
+| `GET /` | the rig's own page: nav, and six panels |
+| `GET /ui/{path}` | that page's own shell assets. Not a contract; rearrange at will |
+| `GET /elements/{path}` | **a contract.** `/elements/statemachined.js` registers `<statemachined-device>`, `-lines`, `-graph`, `-session`, `-trace` and `-firmware`, each with a shadow root and a `base` attribute |
+
+**The UI uses only the API above.** There is no private route, which is what
+makes the page an honest test of this document rather than a second, friendlier
+interface to the same daemon — and it is checked rather than asserted:
+`tests/unit/test_web_user_interface_routes.py` fails if the UI names a path this
+daemon does not route.
+
+**Nothing under either prefix is cached.** One daemon serves the elements and
+the API they call, and that is what keeps them the same version; a browser
+holding yesterday's element against today's API would give the guarantee away
+for a few kilobytes.
+
+A path is refused unless it is a file the UI actually contains, with a suffix
+this daemon serves. It is the only place in the daemon that turns a URL into a
+filesystem path, and the daemon runs where a config file and a graph store are.

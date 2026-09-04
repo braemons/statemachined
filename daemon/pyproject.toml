@@ -30,6 +30,11 @@ dependencies = [
     "fastapi>=0.141.1",
     "uvicorn>=0.52.4",
     "httpx>=0.28.1",
+    # A console discovers a rig instead of being hand-configured with URLs --
+    # dev/DAEMON.md §5, and the same record vstimd already publishes. Imported
+    # lazily and never fatal: a daemon that cannot advertise still serves, and a
+    # rig with no mDNS on its network is a rig, not an error.
+    "zeroconf>=0.132",
 ]
 
 [project.scripts]

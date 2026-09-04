@@ -106,7 +106,20 @@ statemachined/
 │   │   ├── graph_store.py              graphs on disk under /var/lib/statemachined
 │   │   ├── triald_client.py            POST /api/trial/outcome
 │   │   ├── api/                        FastAPI routers — see §4
-│   │   └── web/                        index.html · app.js · style.css · elements/
+│   │   ├── mdns_service_advertisement.py  NEW: _statemachined._tcp, and the stable id
+│   │   └── web/                        the UI, as package data — see §5
+│   │       ├── index.html              the rig's own page
+│   │       ├── application_shell.js    nav, and nothing else
+│   │       ├── statemachined_user_interface.css   the page around the panels
+│   │       └── elements/               the public contract
+│   │           ├── statemachined.js            the entry point a console loads
+│   │           ├── daemon_api_client.js        the one place a network exists
+│   │           ├── base_panel_element.js       shadow root, polling, refusals
+│   │           ├── shared_panel_stylesheet.js  one sheet, adopted by every root
+│   │           ├── device_panel_element.js     ·  line_map_panel_element.js
+│   │           ├── graph_store_panel_element.js ·  graph_node_diagram.js
+│   │           ├── session_panel_element.js    ·  trace_panel_element.js
+│   │           └── firmware_panel_element.js
 │   └── tests/
 │       ├── unit/                 host-only. Runs in `make ci`
 │       ├── integration/          whole sessions against the native device
@@ -831,8 +844,8 @@ alongside vstimd is not a number worth optimising.
 
 Keeping the served copy in memory is what makes the rest of this section small.
 There is no "which file holds trial 193", no seek, no per-day file to select, no
-index. `?trial_id=` and `?since_seq=` are a scan of a deque, and the Trace view's
-tail is the deque's right end.
+index. `?trial_id=` and `?since_entry_number=` are a scan of a deque, and the
+Trace view's tail is the deque's right end.
 
 **Written as it arrives, not as it evicts.** The ring is volatile and a
 `systemctl restart` during a package upgrade must not silently cost the morning's
@@ -887,14 +900,20 @@ never pushes it and never assumes anybody read it.
 
 `WS /api/trace/stream` is the one stream that is **not coalesced**, unlike
 `/api/state`'s: coalescing a state snapshot loses nothing, coalescing a trace
-loses records. A client that cannot keep up gets its socket closed with the last
-`seq` it received and re-fetches from `?since_seq=` — served from the ring, and
-therefore only while the entry is still in it. A consumer slow enough to fall out
-of a 100 000-entry ring has genuinely lost data and must be **told so**, with the
-`seq` range that is gone, rather than handed a shorter answer that looks
-complete. That is the one place the ring's boundedness is visible from outside,
-and it is better than the alternative: buffering per client is how a monitoring
-aid becomes the thing that fills the Pi's memory.
+loses records. A client that cannot keep up gets its socket closed and re-fetches
+from `?since_entry_number=` — served from the ring, and therefore only while the
+entry is still in it. A consumer slow enough to fall out of a 100 000-entry ring
+has genuinely lost data and must be **told so**, with the range that is gone,
+rather than handed a shorter answer that looks complete. That is the one place
+the ring's boundedness is visible from outside, and it is better than the
+alternative: buffering per client is how a monitoring aid becomes the thing that
+fills the Pi's memory.
+
+**The cursor is the daemon's `entry_number`, not the device's `seq`** — this
+section said `seq` until M4f, and it could not have worked: `seq` counts visits
+within a *run* and restarts at zero every trial, so it cannot address a position
+in a log that spans a session. Both are carried in every entry, and `seq` is what
+a *dropped* visit is detected with, which is the job it can do.
 
 ---
 
@@ -902,18 +921,29 @@ aid becomes the thing that fills the Pi's memory.
 
 No build step, no framework, no CDN — triald's rule, and for its reason: a rig
 box may have no route to the internet and a browser in a booth must not wait on
-unpkg. Everything is `index.html`, `app.js`, `style.css` and `elements/`, served
-by the daemon as package data.
+unpkg. Everything is `index.html`, `application_shell.js`,
+`statemachined_user_interface.css` and `elements/`, served by the daemon as
+package data (`api/web_user_interface_routes.py`). The shell is at `/`, its own
+assets at `/ui/`, and the contract at `/elements/`; nothing is cached, because
+one daemon serving both the elements and the API they call is what keeps them
+the same version.
 
 **Every view is a custom element with a shadow root.** That is the one decision
 here that would be expensive to retrofit, and it costs nothing now:
 
 ```html
 <script type="module" src="http://rig.local:8081/elements/statemachined.js"></script>
-<statemachined-device base="http://rig.local:8081"></statemachined-device>
-<statemachined-lines  base="http://rig.local:8081"></statemachined-lines>
-<statemachined-graph  base="http://rig.local:8081" name="go-nogo"></statemachined-graph>
+<statemachined-device   base="http://rig.local:8081"></statemachined-device>
+<statemachined-lines    base="http://rig.local:8081"></statemachined-lines>
+<statemachined-graph    base="http://rig.local:8081" name="go-nogo"></statemachined-graph>
+<statemachined-session  base="http://rig.local:8081"></statemachined-session>
+<statemachined-trace    base="http://rig.local:8081" trial="193"></statemachined-trace>
+<statemachined-firmware base="http://rig.local:8081"></statemachined-firmware>
 ```
+
+Importing the entry point registers all six; importing one panel's module
+registers only that one, so a console that wants the trace and nothing else does
+not pay for the graph editor.
 
 Three consequences, each of them the point:
 
@@ -940,12 +970,33 @@ clients can match a device across name collisions"*. statemachined advertises
 being hand-configured with URLs — which matters on a Pi whose hostname is
 generated at boot.
 
+It is published by the daemon itself (`mdns_service_advertisement.py`, zeroconf)
+rather than by an Avahi service file, because the record carries the port the
+server was actually told to listen on and a `.tmpl` cannot know it. Three
+consequences worth writing down:
+
+- **`id=` is a hash of `/etc/machine-id`, not the machine-id.** It survives a
+  rename and a DHCP lease, differs on every box, and does not publish a value
+  that is meant to be treated as confidential. With no machine-id it falls back
+  to the hostname — weaker, and still better than something that changes every
+  restart, which would make a console show one rig as many.
+- **The TXT record is not an API.** `id`, `version`, `api`, `elements`,
+  `device`, `port` — enough to decide which rig and construct the elements URL
+  (from the record rather than from a convention, so a proxy does not break a
+  console). Everything else is one `GET /api/device` away, and duplicating it
+  here would give a browser two answers that disagree the moment a board is
+  unplugged.
+- **Advertising is never fatal, and never silent about it.** A daemon whose
+  Avahi is down still owns a device and still serves an API somebody can reach
+  by IP, so a failure is reported and swallowed. `--no-mdns` turns it off for a
+  bench box that should not appear in somebody's console.
+
 ### Views
 
 | | |
 |---|---|
 | **Device** | board, link health, firmware, and the live `in`/`out` bit rows — the thing `statemachined-bringup state` prints today, but named and updating |
-| **Lines** | the map. Rename, invert, enable, safe level, debounce. Shows which need a re-upload to take effect |
+| **Lines** | the map. Rename, invert, enable, safe level, debounce — and the live level of every line beside it, which is the only way to confirm from outside that a graph's line numbers reach the pins somebody wired. A rename is free and nothing is re-uploaded; the rest is the `wiring` command and is pushed on save |
 | **Graphs** | the store, and the editor: states, timeouts, terminal outcomes, actions, and a predicate editor where the three masks are checkboxes over *named* lines. An SVG node diagram rendered from the graph, read-only in v1 |
 | **Session** | the current trial, the state the machine is in, the last result's path |
 | **Trace** | the live tail of §4.6, one row per state visit, filterable by `trial_id`. The one view that is useful with nobody in the room, because it is still there in the morning |
@@ -1054,7 +1105,7 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 | **M4d** ✅ | `model/` and `graph_set_compiler.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4e** ✅ | `device/device_supervisor.py` and `device_clock_correlation.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks. It needed a host-side entry point for the firmware, which is now `firmware/native/statemachined_native_device.cpp`, and a `socket://` transport rather than the pty this row used to say — see §7's note |
 | **M4f** ✅ | FastAPI: device, lines, graphs, trial, config, state/stream, and the trace of §4.6; the triald client; `statemachined serve`. [`dev/API.md`](API.md) written first, the way `PROTOCOL.md` was. It found `patch`: documented on the wire since M2 and implemented nowhere, so a host that sent one got a silently unpatched trial — see below |
-| **M4g** | The web UI and the `/elements/` contract; mDNS |
+| **M4g** ✅ | The web UI and the `/elements/` contract; mDNS. Six elements, each with a shadow root and a `base` attribute, served as package data by `api/web_user_interface_routes.py`; the shell at `/`, the contract at `/elements/`. `mdns_service_advertisement.py` publishes `_statemachined._tcp` with vstimd's stable `id=`, hashed from `/etc/machine-id`, and never fatally. The UI's own tests are the compiler it does not have: every module it imports exists, every `/api/` path it calls is a route, every module parses, and the editor's outcome names are the ones the store accepts |
 | **M5** | Packaging: nfpm, systemd, sysusers, udev, logrotate, the builder containers, `release.yml`, one line in `packages/sources.txt`. **Installed on the Pi 5 alongside vstimd and triald** |
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
 | **M7** | **Data flash** (§3.4): the `hal.h` addition, the RA4M1 implementation, a file-backed `native.cpp` stand-in, the boot-time read, and `persist`. Deferred deliberately: the compile-time safe levels of §3.4 hold the fail-safe hole shut without it, and this is easier to build once a daemon exists to exercise it. Renode covers the HAL addition |
