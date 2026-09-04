@@ -18,9 +18,17 @@ export class FirmwarePanelElement extends BasePanelElement {
   renderShell() {
     this.failureSlot = this.make("div", { class: "failure-slot" });
     this.body = this.make("div", { text: "asking the board..." });
+    this.description = this.make("p", {
+      class: "muted",
+      text:
+        "What is running on the board, against what this package ships. Flashing is not " +
+        "offered here: it means dropping the port mid-session, which is a different risk " +
+        "from anything else this daemon does.",
+    });
     this.root.replaceChildren(
       this.make("section", {}, [
         this.make("h2", {}, [this.make("span", { text: "Firmware" })]),
+        this.description,
         this.failureSlot,
         this.body,
       ]),

@@ -43,6 +43,7 @@ ELEMENT_TAG_NAMES = [
     "statemachined-session",
     "statemachined-trace",
     "statemachined-firmware",
+    "statemachined-monitor",
 ]
 
 
@@ -126,6 +127,50 @@ def test_a_missing_asset_is_a_404_that_says_which(client: TestClient) -> None:
 
 
 # ------------------------------------------------ the UI against the API ---
+
+
+def test_the_server_can_actually_speak_websocket() -> None:
+    """Two of this UI's panels are streams, and every test of them lies.
+
+    Starlette's TestClient implements WebSockets in process, so `WS /api/stream`
+    and the trace tail pass their tests with no WebSocket library installed at
+    all -- while the shipped daemon answers an upgrade with **404**, not an
+    error, and the Session and Trace panels reconnect forever showing nothing.
+    That is exactly what was happening until somebody connected to a running
+    one.
+
+    So the dependency is pinned by a test rather than by a comment in
+    pyproject.toml, since nothing else in this suite can notice it missing.
+    """
+    import importlib.util
+
+    installed = any(
+        importlib.util.find_spec(implementation) is not None
+        for implementation in ("websockets", "wsproto")
+    )
+    assert installed, (
+        "uvicorn has no WebSocket implementation, so the daemon will answer every "
+        "WebSocket upgrade with 404. Install uvicorn[standard]."
+    )
+
+
+def test_every_view_says_what_it_is() -> None:
+    """"Session" and "Trace" are words this system uses in a particular way, and
+    a tab label cannot teach anybody either of them. So the shell carries a
+    sentence per view -- shown above the panel and as the tab's tooltip -- and
+    each panel carries its own, because the panels are used inside a console
+    where this shell does not exist.
+    """
+    shell = (web_directory() / "application_shell.js").read_text()
+    described = re.findall(r'id: "([a-z]+)",\n\s+label: "[^"]+",\n\s+tag: "[^"]+",\n\s+description:', shell)
+    assert set(described) == {"device", "lines", "graphs", "session", "trace", "monitor", "firmware"}
+
+    # And the two words that prompted this are explained in their own panels,
+    # not only in the shell.
+    session = (web_directory() / "elements" / "session_panel_element.js").read_text()
+    assert "A session is one run of an experiment" in session
+    trace = (web_directory() / "elements" / "trace_panel_element.js").read_text()
+    assert "The trace is this daemon's own record" in trace
 
 
 def test_every_module_the_ui_imports_exists() -> None:

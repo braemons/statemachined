@@ -74,6 +74,17 @@ export class TracePanelElement extends BasePanelElement {
             },
           }),
         ]),
+        this.make("p", {
+          class: "muted",
+          text:
+            "The trace is this daemon's own record of what the machine did: one row every " +
+            "time it entered a state, with the device's clock, an estimate in host time, and " +
+            "the trial it belonged to. It is finer grained than the trial record triald " +
+            "keeps -- one row per state rather than one per trial -- and the two join on the " +
+            "trial id. It is written to disk as it arrives, so it is still there in the " +
+            "morning. For the bytes on the wire rather than the states, use the serial " +
+            "monitor.",
+        }),
         this.failureSlot,
         this.make("div", { class: "scroller" }, [
           this.make("table", {}, [

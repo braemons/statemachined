@@ -26,6 +26,7 @@ import threading
 import time
 
 from ..daemon_configuration import DaemonConfiguration
+from ..device.device_line_monitor import DeviceLineMonitor
 from ..device.device_supervisor import DeviceSupervisor, ObservedStateVisit
 from ..device.state_visit_trace import (
     KIND_GRAPH_SET_UPLOADED,
@@ -55,6 +56,11 @@ class RigService:
             configuration.trace_ring_entries, configuration.trace_directory
         )
         self.triald = TrialdClient(configuration.triald_base_url)
+        #: The wire itself, both directions, for as long as the ring holds it.
+        #: Always on: a link fault that happens once an hour is not reproducible
+        #: on demand, and a monitor somebody has to switch on first is one that
+        #: is off when the interesting thing happens.
+        self.line_monitor = DeviceLineMonitor()
 
         self.supervisor = DeviceSupervisor(
             configuration.device_target,
@@ -64,6 +70,7 @@ class RigService:
             session_seed=configuration.session_seed or None,
             on_state_visit=self._record_state_visit,
             on_trial_result=self._record_trial_result,
+            on_line_observed=self.line_monitor.record,
         )
 
         #: Held by everything that talks to the device. See the note above.

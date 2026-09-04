@@ -193,4 +193,15 @@ export class DaemonApiClient {
   openTraceStream() {
     return new WebSocket(this.webSocketUrlFor("/api/trace/stream"));
   }
+
+  /// The wire itself: every line in and out of the port, as it went.
+  readDeviceMonitor(sinceEntryNumber, limit) {
+    return this.get(
+      `/api/device/monitor?since_entry_number=${sinceEntryNumber | 0}&limit=${limit | 0}`,
+    );
+  }
+
+  openDeviceMonitorStream() {
+    return new WebSocket(this.webSocketUrlFor("/api/device/monitor/stream"));
+  }
 }

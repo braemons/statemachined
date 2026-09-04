@@ -102,3 +102,14 @@ code {
   font-family: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
   font-size: 0.85em;
 }
+
+/* What a view is, above the view. The panels carry their own description too --
+   they are used in a console where this shell does not exist -- but a person
+   reading a tab called "Session" deserves an answer before they click. */
+.view-description {
+  margin: 0 0 0.75rem;
+  max-width: 62ch;
+  color: var(--muted, #666);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}

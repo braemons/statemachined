@@ -160,6 +160,51 @@ it changes is read by the scan.
 > then a reset returns the board to its compile-time safe levels, and the daemon
 > pushes the wiring again on every connect.
 
+### `GET /api/device/monitor`  ·  `WS /api/device/monitor/stream`
+
+Every line in and out of the serial port, as it went.
+
+```jsonc
+{
+  "lines": [
+    { "entry_number": 0, "direction": "to_device",
+      "line": "{\"msg_type\":\"hello\",\"message_id\":1,...,\"crc\":\"9AD5\"}",
+      "recorded_host_time": "2026-09-04T10:55:02.180508Z" },
+    { "entry_number": 1, "direction": "from_device", "line": "{\"msg_type\":\"hello_ack\",...}",
+      "recorded_host_time": "2026-09-04T10:55:02.186133Z" }
+  ],
+  "newest_entry_number": 33,
+  "oldest_entry_number_still_held": 0,
+  "ring_capacity": 4000,
+  "lost_lines_before": null
+}
+```
+
+For the moment the layers stop agreeing: `/api/device/lines` says the valve is
+line 3, the valve is not opening, and the question is what actually crossed the
+wire. Nothing here interprets anything — these are whole lines, CRC included,
+in the order they went, taken at the transport, so a line nothing could parse is
+in here too.
+
+**Always recording**, because the alternative is not: a fault that happens once
+an hour is not reproducible on demand, and a monitor somebody has to switch on
+first is off when the interesting thing happens. It costs one string per line
+against a bounded deque.
+
+**A log, not the record.** It is the last few thousand lines and then the oldest
+go, and none of it is written to disk. What a trial *did* is §7's trace, which
+is kept.
+
+The stream is **not coalesced**, exactly as the trace's is not, and a client
+that falls out of the ring is told the range it lost and the socket closes.
+`since_entry_number` and `limit` page the GET; `lost_lines_before` is non-null
+when the cursor asked for is older than anything still held.
+
+Nothing sends. A serial terminal that could type at the board would be a second
+host on a link whose whole design is one command in flight (PROTOCOL.md §1.2),
+and every command worth sending has a route above — each of which shows up here
+when it goes.
+
 ### `GET /api/device/firmware`
 
 The version running against what the installed package ships, and whether they
@@ -434,7 +479,7 @@ rules. dev/DAEMON.md §5 is the design.
 
 | | |
 |---|---|
-| `GET /` | the rig's own page: nav, and six panels |
+| `GET /` | the rig's own page: nav, and seven panels, each saying what it is |
 | `GET /ui/{path}` | that page's own shell assets. Not a contract; rearrange at will |
 | `GET /elements/{path}` | **a contract.** `/elements/statemachined.js` registers `<statemachined-device>`, `-lines`, `-graph`, `-session`, `-trace` and `-firmware`, each with a shadow root and a `base` attribute |
 

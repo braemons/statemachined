@@ -19,6 +19,13 @@ export class DevicePanelElement extends BasePanelElement {
       text: "connect",
       onClick: () => this.attempt(() => this.api.connectToTheDevice()),
     });
+    this.description = this.make("p", {
+      class: "muted",
+      text:
+        "The board this daemon owns: what it is, what it can hold, and how well it is " +
+        "keeping to its scan. A board that quietly misses scans looks exactly like one that " +
+        "is fine, which is why the misses are counted here.",
+    });
     this.root.replaceChildren(
       this.make("section", {}, [
         this.make("h2", {}, [
@@ -26,6 +33,7 @@ export class DevicePanelElement extends BasePanelElement {
           this.make("span", { class: "spacer" }),
           this.connectButton,
         ]),
+        this.description,
         this.failureSlot,
         this.body,
       ]),

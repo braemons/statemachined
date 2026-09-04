@@ -98,6 +98,15 @@ export class LineMapPanelElement extends BasePanelElement {
           this.revertButton,
           this.saveButton,
         ]),
+        this.make("p", {
+          class: "muted",
+          text:
+            "What each line of this rig is called, which pin it is, and what the box does to " +
+            "the signal before the graph sees it. Names are this daemon's alone and never " +
+            "reach the board, so renaming is free; everything else is pushed to the board on " +
+            "save. The dot beside each line is its level right now -- pressing the thing you " +
+            "wired and watching the dot is the only way to confirm a wire from outside.",
+        }),
         this.failureSlot,
         this.body,
       ]),

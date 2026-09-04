@@ -28,7 +28,13 @@ dependencies = [
     # rather than dataclasses plus hand-written checks.
     "pydantic>=2.13.5",
     "fastapi>=0.141.1",
-    "uvicorn>=0.52.4",
+    # `[standard]` for one reason: the WebSocket implementation. Plain uvicorn
+    # answers a WebSocket upgrade with 404 -- not an error in the log, a 404 --
+    # so `WS /api/stream`, the trace tail and the serial monitor would all be
+    # dead in the shipped daemon while every test passed, because Starlette's
+    # TestClient implements WebSockets in process and needs no server library
+    # at all. Found by connecting to a running one.
+    "uvicorn[standard]>=0.52.4",
     "httpx>=0.28.1",
     # A console discovers a rig instead of being hand-configured with URLs --
     # dev/DAEMON.md §5, and the same record vstimd already publishes. Imported

@@ -105,6 +105,7 @@ class DeviceSupervisor:
         on_state_visit: Callable[[ObservedStateVisit], None] | None = None,
         on_unsolicited_message: Callable[[dict], None] | None = None,
         on_trial_result: Callable[[TrialResultRecord], None] | None = None,
+        on_line_observed: Callable[[str, str], None] | None = None,
     ):
         self.target = target
         self.line_map = line_map if line_map is not None else LineMap()
@@ -116,6 +117,11 @@ class DeviceSupervisor:
         #: replayed. Drawn fresh per connection when it is not.
         self.configured_session_seed = session_seed
 
+        #: Every line crossing the wire, for the serial monitor. Passed down to
+        #: each `SerialLink` this opens rather than held here, because the
+        #: transport is the only place that sees a line before anything has
+        #: decided whether it means anything.
+        self.on_line_observed = on_line_observed
         self.on_state_visit = on_state_visit or (lambda observed: None)
         self.on_unsolicited_message = on_unsolicited_message or (lambda message: None)
         #: Called when a whole result has been collected by `pump_incoming_lines`.
@@ -165,7 +171,12 @@ class DeviceSupervisor:
         for *this* box -- so it goes before any graph and long before any trial.
         """
         self.disconnect()
-        link = SerialLink(self.target, baud=self.baud, timeout=self.timeout)
+        link = SerialLink(
+            self.target,
+            baud=self.baud,
+            timeout=self.timeout,
+            on_line_observed=self.on_line_observed,
+        )
         link.reset_input()
         session = RequestResponseSession(
             link,

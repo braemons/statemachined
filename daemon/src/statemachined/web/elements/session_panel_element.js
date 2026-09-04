@@ -44,6 +44,19 @@ export class SessionPanelElement extends BasePanelElement {
     this.root.replaceChildren(
       this.make("section", {}, [
         this.make("h2", {}, [this.make("span", { text: "Session" })]),
+        // What a "session" is, said once, where somebody who has never read
+        // dev/DAEMON.md is looking. The panel is used inside a console with no
+        // tabs and no shell, so it cannot rely on anything around it.
+        this.make("p", {
+          class: "muted",
+          text:
+            "A session is one run of an experiment: the set of paradigms this rig will use " +
+            "for it, loaded onto the board once before an animal is in the booth. After that " +
+            "a trial names one of them and starts in milliseconds, because the graphs are " +
+            "already there -- which is the whole reason the upload happens here and not per " +
+            "trial. Below: what is loaded, what the machine is doing now, and what the last " +
+            "trial did.",
+        }),
         this.failureSlot,
         this.chooserSlot,
         this.make("h3", { text: "Now" }),

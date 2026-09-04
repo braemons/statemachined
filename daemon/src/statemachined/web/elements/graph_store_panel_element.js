@@ -88,6 +88,15 @@ export class GraphStorePanelElement extends BasePanelElement {
       this.make("section", {}, [
         this.make("h2", {}, [this.make("span", { text: "Graphs" })]),
         this.chooser,
+        this.make("p", {
+          class: "muted",
+          text:
+            "A graph is one paradigm: the states a trial passes through, what moves it " +
+            "between them, and which states end it as which outcome. They are written " +
+            "against line names rather than pin numbers, so a graph runs on any rig wired " +
+            "for it. Editing here changes the stored file; a session decides which of them " +
+            "the board holds.",
+        }),
         this.failureSlot,
         this.body,
       ]),

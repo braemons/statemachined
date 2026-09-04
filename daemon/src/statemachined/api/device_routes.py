@@ -9,13 +9,19 @@ the valve is wired to A0 cannot.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+import asyncio
+
+from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
 from ..model.line_map import LineMap
 from .http_errors import no_device_connected, refusal
 from .rig_service import RigService
 
 router = APIRouter(prefix="/api/device", tags=["device"])
+
+#: How often the monitor's stream looks for new lines. The link's own reader
+#: works in 50 ms bursts, so anything faster would be looking at nothing.
+MONITOR_POLL_SECONDS = 0.05
 
 
 def service_of(request: Request) -> RigService:
@@ -163,6 +169,70 @@ def replace_the_line_map(request: Request, line_map: LineMap) -> dict:
         "line_map": line_map.model_dump(),
         "resolved_line_map": resolved.model_dump(),
     }
+
+
+# ------------------------------------------------------- the serial monitor ---
+
+
+@router.get("/monitor")
+def read_the_line_monitor(request: Request, since_entry_number: int = 0, limit: int = 500) -> dict:
+    """The last lines in and out of the port, in the protocol's own words.
+
+    dev/API.md §3. What this is for is the moment the layers stop agreeing: the
+    line map says the valve is line 3, the valve is not opening, and the
+    question is what actually went down the wire. Nothing here interprets
+    anything -- these are the lines, in order, with the time they crossed.
+
+    Bounded, and a caller that has fallen behind is **told what it missed**
+    rather than handed a shorter answer that looks complete.
+    """
+    service = service_of(request)
+    monitor = service.line_monitor
+    oldest_still_held = monitor.oldest_entry_number_still_held()
+    return {
+        "lines": monitor.lines_since(since_entry_number, limit=limit),
+        "newest_entry_number": monitor.newest_entry_number(),
+        "oldest_entry_number_still_held": oldest_still_held,
+        "ring_capacity": monitor.ring_capacity,
+        "lost_lines_before": (
+            oldest_still_held if monitor.has_fallen_out_of_the_ring(since_entry_number) else None
+        ),
+    }
+
+
+@router.websocket("/monitor/stream")
+async def stream_the_line_monitor(websocket: WebSocket) -> None:
+    """Every line as it crosses, in order, none skipped.
+
+    Not coalesced, for the same reason the trace's stream is not: a monitor that
+    dropped frames to keep up would be lying about the one thing it exists to
+    show. A client too slow for the ring is told the range it lost and the
+    socket closes -- one that believes it saw everything is worse than one that
+    knows it did not.
+    """
+    await websocket.accept()
+    service: RigService = websocket.app.state.rig_service
+    monitor = service.line_monitor
+    next_entry_number = monitor.newest_entry_number() + 1
+    try:
+        while True:
+            if monitor.has_fallen_out_of_the_ring(next_entry_number):
+                oldest = monitor.oldest_entry_number_still_held()
+                await websocket.send_json(
+                    {
+                        "error": "fell_out_of_the_ring",
+                        "lost_from_entry_number": next_entry_number,
+                        "lost_to_entry_number": oldest - 1,
+                    }
+                )
+                await websocket.close(code=1011)
+                return
+            for line in monitor.lines_since(next_entry_number, limit=500):
+                await websocket.send_json(line)
+                next_entry_number = line["entry_number"] + 1
+            await asyncio.sleep(MONITOR_POLL_SECONDS)
+    except (WebSocketDisconnect, RuntimeError):
+        return
 
 
 @router.get("/firmware")

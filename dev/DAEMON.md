@@ -94,6 +94,8 @@ statemachined/
 │   │   │   ├── request_response_session.py   one in flight, retry ← tools/bringup
 │   │   │   ├── graph_set_upload.py           the chunked set upload
 │   │   │   ├── trial_result_reassembly.py    result reassembly
+│   │   │   ├── device_line_monitor.py        NEW: the last few thousand lines, both ways
+│   │   │   ├── device_pin_map.py             NEW: what the board calls its pins
 │   │   │   ├── device_supervisor.py          NEW: owns the port, reconnect, seed, watchdog
 │   │   │   ├── device_clock_correlation.py   NEW: device µs ⇄ host clock
 │   │   │   └── state_visit_trace.py          NEW: the visit ring, and the NDJSON tail
@@ -119,6 +121,8 @@ statemachined/
 │   │           ├── device_panel_element.js     ·  line_map_panel_element.js
 │   │           ├── graph_store_panel_element.js ·  graph_node_diagram.js
 │   │           ├── session_panel_element.js    ·  trace_panel_element.js
+│   │           ├── serial_monitor_panel_element.js  the wire, both directions
+│   │           ├── transition_predicate.js     what a predicate means, in words
 │   │           └── firmware_panel_element.js
 │   ├── bench/                 running this by hand, with or without a board
 │   │   ├── statemachined_bench_configuration.toml  what `make bench` reads
@@ -957,9 +961,10 @@ here that would be expensive to retrofit, and it costs nothing now:
 <statemachined-session  base="http://rig.local:8081"></statemachined-session>
 <statemachined-trace    base="http://rig.local:8081" trial="193"></statemachined-trace>
 <statemachined-firmware base="http://rig.local:8081"></statemachined-firmware>
+<statemachined-monitor  base="http://rig.local:8081"></statemachined-monitor>
 ```
 
-Importing the entry point registers all six; importing one panel's module
+Importing the entry point registers all seven; importing one panel's module
 registers only that one, so a console that wants the trace and nothing else does
 not pay for the graph editor.
 
@@ -1011,6 +1016,13 @@ consequences worth writing down:
 
 ### Views
 
+**Every view says what it is**, in a sentence, above the panel and again inside
+it. "Session" and "Trace" are words this system uses in a particular way — a
+session is the set of paradigms loaded on the board for one run, a trace is the
+daemon's own record of the states a machine entered — and a tab label teaches
+nobody either. The sentence is inside each panel as well as in the shell,
+because a console embeds the panels and has no tabs of its own.
+
 | | |
 |---|---|
 | **Device** | board, link health, firmware, and the live `in`/`out` bit rows — the thing `statemachined-bringup state` prints today, but named and updating |
@@ -1018,6 +1030,7 @@ consequences worth writing down:
 | **Graphs** | the store, and the editor: states, timeouts, terminal outcomes, actions, and a predicate editor where the three masks are checkboxes over *named* lines — with the predicate written out in a sentence underneath, because the columns are independent and a line ticked in two of them means something the boxes cannot show. An SVG node diagram rendered from the graph, read-only in v1, drawing an edge that can never fire as one |
 | **Session** | the current trial, the state the machine is in, the last result's path |
 | **Trace** | the live tail of §4.6, one row per state visit, filterable by `trial_id`. The one view that is useful with nobody in the room, because it is still there in the morning |
+| **Serial monitor** | every line in and out of the port, as it went, both directions, filterable — with the heartbeat hidden by default because it would otherwise be most of the table. The panel for when the layers stop agreeing: the record says the valve is line 3, the valve is shut, and the question is what crossed the wire. Reads nothing into anything, and sends nothing |
 | **Firmware** | running against available; the mismatch warning |
 
 **A poll must not touch what a person is holding.** Every panel here polls, and
@@ -1150,6 +1163,7 @@ milestones that used to be M5 and M6 are now M8 and M9.
 | **M4g** ✅ | The web UI and the `/elements/` contract; mDNS. Six elements, each with a shadow root and a `base` attribute, served as package data by `api/web_user_interface_routes.py`; the shell at `/`, the contract at `/elements/`. `mdns_service_advertisement.py` publishes `_statemachined._tcp` with vstimd's stable `id=`, hashed from `/etc/machine-id`, and never fatally. The UI's own tests are the compiler it does not have: every module it imports exists, every `/api/` path it calls is a route, every module parses, and the editor's outcome names are the ones the store accepts |
 | **M4h** ▶️ | **The bench: this UI in front of a real board.** Promoted ahead of packaging, because until somebody has clicked through the six panels with a device on the other end, everything above is a set of tests agreeing with each other. `make bench` runs the daemon, the API and the UI against `TARGET` -- a board on a cable, or `make bench-device` and `socket://127.0.0.1:5300` for the same firmware built for this machine -- from `daemon/bench/statemachined_bench_configuration.toml`, whose store is seeded from `graphs/` under `build/` so deleting a graph in the browser never deletes an example. The bridge the integration tests use moved to `daemon/bench/native_device_on_a_socket.py` and is now shared rather than copied, and `make integration-device`, named by three docstrings and existing in none, exists. **Done against the R4**: reflashed to M4c firmware, wiring pushed, the set uploaded, and a whole configure → start → result through the HTTP API. **Left**: the browser. No panel of this UI has ever been rendered |
 | **M4i** ✅ | **The board says which pin each line is** (`PROTOCOL.md` §3.6). The daemon kept its own copy of the firmware's pin table, keyed by the board name — a hand-copied pin map, which is the thing the RA4M1 HAL refuses to keep of the Arduino core's table for exactly the reason it was wrong here: a host cannot otherwise know which pin a line is, or even which lines are inputs, because both are fixed when the firmware is compiled. `pins`/`pin_map` answers out of the same table `pinMode()` is called over, one direction per request so a 32-line board's labels cannot overflow a line. A config may now name a pin instead of a bit position; where it names both they are checked, and a disagreement stops the daemon connecting rather than driving the wrong line for a session. Firmware older than the command answers `no_pin_map`, the daemon falls back to its own table, and every label it shows is then marked `assumed` rather than passing as the board's word. 624 B of flash and 8 B of RAM |
+| **M4j** ✅ | **The serial monitor, and views that say what they are.** Two complaints from the first person to open the page who had not written it: what is a "session", what is a "trace". They are words this system uses in a particular way and a tab label teaches neither, so every view carries a sentence — in the nav, above the panel, and inside the panel, since a console embeds the panels and has no tabs. `Graphs` is `Paradigms` and `Lines` is `Lines & wiring` for the same reason. The monitor is the seventh element: `device_line_monitor.py` keeps the last 4 000 lines both directions, tapped in `SerialLink` so a line nothing could parse is in there too, served at `GET /api/device/monitor` and a stream that does not coalesce. Always recording, because a fault that happens once an hour is not reproducible on demand. It sends nothing: a terminal that could type at the board would be a second host on a one-command-in-flight link |
 | **M5** | Packaging: nfpm, systemd, sysusers, udev, logrotate, the builder containers, `release.yml`, one line in `packages/sources.txt`. **Installed on the Pi 5 alongside vstimd and triald** |
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
 | **M7** | **Data flash** (§3.4): the `hal.h` addition, the RA4M1 implementation, a file-backed `native.cpp` stand-in, the boot-time read, and `persist`. Deferred deliberately: the compile-time safe levels of §3.4 hold the fail-safe hole shut without it, and this is easier to build once a daemon exists to exercise it. Renode covers the HAL addition |

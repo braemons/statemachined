@@ -211,6 +211,59 @@ def test_a_line_map_that_contradicts_the_board_is_refused_before_it_is_kept(api)
     ]
 
 
+# ------------------------------------------------------- the serial monitor ---
+
+
+def test_the_monitor_holds_both_directions_of_the_greeting(api):
+    """The wire, in the protocol's own words. Opening the panel has to show what
+    already happened -- the greeting, the wiring push -- because a monitor that
+    started at "now" would miss every fault that had already occurred, which is
+    most of them.
+    """
+    monitor = api.get("/api/device/monitor?limit=10").json()
+    directions = [line["direction"] for line in monitor["lines"]]
+    said = [line["line"] for line in monitor["lines"]]
+
+    assert directions[0] == "to_device"
+    assert '"msg_type":"hello"' in said[0]
+    assert directions[1] == "from_device"
+    assert '"msg_type":"hello_ack"' in said[1]
+    # The whole line, CRC included: this is the transport's view, and a monitor
+    # that showed only what the parser understood would hide the framing faults
+    # somebody opens it for.
+    assert '"crc"' in said[0]
+    assert monitor["ring_capacity"] > 0
+    assert monitor["lost_lines_before"] is None
+
+
+def test_the_monitor_records_a_command_a_request_sent(api):
+    """Not only what the background reader saw: every layer writes through the
+    transport, so a command issued by an HTTP request shows up here too."""
+    before = api.get("/api/device/monitor?limit=1").json()["newest_entry_number"]
+    api.get("/api/device/lines")  # reads the device, so it sends a `state`
+
+    after = api.get(f"/api/device/monitor?since_entry_number={before + 1}&limit=50").json()
+    said = " ".join(line["line"] for line in after["lines"])
+    assert '"msg_type":"state"' in said
+    assert '"msg_type":"state_report"' in said
+
+
+def test_a_cursor_the_ring_has_passed_is_told_so(api):
+    """The same rule as the trace: a consumer that fell behind is told the range
+    it lost rather than handed a shorter answer that looks complete."""
+    monitor = api.get("/api/device/monitor?since_entry_number=0&limit=1").json()
+    assert monitor["lost_lines_before"] is None
+
+    # Nothing has been evicted yet, so force the question the other way: a
+    # cursor before the oldest entry the ring still holds.
+    service = api.app.state.rig_service
+    for index in range(service.line_monitor.ring_capacity + 10):
+        service.line_monitor.record("to_device", f"line {index}")
+    lost = api.get("/api/device/monitor?since_entry_number=0&limit=5").json()
+    assert lost["lost_lines_before"] == lost["oldest_entry_number_still_held"]
+    assert lost["oldest_entry_number_still_held"] > 0
+
+
 # -------------------------------------------------------------- the store ---
 
 

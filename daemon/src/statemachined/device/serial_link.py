@@ -23,6 +23,8 @@ import time
 
 import serial
 
+from .device_line_monitor import FROM_DEVICE, TO_DEVICE
+
 DEFAULT_TARGET = "/dev/ttyACM0"
 DEFAULT_BAUD = 115200
 DEFAULT_TIMEOUT = 2.0
@@ -53,7 +55,17 @@ class SerialLink:
         target: str = DEFAULT_TARGET,
         baud: int = DEFAULT_BAUD,
         timeout: float = DEFAULT_TIMEOUT,
+        on_line_observed=None,
     ):
+        #: Called with ("to_device"|"from_device", line) for every whole line
+        #: that crosses this link. Here rather than in the session above,
+        #: because a monitor that only saw what the session understood would
+        #: miss exactly what somebody opens a monitor for: the junk, the reply
+        #: to a command that had already timed out, the line with the bad CRC.
+        #:
+        #: Wrapped in try/except at the call sites: a monitor that could break
+        #: the link would be worse than no monitor.
+        self.on_line_observed = on_line_observed
         self.url = to_url(target)
         self._timeout = timeout
         #: Whatever has arrived and is not yet a whole line. See read_line().
@@ -65,6 +77,7 @@ class SerialLink:
     def write_line(self, line: str) -> None:
         self._port.write((line + "\n").encode("ascii"))
         self._port.flush()
+        self._observe(TO_DEVICE, line)
 
     def read_line(self, timeout: float | None = None) -> str | None:
         """One **complete** line, or None if none arrived before the timeout.
@@ -101,7 +114,9 @@ class SerialLink:
             if newline_at >= 0:
                 line = self._receive_buffer[:newline_at]
                 del self._receive_buffer[: newline_at + 1]
-                return line.decode("ascii", errors="replace").rstrip("\r")
+                text = line.decode("ascii", errors="replace").rstrip("\r")
+                self._observe(FROM_DEVICE, text)
+                return text
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 return None
@@ -109,6 +124,14 @@ class SerialLink:
             chunk = self._port.read(waiting)
             if chunk:
                 self._receive_buffer.extend(chunk)
+
+    def _observe(self, direction: str, line: str) -> None:
+        if self.on_line_observed is None:
+            return
+        try:
+            self.on_line_observed(direction, line)
+        except Exception:  # noqa: BLE001 -- see on_line_observed
+            pass
 
     def reset_input(self) -> None:
         """Drop whatever is already buffered.
