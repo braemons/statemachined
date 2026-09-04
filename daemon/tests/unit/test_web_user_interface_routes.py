@@ -33,6 +33,7 @@ from fastapi.testclient import TestClient
 from statemachined.api.application import create_application
 from statemachined.api.web_user_interface_routes import read_asset, web_directory
 from statemachined.daemon_configuration import DaemonConfiguration
+from statemachined.model.graph_definition import TransitionPredicate
 from statemachined.model.trial_outcome import DECLARABLE_TERMINAL_OUTCOMES
 
 ELEMENT_TAG_NAMES = [
@@ -469,6 +470,83 @@ def test_the_focus_path_survives_a_rebuild_of_the_same_shape() -> None:
     # anywhere: both mean "there is nothing to focus", not a crash mid-repaint.
     assert result["detached"] is None
     assert result["missing"] is None
+
+
+def test_a_predicate_is_said_in_words_and_its_traps_are_named() -> None:
+    """Three independent masks, ANDed, shown as three columns of checkboxes --
+    so a line can be ticked in two of them, and two of the three ways of doing
+    that mean something nobody intends.
+
+    The editor cannot make that visible with checkboxes alone, which is why the
+    predicate is also written out in a sentence: "L, and either M or N" entered
+    as all:[L] any:[L,M,N] reads back as "L is high, and at least one of L, M is
+    high", and the second clause is doing nothing.
+    """
+    module = (web_directory() / "elements" / "transition_predicate.js").as_uri()
+    printed = run_in_node(
+        f"const {{ describePredicate, predicateProblems }} = await import({module!r});\n"
+        "const said = describePredicate({ all: ['lever'], any: ['left', 'right'], none: ['abort'] });\n"
+        "const mootAny = predicateProblems({ all: ['lever'], any: ['lever', 'pedal'] });\n"
+        "const contradiction = predicateProblems({ all: ['lever'], none: ['lever'] });\n"
+        "const wastedAny = predicateProblems({ any: ['lever'], none: ['lever'] });\n"
+        "const clean = predicateProblems({ all: ['lever'], none: ['abort'] });\n"
+        "console.log(JSON.stringify({ said, mootAny, contradiction, wastedAny, clean,\n"
+        "  empty: describePredicate({}) }));\n"
+    )
+    result = json.loads(printed)
+    assert result["said"] == (
+        "fires when lever is high, and at least one of left, right is high, and abort is low"
+    )
+
+    # In `all` and `any`: legal, and the `any` column stops meaning anything.
+    assert [problem["severity"] for problem in result["mootAny"]] == ["warning"]
+    assert '"pedal" is ignored' in result["mootAny"][0]["detail"]
+
+    # In `all` and `none`: provably dead, and the daemon refuses the graph.
+    assert [problem["severity"] for problem in result["contradiction"]] == ["error"]
+
+    # In `any` and `none`, with nothing else in `any`: also dead.
+    assert [problem["severity"] for problem in result["wastedAny"]] == ["error"]
+
+    # An ordinary predicate has nothing to say about it.
+    assert result["clean"] == []
+    assert result["empty"] is None
+
+
+def test_the_editor_and_the_daemon_agree_on_which_predicates_are_refused() -> None:
+    """The panel tells a person "the daemon refuses a graph with this in it".
+    Two implementations of one rule, in two languages, so the agreement is
+    checked rather than assumed -- an editor that warned about the wrong thing
+    would send somebody looking for a fault in the graph they just fixed.
+    """
+    module = (web_directory() / "elements" / "transition_predicate.js").as_uri()
+    predicates = [
+        {"all": ["a"], "none": ["a"]},          # dead: high and low at once
+        {"any": ["a"], "none": ["a"]},          # dead: nothing can satisfy `any`
+        {"all": ["a"], "any": ["a", "b"]},      # legal, and the `any` does nothing
+        {"all": ["a"], "none": ["b"]},          # ordinary
+        {"any": ["a", "b"], "none": ["a"]},     # legal: `b` can still satisfy `any`
+    ]
+    printed = run_in_node(
+        f"const {{ predicateProblems }} = await import({module!r});\n"
+        f"const predicates = {json_dumps(predicates)};\n"
+        "console.log(JSON.stringify(predicates.map((predicate) =>\n"
+        "  predicateProblems(predicate).some((problem) => problem.severity === 'error'))));\n"
+    )
+    the_editor_calls_it_dead = json.loads(printed)
+
+    the_daemon_refuses = []
+    for predicate in predicates:
+        try:
+            TransitionPredicate.model_validate(predicate)
+            the_daemon_refuses.append(False)
+        except Exception:
+            the_daemon_refuses.append(True)
+
+    # Both dead cases, both ends, and the three legal ones left alone -- an
+    # `any` column with one forbidden line and one good one can still fire.
+    assert the_editor_calls_it_dead == [True, True, False, False, False]
+    assert the_daemon_refuses == the_editor_calls_it_dead
 
 
 def test_the_editors_outcome_names_are_the_ones_the_store_accepts() -> None:

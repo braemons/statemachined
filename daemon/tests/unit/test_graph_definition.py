@@ -216,3 +216,79 @@ def test_choice_weights_must_line_up_with_the_options():
 def test_choice_weights_that_are_all_zero_are_refused():
     with pytest.raises(ValidationError, match="nothing could ever be drawn"):
         ChoiceDuration.model_validate({"kind": "choice", "options_ms": [100, 200], "weights": [0, 0]})
+
+
+# ----------------------------------------------------- predicates that lie ---
+#
+# The three masks are independent and ANDed (firmware/core/graph/transition.h),
+# so a line may appear in two of them. Two of the three ways of doing that mean
+# something other than what they look like, and neither the wire nor the
+# firmware notices: the graph uploads, validates against the caps, and runs.
+
+
+def a_graph_whose_only_transition_is(predicate: dict) -> dict:
+    return {
+        "name": "predicate",
+        "entry": "Wait",
+        "states": [
+            {"name": "Wait", "transitions": [{"when": predicate, "goto": "Hit"}]},
+            {"name": "Hit", "outcome": "HIT"},
+        ],
+    }
+
+
+def test_a_line_required_high_and_low_is_refused():
+    """It can never fire. A state whose only way out is this hangs until the
+    trial cap, and the outcome is a timeout somebody spends an afternoon on --
+    with a graph that looks right in every listing."""
+    with pytest.raises(ValidationError) as refused:
+        GraphDefinition.model_validate(
+            a_graph_whose_only_transition_is({"all": ["lever"], "none": ["lever", "abort"]})
+        )
+    assert "can never fire" in str(refused.value)
+    # And which line, since a predicate over five lines is not obvious.
+    assert "'lever'" in str(refused.value)
+
+
+def test_an_any_clause_of_only_forbidden_lines_is_refused():
+    """The same fault as above, said differently: a line high enough to satisfy
+    `any` is a line `none` has already failed on."""
+    with pytest.raises(ValidationError) as refused:
+        GraphDefinition.model_validate(
+            a_graph_whose_only_transition_is({"any": ["left", "right"], "none": ["left", "right"]})
+        )
+    assert "can never fire" in str(refused.value)
+
+
+def test_an_any_clause_with_one_forbidden_line_still_fires_on_the_others():
+    """Not refused: `right` can satisfy it. Redundant, and the editor says so
+    where it is typed, but the transition works and is not a lie."""
+    graph = GraphDefinition.model_validate(
+        a_graph_whose_only_transition_is({"any": ["left", "right"], "none": ["left"]})
+    )
+    assert graph.states[0].transitions[0].when.any == ["left", "right"]
+
+
+def test_a_line_in_all_and_any_is_a_warning_and_not_a_refusal():
+    """`all` already requires it high, so the `any` clause is satisfied whenever
+    the predicate could fire at all and every other line in `any` is ignored.
+
+    Redundant rather than wrong: the graph does exactly what the masks say. An
+    editor that refused a redundancy mid-edit is one people work around, so this
+    is reported where the predicate is written instead.
+    """
+    graph = GraphDefinition.model_validate(
+        a_graph_whose_only_transition_is({"all": ["lever"], "any": ["lever", "pedal"]})
+    )
+    warnings = graph.warnings()
+    assert [warning["kind"] for warning in warnings] == ["any_clause_has_no_effect"]
+    assert warnings[0]["state"] == "Wait"
+    assert warnings[0]["transition"] == 0
+    assert warnings[0]["lines"] == ["lever"]
+
+
+def test_an_ordinary_predicate_warns_about_nothing():
+    graph = GraphDefinition.model_validate(
+        a_graph_whose_only_transition_is({"all": ["lever"], "none": ["abort"]})
+    )
+    assert graph.warnings() == []

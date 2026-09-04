@@ -124,11 +124,14 @@ def validate_stored_graph(request: Request, graph_name: str) -> dict:
             [graph], service.supervisor.resolved_line_map, service.supervisor.capabilities, 0
         )
     except GraphSetCompilationError as exc:
-        return {"valid": False, "detail": str(exc)}
+        return {"valid": False, "detail": str(exc), "warnings": graph.warnings()}
     return {
         "valid": True,
         "pool_usage": compiled.pool_usage,
         "pool_capacity": compiled.pool_capacity,
+        # Legal, uploads, runs -- and probably narrower than its author thinks.
+        # Reported rather than refused: see GraphDefinition.warnings().
+        "warnings": graph.warnings(),
     }
 
 

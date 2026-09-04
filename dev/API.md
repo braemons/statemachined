@@ -190,8 +190,24 @@ Every rule, plus **this device's** `caps`. Changes nothing and uploads nothing.
 
 ```jsonc
 { "valid": true, "pool_usage": { "states": 4, "transitions": 2, "...": 0 },
-  "pool_capacity": { "states": 32, "...": 0 } }
+  "pool_capacity": { "states": 32, "...": 0 },
+  "warnings": [ { "kind": "any_clause_has_no_effect", "state": "Respond",
+                  "transition": 0, "lines": ["lever_left"],
+                  "detail": "'lever_left' is in both `all` and `any`, so ..." } ] }
 ```
+
+`warnings` is for a graph that is legal, uploads, runs — and is narrower than
+its author thinks. The only one so far is a line in both `all` and `any`: the
+masks are ANDed, so `all` already requires that line high, the `any` clause is
+satisfied whenever the predicate could fire at all, and every *other* line in
+`any` is ignored. `all: [L], any: [L, M, N]` means `L`. It is reported rather
+than refused because the graph does exactly what the masks say, and an editor
+that refuses a redundancy mid-edit is one people work around.
+
+Two predicates *are* refused, by `model/graph_definition.py`, wherever a graph
+arrives: a line in both `all` and `none`, and an `any` clause every one of whose
+lines is in `none`. Both can never fire, and nothing downstream can see it — the
+graph uploads, the state runs, and the only way out never happens.
 
 The capacity half is the useful half: *"you have room for two more graphs"* is
 what a person setting up a session wants, and it is why usage is reported rather

@@ -10,6 +10,17 @@
 // person. The names come from the rig's line map, so a graph authored here
 // cannot name a line this box does not have.
 //
+// **The three columns are independent, and the checkboxes cannot say so.** A
+// predicate is `all` AND `any` AND `none`, evaluated as three masks, so a line
+// may be ticked in two columns -- and two of the three ways of doing that mean
+// something nobody intends. "L, and either M or N", written as all:[L] with
+// any:[L,M,N], is just "L": `all` already requires L high, so the `any` clause
+// is satisfied whenever the predicate could fire, and M and N are ignored. No
+// arrangement of checkboxes makes that visible. So the predicate is written out
+// in a sentence underneath, and the traps are named where they are made --
+// see transition_predicate.js, and model/graph_definition.py for the one the
+// daemon refuses outright.
+//
 // **Every edit is re-rendered from the graph object**, not patched into the
 // DOM, and the fields commit on `change` rather than `input` -- so a re-render
 // never lands inside somebody's typing. It is the cheapest correct thing
@@ -21,6 +32,7 @@
 // paradigm should outlive the board it was first run on.
 
 import { BasePanelElement, defineElementOnce } from "./base_panel_element.js";
+import { describePredicate, predicateProblems } from "./transition_predicate.js";
 import {
   GRAPH_DIAGRAM_STYLE_TEXT,
   describeActions,
@@ -194,8 +206,20 @@ export class GraphStorePanelElement extends BasePanelElement {
   validationSummary() {
     if (this.lastValidation === null) return this.make("div");
     const result = this.lastValidation;
+    // A graph can be valid and still say something narrower than its author
+    // meant, so these are shown either way -- next to "valid on this board",
+    // which is otherwise the last word a person reads before running it.
+    const warnings = (result.warnings || []).map((warning) =>
+      this.make("p", {
+        class: "warn",
+        text: `${warning.state}, transition ${warning.transition}: ${warning.detail}`,
+      }),
+    );
     if (!result.valid) {
-      return this.make("p", { class: "bad", text: result.detail });
+      return this.make("div", {}, [
+        this.make("p", { class: "bad", text: result.detail }),
+        ...warnings,
+      ]);
     }
     const usage = result.pool_usage || {};
     const capacity = result.pool_capacity || {};
@@ -221,6 +245,7 @@ export class GraphStorePanelElement extends BasePanelElement {
     ]);
     return this.make("div", {}, [
       this.make("p", { class: "good", text: "valid on this board" }),
+      ...warnings,
       table,
     ]);
   }
@@ -606,8 +631,21 @@ export class GraphStorePanelElement extends BasePanelElement {
       ]);
     return this.make("div", {}, [
       rowFor("all", "all", "every one of these lines is high"),
-      rowFor("any", "any", "at least one of these lines is high"),
+      rowFor("any", "any", "at least one of these lines is high; ticking none of them means 'don't care'"),
       rowFor("none", "none", "none of these lines is high"),
+      // The three columns are independent masks and a line may be ticked in
+      // two of them, so what the boxes add up to is said in words underneath.
+      // "L, and either M or N" written as all:[L] any:[L,M,N] is just "L", and
+      // no arrangement of checkboxes makes that visible on its own.
+      this.make("div", { class: "muted", style: "margin-top:0.25rem" }, [
+        this.make("span", { text: describePredicate(predicate) || "names no lines, so it would always fire" }),
+      ]),
+      ...predicateProblems(predicate).map((problem) =>
+        this.make("div", {
+          class: problem.severity === "error" ? "failure" : "warn",
+          text: `${problem.severity === "error" ? "cannot fire" : "no effect"}: ${problem.detail}`,
+        }),
+      ),
     ]);
   }
 

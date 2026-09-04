@@ -171,6 +171,18 @@ class TransitionPredicate(BaseModel):
     `all` and `none` and `any`, and nothing else. It is what the device can
     evaluate inside a 100 us scan, and it is enough for every paradigm this was
     written for: "the left lever and not the abort", "either lever".
+
+    The three are independent masks, ANDed
+    (firmware/core/graph/transition.h)::
+
+        (w & all)  == all
+        && (any == 0 || (w & any) != 0)      # empty `any` means "don't care"
+        && (w & none) == 0
+
+    A line may therefore appear in more than one of them, and two of the three
+    ways of doing that are mistakes rather than expressions. See the validator
+    below: one is refused, the other is a redundancy this refuses to make a
+    person's problem.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -186,6 +198,52 @@ class TransitionPredicate(BaseModel):
             # which is never what an experimenter meant to write.
             raise ValueError("a transition predicate names no lines, so it would always fire")
         return self
+
+    @model_validator(mode="after")
+    def _refuse_a_predicate_nothing_can_satisfy(self) -> TransitionPredicate:
+        """A line required high and required not-high. Provably dead.
+
+        The masks are evaluated independently, so this uploads, validates
+        against the caps, and runs -- as a transition that can never fire, in a
+        graph that looks right in every listing. That is worth a refusal
+        precisely because nothing downstream can notice it: a state whose only
+        way out is this one hangs until the trial cap, and the outcome is a
+        timeout somebody will spend an afternoon on.
+        """
+        contradictory = sorted(set(self.all) & set(self.none))
+        if contradictory:
+            named = ", ".join(repr(line) for line in contradictory)
+            raise ValueError(
+                f"a transition predicate requires {named} to be high and to be low at the same "
+                f"time, so it can never fire. Take the line out of `all` or out of `none`"
+            )
+
+        # The same fault said differently: a line in `any` cannot satisfy it if
+        # `none` forbids that line, so an `any` clause made entirely of
+        # forbidden lines can never be satisfied either.
+        if self.any and set(self.any) <= set(self.none):
+            named = ", ".join(repr(line) for line in sorted(set(self.any)))
+            raise ValueError(
+                f"a transition predicate needs at least one of {named} high, and forbids every "
+                f"one of them in `none`, so it can never fire"
+            )
+        return self
+
+    def lines_whose_any_membership_does_nothing(self) -> list[str]:
+        """Lines in both `all` and `any`, which makes the whole `any` clause moot.
+
+        `all` already requires the line high, so the `any` clause is satisfied
+        by it whenever the predicate could fire at all -- and every *other* line
+        in `any` stops mattering. Somebody writing "L, and either M or N" as
+        `all: [L]`, `any: [L, M, N]` has written "L", and M and N are silently
+        ignored.
+
+        A warning rather than a refusal. It is redundant rather than wrong, the
+        graph does what the masks say, and refusing a redundancy mid-edit is how
+        an editor becomes something people work around. The web UI says so where
+        the predicate is written; `POST /api/graphs/{name}/validate` returns it.
+        """
+        return sorted(set(self.all) & set(self.any))
 
 
 class TransitionSpecification(BaseModel):
@@ -289,6 +347,38 @@ class GraphDefinition(BaseModel):
             if state.name == state_name:
                 return state
         raise ValueError(f"graph {self.name!r} has no state called {state_name!r}")
+
+    def warnings(self) -> list[dict[str, object]]:
+        """Things that are legal, run exactly as written, and are probably not
+        what somebody meant.
+
+        Kept apart from the validators on purpose. A refusal is for a graph that
+        cannot do what it says; this is for one that does something narrower
+        than its author thinks, and the difference is whether an editor should
+        stop somebody mid-edit or tell them.
+        """
+        found: list[dict[str, object]] = []
+        for state in self.states:
+            for position, transition in enumerate(state.transitions):
+                moot = transition.when.lines_whose_any_membership_does_nothing()
+                if not moot:
+                    continue
+                named = ", ".join(repr(line) for line in moot)
+                found.append(
+                    {
+                        "kind": "any_clause_has_no_effect",
+                        "state": state.name,
+                        "transition": position,
+                        "lines": moot,
+                        "detail": (
+                            f"{named} is in both `all` and `any`, so the `any` clause is "
+                            f"satisfied whenever this predicate could fire at all -- every "
+                            f"other line in `any` is ignored. Did you mean to leave it out of "
+                            f"one of them?"
+                        ),
+                    }
+                )
+        return found
 
     @model_validator(mode="after")
     def _refuse_a_graph_that_could_not_be_run(self) -> GraphDefinition:

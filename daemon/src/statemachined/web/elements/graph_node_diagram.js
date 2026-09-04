@@ -14,6 +14,8 @@
 // is in the booth. So unreachable states are drawn, in their own column, rather
 // than dropped -- a state you cannot see is a state you will not fix.
 
+import { predicateProblems } from "./transition_predicate.js";
+
 const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
 
 const NODE_WIDTH = 132;
@@ -46,6 +48,11 @@ export function edgesOf(state) {
       kind: "transition",
       goto: transition.goto,
       label: parts.join(", ") + (transition.hold ? ` held ${transition.hold}` : ""),
+      // An edge that can never fire is drawn, and drawn as such. The point of
+      // the diagram is seeing that an outcome cannot be reached before an
+      // animal is in the booth, and a predicate nothing satisfies is one of the
+      // two ways that happens -- the other being a state with no way in.
+      cannotFire: predicateProblems(predicate).some((problem) => problem.severity === "error"),
     });
   }
   return edges;
@@ -160,7 +167,9 @@ function edgeShapes(from, to, edge) {
   // A backward edge -- a retry, an abort that returns -- gets a curve above the
   // nodes rather than a straight line through them.
   const path = svg("path", {
-    class: edge.kind === "timeout" ? "edge timeout" : "edge transition",
+    class:
+      (edge.kind === "timeout" ? "edge timeout" : "edge transition") +
+      (edge.cannotFire ? " cannot-fire" : ""),
     "marker-end": "url(#statemachined-arrowhead)",
     fill: "none",
     d: goingBack
@@ -175,7 +184,8 @@ function edgeShapes(from, to, edge) {
     y: goingBack ? Math.min(from.y, to.y) - NODE_HEIGHT / 2 - 24 : (from.y + to.y) / 2 - 5,
     "text-anchor": "middle",
   });
-  label.textContent = edge.label;
+  label.textContent = edge.cannotFire ? `${edge.label}  (never fires)` : edge.label;
+  if (edge.cannotFire) label.setAttribute("class", "edge-label cannot-fire");
   return [path, label];
 }
 
@@ -251,6 +261,10 @@ export const GRAPH_DIAGRAM_STYLE_TEXT = `
   .edge { stroke: #8fa2b3; stroke-width: 1.3; }
   .edge.timeout { stroke-dasharray: 5 3; }
   .edge-label { font-size: 10px; fill: var(--muted); }
+  /* A predicate nothing can satisfy: drawn, and drawn as such. Dropping the
+     edge would leave a state that looks like it has a way out. */
+  .edge.cannot-fire { stroke-dasharray: 2 3; opacity: 0.7; }
+  .edge-label.cannot-fire { fill: var(--bad); font-style: italic; }
   .diagram-warning { font-size: 11px; fill: var(--bad); }
   @media (prefers-color-scheme: dark) {
     .node rect { fill: #1f262e; }

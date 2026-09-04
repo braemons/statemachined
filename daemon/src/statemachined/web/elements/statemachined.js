@@ -40,6 +40,10 @@ export { SessionPanelElement } from "./session_panel_element.js";
 export { TracePanelElement } from "./trace_panel_element.js";
 export { FirmwarePanelElement } from "./firmware_panel_element.js";
 export { renderGraphNodeDiagram } from "./graph_node_diagram.js";
+// Pure, and exported because a console showing a graph should be able to say
+// what a predicate means in the same words this UI does -- and to spot the two
+// ways a predicate says something other than what its checkboxes look like.
+export { describePredicate, predicateProblems } from "./transition_predicate.js";
 
 /// The tag names, so a console can iterate them rather than hard-code a list
 /// that goes stale when a panel is added.
