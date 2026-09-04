@@ -206,6 +206,10 @@ def test_every_module_parses() -> None:
         assert finished.returncode == 0, f"{source.name} does not parse:\n{finished.stderr}"
 
 
+UNIT_TEST_DIRECTORY = Path(__file__).resolve().parent
+MINIMAL_DOM = (UNIT_TEST_DIRECTORY / "minimal_dom_for_panel_elements.mjs").as_uri()
+
+
 def run_in_node(script: str) -> str:
     import shutil
     import subprocess
@@ -254,6 +258,130 @@ def test_the_diagram_puts_an_unreachable_state_where_it_can_be_seen() -> None:
     assert result["unreachable"] == ["Stranded"]
     # The predicate is drawn as the named lines, never as the wire's masks.
     assert result["edges"] == ["all lever"]
+
+
+# ------------------------------------------------- the panels, in a fake DOM ---
+#
+# Enough of a DOM to answer one question no reading of the source answers
+# reliably: after a poll, is the field still the same element? See
+# minimal_dom_for_panel_elements.mjs.
+
+
+def test_a_poll_does_not_take_the_focus_out_of_a_field_somebody_is_editing() -> None:
+    """The Lines panel reads the device twice a second, and a person setting up
+    a rig is typing into it at the same time.
+
+    Rebuilding the table on each poll removes the focused `<input>` from the
+    document, which takes the cursor, the selection and the keystrokes with it
+    -- the field goes dead about a second after it is clicked. So the poll
+    paints the live levels and nothing else, and the fields are rebuilt only
+    when the draft is replaced.
+
+    The assertion is *element identity*, because that is the property the
+    browser's focus depends on: an input that is a new object is a different
+    input however identical it looks.
+    """
+    module = (web_directory() / "elements" / "line_map_panel_element.js").as_uri()
+    line_map = {
+        "input_lines": [
+            {"name": "lever", "line_index": 4, "pin_label": "D6", "is_high_now": False}
+        ],
+        "output_lines": [
+            {"name": "valve", "line_index": 3, "safe_level_is_high": True, "is_high_now": False}
+        ],
+    }
+    pressed = json.loads(json_dumps(line_map))
+    pressed["input_lines"][0]["is_high_now"] = True
+
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ LineMapPanelElement }} = await import({module!r});\n"
+        f"const map = {json_dumps(line_map)};\n"
+        f"const pressed = {json_dumps(pressed)};\n"
+        "const panel = new LineMapPanelElement();\n"
+        "panel.renderShell();\n"
+        "panel.adoptDraft(map);\n"
+        "panel.paint(map);\n"
+        "const nameField = () => panel.root.find((n) => n.tagName === 'input' && n.type === 'text');\n"
+        "const dot = () => panel.root.find((n) => n.className.startsWith('level'));\n"
+        "const before = nameField();\n"
+        "before.value = 'left_lever';\n"
+        "before.dispatch('input');\n"
+        "const dotBefore = dot().className;\n"
+        "panel.paint(pressed);\n"
+        "const survived = nameField() === before;\n"
+        "const levelMoved = dot().className !== dotBefore;\n"
+        "const draftKept = panel.draft.input_lines[0].name;\n"
+        "panel.discardTheDraft();\n"
+        "panel.adoptDraft(map);\n"
+        "panel.paint(map);\n"
+        "console.log(JSON.stringify({ survived, levelMoved, draftKept,\n"
+        "  rebuiltAfterRevert: nameField() !== before, revertedValue: nameField().value }));\n"
+    )
+    result = json.loads(printed)
+    assert result["survived"], "the poll rebuilt the field, so the cursor was thrown out of it"
+    # And the panel still does its job: the dot moved, which is the whole point
+    # of watching this page while somebody presses a lever.
+    assert result["levelMoved"]
+    assert result["draftKept"] == "left_lever", "the edit was recorded as it was typed"
+    # A revert *must* rebuild -- the fields are showing edits the draft no
+    # longer has, and a shape comparison would answer "nothing changed".
+    assert result["rebuiltAfterRevert"]
+    assert result["revertedValue"] == "lever"
+
+
+def test_the_line_map_draft_leaves_the_live_level_behind() -> None:
+    """`is_high_now` is a reading, not configuration. The daemon's LineMap
+    forbids fields it does not declare, so a draft still carrying it would be
+    refused on save -- and rightly: a rig cannot be told to be high."""
+    module = (web_directory() / "elements" / "line_map_panel_element.js").as_uri()
+    printed = run_in_node(
+        "globalThis.HTMLElement = class {};\n"
+        "globalThis.customElements = { get: () => undefined, define: () => {} };\n"
+        f"const {{ draftOf }} = await import({module!r});\n"
+        "console.log(JSON.stringify(draftOf({\n"
+        "  input_lines: [{ name: 'lever', line_index: 4, is_high_now: true }],\n"
+        "  output_lines: [{ name: 'valve', line_index: 3, is_high_now: false }],\n"
+        "})));\n"
+    )
+    draft = json.loads(printed)
+    assert draft["input_lines"] == [{"name": "lever", "line_index": 4}]
+    assert draft["output_lines"] == [{"name": "valve", "line_index": 3}]
+
+
+def test_the_focus_path_survives_a_rebuild_of_the_same_shape() -> None:
+    """What the editors use where a repaint genuinely has to happen: a renamed
+    state has to appear in every transition naming it, so the subtree is rebuilt
+    and the cursor has to be put back by position."""
+    module = (web_directory() / "elements" / "base_panel_element.js").as_uri()
+    printed = run_in_node(
+        "globalThis.HTMLElement = class {};\n"
+        "globalThis.customElements = { get: () => undefined, define: () => {} };\n"
+        f"const {{ BasePanelElement }} = await import({module!r});\n"
+        "function element(children = []) {\n"
+        "  const node = { children, parentNode: null };\n"
+        "  for (const child of children) child.parentNode = node;\n"
+        "  return node;\n"
+        "}\n"
+        "const field = element();\n"
+        "const root = element([element(), element([element([element(), field])])]);\n"
+        "const panel = { root };\n"
+        "const path = BasePanelElement.prototype.pathToDescendant.call(panel, field);\n"
+        "console.log(JSON.stringify({\n"
+        "  path,\n"
+        "  roundTrips: BasePanelElement.prototype.descendantAtPath.call(panel, path) === field,\n"
+        "  detached: BasePanelElement.prototype.pathToDescendant.call(panel, element()),\n"
+        "  missing: BasePanelElement.prototype.descendantAtPath.call(panel, [1, 0, 9]),\n"
+        "}));\n"
+    )
+    result = json.loads(printed)
+    assert result["roundTrips"]
+    assert result["path"] == [1, 0, 1]
+    # A node that is not under this panel, and a path that no longer leads
+    # anywhere: both mean "there is nothing to focus", not a crash mid-repaint.
+    assert result["detached"] is None
+    assert result["missing"] is None
 
 
 def test_the_editors_outcome_names_are_the_ones_the_store_accepts() -> None:

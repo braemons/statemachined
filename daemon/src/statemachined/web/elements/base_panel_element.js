@@ -169,6 +169,75 @@ export class BasePanelElement extends HTMLElement {
     return node;
   }
 
+  /// Repaint, and put the cursor back where the person left it.
+  ///
+  /// There is no framework here, so a repaint means rebuilding a subtree -- and
+  /// the rebuilt subtree does not contain the element that had focus, so the
+  /// cursor lands on the floor mid-word. Two different fixes, and the
+  /// difference matters:
+  ///
+  ///   * a repaint driven by a **poll** should not happen at all. A device
+  ///     reading itself twice a second must not touch a field somebody is
+  ///     typing in, and preserving focus afterwards is a worse version of not
+  ///     disturbing it. See line_map_panel_element.js, which rebuilds only when
+  ///     the shape of the thing changed.
+  ///   * a repaint driven by **the person's own edit** has to happen -- a
+  ///     renamed state has to appear in the transitions that name it -- and the
+  ///     structure it rebuilds is the same structure. That is this.
+  repaintPreservingFocus(repaint) {
+    const active = this.root.activeElement;
+    const path = active === null ? null : this.pathToDescendant(active);
+    // Number inputs throw on selectionStart in some browsers, so ask carefully.
+    let selectionStart = null;
+    let selectionEnd = null;
+    try {
+      selectionStart = active?.selectionStart ?? null;
+      selectionEnd = active?.selectionEnd ?? null;
+    } catch {
+      /* a field with no text selection. Focus is still worth restoring. */
+    }
+
+    repaint();
+
+    if (path === null) return;
+    const restored = this.descendantAtPath(path);
+    if (restored === null || typeof restored.focus !== "function") return;
+    restored.focus();
+    if (selectionStart === null || typeof restored.setSelectionRange !== "function") return;
+    try {
+      restored.setSelectionRange(selectionStart, selectionEnd);
+    } catch {
+      /* not a field that carries a selection */
+    }
+  }
+
+  /// Where a node is, as the chain of child indices from this panel's root.
+  ///
+  /// An index chain rather than an id: nothing in this UI has ids, the fields
+  /// are built in loops over the thing being edited, and the rebuild that is
+  /// about to happen produces the same tree with one value different.
+  pathToDescendant(node) {
+    const path = [];
+    let current = node;
+    while (current !== null && current !== this.root) {
+      const parent = current.parentNode;
+      if (parent === null || parent === undefined) return null;
+      path.unshift(Array.prototype.indexOf.call(parent.children, current));
+      current = parent;
+    }
+    return current === this.root ? path : null;
+  }
+
+  descendantAtPath(path) {
+    let node = this.root;
+    for (const index of path) {
+      const children = node.children;
+      if (!children || index < 0 || index >= children.length) return null;
+      node = children[index];
+    }
+    return node === this.root ? null : node;
+  }
+
   /// A definition list of label/value pairs -- the shape most of this UI is.
   fieldList(pairs) {
     const list = this.make("dl", { class: "fields" });

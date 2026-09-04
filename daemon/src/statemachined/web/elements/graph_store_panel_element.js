@@ -112,7 +112,11 @@ export class GraphStorePanelElement extends BasePanelElement {
     this.hasUnsavedEdits = true;
     // A validation is about a graph, and this is no longer that graph.
     this.lastValidation = null;
-    this.paint();
+    // The whole editor is rebuilt, because a renamed state has to appear in
+    // every transition that names it -- so the cursor has to be put back. The
+    // edit that triggers this is a `change`, which fires on blur, so what is
+    // usually restored is the field the person just tabbed *into*.
+    this.repaintPreservingFocus(() => this.paint());
   }
 
   // --------------------------------------------------------------- paint ---

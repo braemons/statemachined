@@ -13,6 +13,14 @@
 // The trial controls are here too, and they are honestly labelled: on a real
 // rig **triald drives this loop**. What a person needs them for is the bench --
 // arming one trial by hand to watch a valve open.
+//
+// **Three slots, painted by three different things.** The chooser is the
+// person's -- a set of checkboxes -- and is repainted only when the person or
+// the store changes it. The live state and the last trial are the rig's and are
+// repainted from a stream and a poll, several times a second. They are separate
+// subtrees because a stream frame that rebuilt the chooser would take the
+// keyboard out of it: the element you had focused is removed from the document,
+// and the focus goes with it.
 
 import { BasePanelElement, defineElementOnce } from "./base_panel_element.js";
 import { formatDeviceMicroseconds } from "./device_panel_element.js";
@@ -29,12 +37,19 @@ export class SessionPanelElement extends BasePanelElement {
 
   renderShell() {
     this.failureSlot = this.make("div", { class: "failure-slot" });
-    this.body = this.make("div", { text: "reading the store..." });
+    // Three slots, filled independently. See the note at the top of this file.
+    this.chooserSlot = this.make("div", { text: "reading the store..." });
+    this.liveSlot = this.make("div");
+    this.lastTrialSlot = this.make("div");
     this.root.replaceChildren(
       this.make("section", {}, [
         this.make("h2", {}, [this.make("span", { text: "Session" })]),
         this.failureSlot,
-        this.body,
+        this.chooserSlot,
+        this.make("h3", { text: "Now" }),
+        this.liveSlot,
+        this.make("h3", { text: "The last trial" }),
+        this.lastTrialSlot,
       ]),
     );
   }
@@ -43,8 +58,12 @@ export class SessionPanelElement extends BasePanelElement {
     await this.attempt(async () => {
       const listing = await this.api.listStoredGraphs();
       this.storedGraphs = listing.graphs.filter((graph) => graph.readable !== false);
-      this.paint();
+      this.paintChooser();
     });
+    // Both rig slots get their placeholder now rather than when the first frame
+    // arrives, so the panel does not open as two empty headings.
+    this.paintLiveState();
+    this.paintLastTrial();
     this.openStateStream();
     // The result is polled rather than streamed: it changes once per trial, and
     // a second socket per panel is a cost the rig pays for nothing.
@@ -55,7 +74,7 @@ export class SessionPanelElement extends BasePanelElement {
         if (error.status !== 404) throw error;
         this.lastResult = null;
       }
-      this.paint();
+      this.paintLastTrial();
     });
   }
 
@@ -63,7 +82,7 @@ export class SessionPanelElement extends BasePanelElement {
     const socket = this.trackSocket(this.api.openStateStream());
     socket.addEventListener("message", (event) => {
       this.state = JSON.parse(event.data);
-      this.paint();
+      this.paintLiveState();
     });
     socket.addEventListener("close", () => {
       // Reopen unless this panel is going away. A stream that dies quietly when
@@ -77,16 +96,27 @@ export class SessionPanelElement extends BasePanelElement {
     });
   }
 
-  paint() {
-    this.body.replaceChildren(
-      this.make("h3", { text: "The set this session will use" }),
-      this.graphChooser(),
-      this.uploadNote ? this.make("p", { class: "good", text: this.uploadNote }) : this.make("div"),
-      this.make("h3", { text: "Now" }),
-      this.liveState(),
-      this.make("h3", { text: "The last trial" }),
-      this.lastTrial(),
+  /// The person's half. Repainted when the person or the store changes it, and
+  /// never by a poll -- it holds the checkboxes.
+  paintChooser() {
+    this.repaintPreservingFocus(() =>
+      this.chooserSlot.replaceChildren(
+        this.make("h3", { text: "The set this session will use" }),
+        this.graphChooser(),
+        this.uploadNote
+          ? this.make("p", { class: "good", text: this.uploadNote })
+          : this.make("div"),
+      ),
     );
+  }
+
+  /// The rig's half. Several times a second, and nothing here is editable.
+  paintLiveState() {
+    this.liveSlot.replaceChildren(this.liveState());
+  }
+
+  paintLastTrial() {
+    this.lastTrialSlot.replaceChildren(this.lastTrial());
   }
 
   graphChooser() {
@@ -98,7 +128,7 @@ export class SessionPanelElement extends BasePanelElement {
           onChange: (event) => {
             if (event.target.checked) this.chosenGraphNames.add(graph.name);
             else this.chosenGraphNames.delete(graph.name);
-            this.paint();
+            this.paintChooser();
           },
         }),
         this.make("span", { text: graph.name }),
@@ -135,7 +165,7 @@ export class SessionPanelElement extends BasePanelElement {
       .join("  ");
     this.uploadNote =
       `set v${uploaded.set_version} committed in ${uploaded.elapsed_milliseconds} ms  --  ${slots}`;
-    this.paint();
+    this.paintChooser();
   }
 
   liveState() {

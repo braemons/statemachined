@@ -1005,6 +1005,28 @@ consequences worth writing down:
 | **Trace** | the live tail of §4.6, one row per state visit, filterable by `trial_id`. The one view that is useful with nobody in the room, because it is still there in the morning |
 | **Firmware** | running against available; the mismatch warning |
 
+**A poll must not touch what a person is holding.** Every panel here polls, and
+three of them are editable, so the two collide: rebuilding a table to repaint it
+removes the `<input>` that had focus from the document, and the cursor, the
+selection and the not-yet-committed keystrokes go with it. The field dies about
+a second after it is clicked, which is exactly how this was found. Two rules,
+and which one applies is decided by *who caused the repaint*:
+
+  * **the rig caused it** — a poll, a stream frame — so repaint only what
+    changed and leave the fields alone. The Lines panel builds its tables once
+    and the poll then sets a class on the level dots it kept references to; the
+    Session panel keeps the chooser in a different subtree from the live state.
+  * **the person caused it** — an edit that changes other fields, such as a
+    renamed state appearing in the transitions that name it — so the repaint has
+    to happen, and `repaintPreservingFocus` puts the cursor back by position.
+    The structure it rebuilds is the same structure, which is what makes a path
+    of child indices the right address.
+
+The first rule is the one that matters: preserving focus after a repaint nobody
+asked for is a worse version of not repainting. It is tested rather than
+described — `minimal_dom_for_panel_elements.mjs` is a DOM small enough to hold a
+panel, and the test asserts the field is the *same element* after a poll.
+
 ### The console
 
 A **separate repo** (`braemons-console`), not this branch. A small static shell:
