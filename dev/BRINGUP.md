@@ -268,6 +268,50 @@ next state change — up to 500 ms, or until the next trial if it was sitting in
 
 ---
 
+## 7. The daemon and the web UI, in front of the board
+
+Everything above talks to the board with one command at a time. This runs the
+whole host half against it -- the API of [`API.md`](API.md), the trace, and the
+six panels of [`DAEMON.md`](DAEMON.md) §5 -- so that what you are looking at in
+a browser is a real device.
+
+```sh
+make bench                       # /dev/ttyACM0, or make bench TARGET=...
+```
+
+Then open **http://127.0.0.1:8081/**. The daemon greets the board on startup,
+pushes the wiring from the line map in
+`daemon/bench/statemachined_bench_configuration.toml`, and seeds its graph store
+from `graphs/` into `build/bench/graphs` -- a copy, so deleting a graph in the
+browser does not delete an example from the repository. Greeting ends demo mode
+until the next reset, as it does anywhere else.
+
+**The board must be running current firmware.** An image from before the graph
+set exists answers `hello` perfectly well and then refuses the upload: the tell
+is `max_graphs` missing from `caps`, and `max_path` at 64 rather than 255.
+`make upload` fixes it.
+
+```sh
+make bringup ARGS="hello"        # caps, before wondering why an upload failed
+```
+
+### With no board at all
+
+The same firmware, built for this machine, on a TCP port -- not a mock, and not
+a second protocol implementation, but `firmware/native/` driven by an ordinary
+loop instead of a timer ISR. Two terminals:
+
+```sh
+make bench-device                             # socket://127.0.0.1:5300
+make bench TARGET=socket://127.0.0.1:5300
+```
+
+What this cannot tell you is anything the board is for: no pin reaches a wire,
+no scan has a deadline, and `scan_hz` is whatever this machine managed. It is
+for the UI and the API, and the section above is for the rig.
+
+---
+
 ## What to write down
 
 Three numbers settle M3, and everything after it assumes they held:

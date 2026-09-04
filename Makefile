@@ -80,6 +80,48 @@ TARGET ?= /dev/ttyACM0
 bringup:                    ## talk to a board: make bringup ARGS="state"
 	uv run --project daemon statemachined -t $(TARGET) $(ARGS)
 
+# The firmware's own session and engine, built for this machine. Named by the
+# integration tests' skip message and by the bench, both of which are useless
+# without it, and it is a fraction of `make test`: one binary, no ctest.
+.PHONY: integration-device
+integration-device:         ## build build/statemachined_native_device on its own
+	cmake -S . -B $(BUILD) -DCMAKE_BUILD_TYPE=Debug
+	cmake --build $(BUILD) -j --target statemachined_native_device
+
+# The bench: the daemon, its API and its web UI, in front of a device. This is
+# the target that answers "does the thing work" without a package, a Pi, or
+# triald -- open http://127.0.0.1:8081/ and click.
+#
+# TARGET is the same variable `make bringup` uses, so the same two paths work:
+# a board on a cable, or `make bench-device` in another terminal and
+# TARGET=socket://127.0.0.1:5300. Greeting a board ends demo mode until reset.
+#
+# The store is seeded from graphs/ rather than pointed at it: deleting a graph
+# in the web UI must not delete an example from the repository.
+BENCH_CONFIG    ?= daemon/bench/statemachined_bench_configuration.toml
+BENCH_STORE     := build/bench/graphs
+BENCH_HOST      ?= 127.0.0.1
+BENCH_PORT      ?= 8081
+
+.PHONY: bench
+bench:                      ## the daemon + web UI against a device: make bench TARGET=...
+	@mkdir -p $(BENCH_STORE) build/bench/trace
+	@for graph in graphs/*.json; do \
+	  case "$$graph" in *-lines.json) continue;; esac; \
+	  [ -f "$(BENCH_STORE)/$$(basename $$graph)" ] || cp "$$graph" $(BENCH_STORE)/; \
+	done
+	uv run --project daemon statemachined -t $(TARGET) serve \
+	  --config $(BENCH_CONFIG) \
+	  --host $(BENCH_HOST) --port $(BENCH_PORT) $(ARGS)
+
+# The other half of the no-board path: the firmware's own session and engine,
+# built for this machine, on a TCP port the daemon can dial. Not a mock -- see
+# the file's docstring, and daemon/tests/integration/conftest.py, which is the
+# same bridge.
+.PHONY: bench-device
+bench-device: integration-device  ## the native device on socket://127.0.0.1:5300
+	python3 daemon/bench/native_device_on_a_socket.py $(ARGS)
+
 # The only tests in this repository that need hardware. Everything else -- the
 # core on the host, the HAL under Renode -- runs in CI with no board attached,
 # and neither can answer what this does: the achieved scan rate, what a command

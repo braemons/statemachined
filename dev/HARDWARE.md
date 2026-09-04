@@ -191,6 +191,25 @@ measured here. Reverting the handoff fails it on the first assertion, which is
 the point — a measurement written down once is a measurement that quietly stops
 being true.
 
+### The graph set, over the link — measured 2026-09-04
+
+`dev/DAEMON.md` §3.2 uploads every graph a session uses once and then switches
+by index, and the whole argument for that is the second row of this table.
+
+| | |
+|---|---|
+| Uploading a set: 2 graphs, 15 states, 11 transitions, 9 actions, 5 distributions | **205 ms** |
+| `configure`, switching to a graph already on the board | **27 ms** |
+| A trial capped at 8 000 ms, as the device measured it | 8 000 055 µs |
+
+The 205 ms is paid once per session, before the first trial. The 27 ms is what
+each inter-trial interval actually pays, and it is the number §3.2 exists to
+produce: uploading go/no-go per trial would put the first figure there instead.
+
+The set used 2 of 20 graph slots and 15 of 32 states, which is the capacity
+question open question 10 asks about — a real paradigm set is what will settle
+it, not this one.
+
 ### Trial timing — measured 2026-09-03
 
 A two-state graph uploaded over the link, `wait --(500 ms)--> Hit`, raising line

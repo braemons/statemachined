@@ -120,6 +120,9 @@ statemachined/
 │   │           ├── graph_store_panel_element.js ·  graph_node_diagram.js
 │   │           ├── session_panel_element.js    ·  trace_panel_element.js
 │   │           └── firmware_panel_element.js
+│   ├── bench/                 running this by hand, with or without a board
+│   │   ├── statemachined_bench_configuration.toml  what `make bench` reads
+│   │   └── native_device_on_a_socket.py            the firmware, on a TCP port
 │   └── tests/
 │       ├── unit/                 host-only. Runs in `make ci`
 │       ├── integration/          whole sessions against the native device
@@ -1095,7 +1098,9 @@ rather than `stable` automatically.
 ## 7. Milestones
 
 Each is a branch that leaves the tree working. `PLAN.md`'s M4 is replaced by
-M4a–M4g; its M5–M7 shift down and need renumbering in that document.
+M4a–M4h, and that document has been renumbered to match: packaging is its M5,
+the session with triald its M6, data flash its M7, and the two firmware
+milestones that used to be M5 and M6 are now M8 and M9.
 
 | | |
 |---|---|
@@ -1106,9 +1111,36 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 | **M4e** ✅ | `device/device_supervisor.py` and `device_clock_correlation.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks. It needed a host-side entry point for the firmware, which is now `firmware/native/statemachined_native_device.cpp`, and a `socket://` transport rather than the pty this row used to say — see §7's note |
 | **M4f** ✅ | FastAPI: device, lines, graphs, trial, config, state/stream, and the trace of §4.6; the triald client; `statemachined serve`. [`dev/API.md`](API.md) written first, the way `PROTOCOL.md` was. It found `patch`: documented on the wire since M2 and implemented nowhere, so a host that sent one got a silently unpatched trial — see below |
 | **M4g** ✅ | The web UI and the `/elements/` contract; mDNS. Six elements, each with a shadow root and a `base` attribute, served as package data by `api/web_user_interface_routes.py`; the shell at `/`, the contract at `/elements/`. `mdns_service_advertisement.py` publishes `_statemachined._tcp` with vstimd's stable `id=`, hashed from `/etc/machine-id`, and never fatally. The UI's own tests are the compiler it does not have: every module it imports exists, every `/api/` path it calls is a route, every module parses, and the editor's outcome names are the ones the store accepts |
+| **M4h** ▶️ | **The bench: this UI in front of a real board.** Promoted ahead of packaging, because until somebody has clicked through the six panels with a device on the other end, everything above is a set of tests agreeing with each other. `make bench` runs the daemon, the API and the UI against `TARGET` -- a board on a cable, or `make bench-device` and `socket://127.0.0.1:5300` for the same firmware built for this machine -- from `daemon/bench/statemachined_bench_configuration.toml`, whose store is seeded from `graphs/` under `build/` so deleting a graph in the browser never deletes an example. The bridge the integration tests use moved to `daemon/bench/native_device_on_a_socket.py` and is now shared rather than copied, and `make integration-device`, named by three docstrings and existing in none, exists. **Done against the R4**: reflashed to M4c firmware, wiring pushed, the set uploaded, and a whole configure → start → result through the HTTP API. **Left**: the browser. No panel of this UI has ever been rendered |
 | **M5** | Packaging: nfpm, systemd, sysusers, udev, logrotate, the builder containers, `release.yml`, one line in `packages/sources.txt`. **Installed on the Pi 5 alongside vstimd and triald** |
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
 | **M7** | **Data flash** (§3.4): the `hal.h` addition, the RA4M1 implementation, a file-backed `native.cpp` stand-in, the boot-time read, and `persist`. Deferred deliberately: the compile-time safe levels of §3.4 hold the fail-safe hole shut without it, and this is easier to build once a daemon exists to exercise it. Renode covers the HAL addition |
+
+**The first numbers off a real board.** M3 has said since it was written that
+the 10 kHz scan rate remains a claim. It is not a claim any more, and the board
+is quicker than the target by more than an order of magnitude.
+
+| | on the R4 |
+|---|---|
+| measured scan rate | **122 767 Hz**, against a 10 000 Hz target |
+| graph set upload, two graphs, 15 states | 205 ms |
+| `configure`, switching by index | 27 ms |
+| trial cap of 8 000 ms, as measured by the device | 8 000 055 us |
+
+The upload is the number §3.2 exists to keep off the inter-trial interval, and
+it is paid once per session. The 27 ms is what a trial actually costs to
+configure, which is the whole argument for the set.
+
+**The overrun counter is not a surprise, and is worth watching anyway.**
+`scan.overruns` climbs steadily while a daemon is attached -- a few hundred
+within a minute, `worst_gap` around 20, `tx_stalls` at zero -- and
+`dev/HARDWARE.md` already explains the mechanism: about 3 missed periods per
+command, spent in the foreground holding the engine to parse one and build its
+reply. What is new is that the daemon is a *continuous* source of commands
+rather than an occasional one: a heartbeat every 2 s, plus whatever a browser
+tab is polling at 1 Hz. That is a running cost nothing had measured, it is the
+argument for the panels polling at 1 Hz rather than at 10, and it is worth a
+number of its own during M6 with a real session's traffic on the link.
 
 **What M4b and M4c cost, measured.** The 255-entry path is +3056 B, exactly as
 budgeted, and it briefly did not fit: demo mode carries a *second* `TrialRunner`,

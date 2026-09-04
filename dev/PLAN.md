@@ -799,11 +799,13 @@ the trial type store. **Open: which.**
 | **M0** | ✅ | Repo, `platformio.ini` with `native` + `uno_r4_minima`, `dev/PROTOCOL.md`, a native build that compiles and does nothing |
 | **M1** | ✅ | Core engine — conditions, timers, RNG, the four distributions — unit-tested on native. No serial, no hardware |
 | **M2** | ✅ | Protocol codec: chunked graph upload, `configure`/`armed`/`result`/`cancel`. Covered in-process by `test_host_link_session`, and end-to-end over a real UART peripheral under Renode rather than the pty this milestone first imagined |
-| **M3** | 🔶 | **Uno R4 Minima HAL** — direct RA4M1 port-register reads, `FspTimer` ISR at 10 kHz, real pins. Builds, links and runs emulated; RAM measured — see above and `dev/HARDWARE.md`. Demo mode (`firmware/core/demo/`) now runs a built-in graph before any host greets, so a bench board is observable with two switches and six LEDs. **The achieved scan rate still needs a board** |
-| **M4** | ▶️ | Bridge to triald: a whole session on the R4, with `triald sim`'s simulated subject replaced by the real board. `bridge/` is empty |
-| **M5** | ☐ | Example graphs, `dev/HARDWARE.md` with R4 pinout and wiring, virtual events and output overrides, sync line. `dev/HARDWARE.md` has the line map and the demo wiring; `graphs/` is still empty, and virtual events, output overrides and the sync line are untouched |
-| **M6** | ☐ | Teensy 4.1 and ESP32 HALs; the golden reproducibility test green on all three boards |
-| **M7** | ☐ | Packaging |
+| **M3** | ✅ | **Uno R4 Minima HAL** — direct RA4M1 port-register reads, `FspTimer` ISR at 10 kHz, real pins. Builds, links and runs emulated; RAM measured — see above and `dev/HARDWARE.md`. Demo mode (`firmware/core/demo/`) now runs a built-in graph before any host greets, so a bench board is observable with two switches and six LEDs. **The scan rate is measured on a board: 122 767 Hz**, twelve times the target — see `dev/DAEMON.md` §7 |
+| **M4** | ▶️ | **The host half, and it is a daemon rather than a `bridge/`.** Broken into M4a–M4h and specified in [`dev/DAEMON.md`](DAEMON.md) §7: the move, the firmware's wiring and `visit` stream, the graph set, the model and compiler, the supervisor, the API, the web UI and mDNS — a–g are done, and **M4h, this UI in front of a real board, is the one in progress**. `graphs/` has go/no-go, 2AFC and the reference board's line map; `bridge/` will never exist, and `daemon/` is what replaced it |
+| **M5** | ☐ | Packaging: nfpm, systemd, sysusers, udev, logrotate, the release workflow, and one line in `braemons/packages/sources.txt`. Installed on the Pi 5 beside vstimd and triald |
+| **M6** | ☐ | A whole session on the R4, with `triald sim`'s simulated subject replaced by the real board — what this document's M4 originally asked for, and it needs everything above |
+| **M7** | ☐ | Data flash: the wiring a board knows before anybody greets it (`dev/DAEMON.md` §3.4) |
+| **M8** | ☐ | Virtual events, output overrides, the sync line |
+| **M9** | ☐ | Teensy 4.1 and ESP32 HALs; the golden reproducibility test green on all three boards |
 
 ### Emulation, and what it can and cannot settle
 
