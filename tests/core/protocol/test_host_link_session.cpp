@@ -756,6 +756,69 @@ TEST_CASE("cancel reports what actually happened") {
         std::to_string(static_cast<int>(TrialOutcome::Cancelled)));
 }
 
+TEST_CASE("a patch changes a duration for one trial and puts it back") {
+  // PROTOCOL.md 3.3 has documented `patch` since M2 and nothing implemented it,
+  // so a host that sent one got a silently unpatched trial -- a timing that is
+  // quietly wrong, which is the failure this firmware is least willing to have.
+  Host h;
+  greet(h);
+  upload_minimal(h);  // Wait --(500 ms)--> Hit
+
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":1,"set_version":7,"patch":[{"i":0,"a":40}])");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":1)");
+  size_t before = h.sink.lines.size();
+  for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
+    h.device.advance_trial(0, t);
+
+  std::vector<std::string> result =
+      without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
+  REQUIRE(type_of(result.front()) == "result_begin");
+  CHECK(field(result.front(), "total_us") == "40000");
+
+  // And the next trial draws the graph's own timing again: a patch that
+  // outlived its trial would be a timing nobody could account for afterwards.
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":2,"set_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":2)");
+  before = h.sink.lines.size();
+  for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
+    h.device.advance_trial(0, t);
+  result = without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
+  CHECK(field(result.front(), "total_us") == "500000");
+}
+
+TEST_CASE("a patch naming a distribution that does not exist is refused") {
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  const auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+                        R"(,"trial_id":1,"set_version":7,"patch":[{"i":9,"a":40}])");
+  REQUIRE(r.size() == 1);
+  CHECK(field(r[0], "code") == "bad_index");
+  CHECK(field(r[0], "context") == "patch");
+}
+
+TEST_CASE("a malformed patch leaves every distribution as it was") {
+  // Nothing is applied when any entry is unusable, so a trial cannot run with
+  // half a patch on it.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":1,"set_version":7,"patch":[{"i":0,"a":40},{"i":9,"a":10}])");
+
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":2,"set_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":2)");
+  const size_t before = h.sink.lines.size();
+  for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
+    h.device.advance_trial(0, t);
+  const std::vector<std::string> result =
+      without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
+  CHECK(field(result.front(), "total_us") == "500000");
+}
+
 TEST_CASE("a cancel that loses the race gets the real outcome back") {
   // The bridge must cope with asking to cancel and being told Hit. The
   // alternative is a record claiming a trial was cancelled when the animal had

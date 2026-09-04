@@ -83,7 +83,7 @@ class Device:
         #: evidence, even when the test it arrived during passed.
         self.stray: list[dict] = []
         self.junk: list[tuple[str, str]] = []
-        session.on_unsolicited = self.stray.append
+        session.on_unsolicited = lambda message, line: self.stray.append(message)
         session.on_junk = lambda line, why: self.junk.append((line, why))
 
     # ----------------------------------------------------------- commands ---

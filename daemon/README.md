@@ -106,6 +106,21 @@ rig is the line map (which pin `lever_left` is) and that board's `caps` (whether
 the set fits), and both of those meet the graph in `graph_set_compiler.py` rather than in
 the file.
 
+## Running it
+
+```sh
+uv run --project daemon statemachined serve --port 8081
+```
+
+The API is [`dev/API.md`](../dev/API.md), the generated schema is at
+`/openapi.json`, and `/docs` is browsable. Everything else in this file is the
+bench instrument; `serve` is the daemon, and the difference is that a bench
+command borrows a board somebody is holding while a daemon takes it.
+
+Configuration is `/etc/braemons/statemachined.toml` (`--config` to point
+elsewhere, and its absence means the built-in defaults, which is what a bench
+run wants).
+
 ## Tests that need no board
 
 ```sh

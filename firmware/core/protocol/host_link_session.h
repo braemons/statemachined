@@ -97,6 +97,20 @@ class DuplicateCommandGuard {
   bool have_ = false;
 };
 
+/// One distribution's parameters as they were before a trial patched them.
+///
+/// `configure` may override a, b and c for the trial it arms, and the override
+/// is reverted when that trial ends. What is stored is therefore not the patch
+/// but its *inverse*: the values to put back. Keeping the originals rather than
+/// re-uploading the set afterwards is the whole reason a patch is cheap enough
+/// to be in a trial's critical path.
+struct PatchedDistribution {
+  RandomDistributionIndex index = kNoRandomDistribution;
+  Milliseconds a = 0;
+  Milliseconds b = 0;
+  Milliseconds c = 0;
+};
+
 /// What the session is doing, which is what decides whether a command is legal.
 enum class LinkState : uint8_t {
   Greeting = 0,  ///< no hello yet; only hello is accepted
@@ -196,6 +210,18 @@ class HostLinkSession {
   void on_cancel(const JsonObject& m, uint16_t message_id, Microseconds now_us);
   void on_ping(uint16_t message_id, Microseconds now_us);
   void on_wiring(const JsonObject& m, uint16_t message_id);
+
+  /// Apply `configure`'s `patch`, remembering what to put back. False and a
+  /// refusal already sent if any entry is unusable -- and nothing is applied in
+  /// that case, so a malformed patch cannot leave a trial running with half of
+  /// one.
+  bool apply_distribution_patches(const JsonObject& m, uint16_t message_id);
+
+  /// Put every patched distribution back. Called when a trial ends, when
+  /// another `configure` replaces the patches, and whenever a session resets --
+  /// a patch that outlived its trial would be a timing nobody could account
+  /// for afterwards.
+  void revert_distribution_patches();
   void on_state_request(uint16_t message_id, Microseconds now_us);
 
   /// A refusal of a command whose `message_id` was read: carries
@@ -254,6 +280,9 @@ class HostLinkSession {
   GraphSet live_set_;
   GraphBuilder builder_{live_set_};
   bool have_set_ = false;
+
+  PatchedDistribution patched_distributions_[kMaxPatchedDistributions];
+  uint8_t n_patched_distributions_ = 0;
 
   DeviceWiring wiring_;
   bool have_wiring_ = false;

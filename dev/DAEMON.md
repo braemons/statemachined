@@ -689,6 +689,11 @@ together is cheaper than sequencing them:
 
 ## 4. The API
 
+> **[`API.md`](API.md) is this section, written out.** It was written first, the
+> way `PROTOCOL.md` was, and it is the document to change when the surface
+> changes — what follows here is the *argument* for the shape, and it stays
+> because the reasons are the part that is expensive to rediscover.
+
 FastAPI + pydantic. Every model is a transcription of something already
 specified — `PROTOCOL.md` for the device surface, triald's `dev/API.md` for the
 outbound `OutcomeReport`. Documented in `dev/API.md` here, generated schema at
@@ -839,11 +844,20 @@ rather than on eviction is deliberate — a crash otherwise loses exactly the
 window that mattered most, which is everything still in the ring.
 
 ```jsonc
-{"kind":"visit","seq":2,"trial_id":193,"graph":"go-nogo","set_version":7,
- "state":"Foreperiod","exit":"transition","transition":0,"to":"Cue",
- "drawn_ms":500,"entered_us":500120,"duration_us":183044,
- "entered_host":"2026-09-03T14:22:07.481932Z","clock_err_us":180}
+{"entry_number":4172,"kind":"visit","device_sequence_number":2,
+ "trial_id":193,"graph":"go-nogo","set_version":7,
+ "state_name":"Foreperiod","exit_cause":"transition",
+ "fired_transition_target_state_name":"Cue","drawn_duration_ms":500,
+ "entered_device_microseconds":500120,"unwrapped_device_microseconds":4795500120,
+ "entered_host_time":"2026-09-03T14:22:07.481932Z",
+ "host_time_uncertainty_microseconds":180}
 ```
+
+**`entry_number` is the daemon's and is what `since_` means**, which this
+sketch got wrong: the device's `seq` counts visits within a *run* and restarts
+at zero every trial, so it cannot address a position in a log that spans a
+session. Both are carried — `device_sequence_number` is what a gap is detected
+with, `entry_number` is what a cursor is.
 
 NDJSON rather than SQLite, for the same reason the wire is NDJSON: it is
 append-only, so a crash mid-write costs the last line and not the file; it is
@@ -965,8 +979,11 @@ inherits whatever this gets right.
 - **One `nfpm` config → both formats.** `.deb` for amd64/arm64, `.rpm` for
   x86_64/aarch64. Simpler than vstimd's split, which needs `cargo-deb` for Debian
   and a hand-written `.spec` for RPM.
-- **Dependencies are small**: fastapi, uvicorn, pydantic, pydantic-settings,
-  pyserial, httpx. Nothing like triald's numpy/scipy problem.
+- **Dependencies are small**: fastapi, uvicorn, pydantic, pyserial, httpx —
+  what M4f actually installed, and no pydantic-settings: the config is one TOML
+  file read with the standard library's `tomllib`, and a settings framework for
+  one file would be a dependency bought to save four lines. Nothing like
+  triald's numpy/scipy problem.
 - **Version from the git tag.** `packaging/scripts/git-version.sh`, lifted
   verbatim from triald/vstimd; `pyproject.toml` carries the `0.0.0` sentinel, so
   a `0.0.0` artifact means the stamping was bypassed.
@@ -1036,7 +1053,7 @@ M4a–M4g; its M5–M7 shift down and need renumbering in that document.
 | **M4c** ✅ | **The graph set, in the firmware** (§3.2, §3.3): shared pools, `GraphEntry`, `set_begin`/`set_end`, a slot in `configure`, `max_graphs` in `caps`. The larger of the two firmware milestones and the one this plan's trial loop rests on. Covered by the native core, the Renode session and `PROTOCOL.md` message by message, all of which exist |
 | **M4d** ✅ | `model/` and `graph_set_compiler.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4e** ✅ | `device/device_supervisor.py` and `device_clock_correlation.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks. It needed a host-side entry point for the firmware, which is now `firmware/native/statemachined_native_device.cpp`, and a `socket://` transport rather than the pty this row used to say — see §7's note |
-| **M4f** | FastAPI: device, lines, graphs, trial, config, state/stream; the triald client; `statemachined serve`. `dev/API.md` written first, the way `PROTOCOL.md` was |
+| **M4f** ✅ | FastAPI: device, lines, graphs, trial, config, state/stream, and the trace of §4.6; the triald client; `statemachined serve`. [`dev/API.md`](API.md) written first, the way `PROTOCOL.md` was. It found `patch`: documented on the wire since M2 and implemented nowhere, so a host that sent one got a silently unpatched trial — see below |
 | **M4g** | The web UI and the `/elements/` contract; mDNS |
 | **M5** | Packaging: nfpm, systemd, sysusers, udev, logrotate, the builder containers, `release.yml`, one line in `packages/sources.txt`. **Installed on the Pi 5 alongside vstimd and triald** |
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
@@ -1083,6 +1100,32 @@ file descriptor raw, which is exactly the code path a test should not skip. So
 the harness bridges a TCP socket to the child's pipes and the daemon connects
 with `socket://127.0.0.1:<port>`: a URL a rig genuinely uses, and one that keeps
 the transport under test the transport the daemon ships.
+
+**What M4f found.** `configure`'s `patch` — per-trial distribution overrides —
+has been in `PROTOCOL.md` §3.3 since M2 and was implemented in no layer at all.
+A host sending one got a trial whose timings were quietly the unpatched ones,
+which is the class of failure this firmware is least willing to have. It is
+implemented now, in the firmware, with the *inverse* of the patch stored so a
+trial's overrides come off when it ends; a malformed patch applies nothing, and
+a patch that outlived its trial would be a timing nobody could account for.
+
+**Two things about the daemon's shape are worth writing down**, because neither
+is in §4 and both would otherwise look arbitrary in the code.
+
+*One lock, held by everything that talks to the device.* A serial link is not
+reentrant, and the alternative — a queue with a reader matching replies to
+requests — is the right shape for a link serving many callers concurrently. This
+one serves triald in a strict request/response loop plus a browser tab. Coarse
+locking is honest about that; a queue would be machinery for a concurrency this
+rig does not have.
+
+*A thread that reads the link when nobody asked it to.* A result and the `visit`
+stream arrive unasked. Without that thread they would sit in the kernel's buffer
+until the next command happened to read them, and a trace whose timestamps are
+the device's but whose *arrival* is whenever somebody next asked is not a trace.
+It reads in 50 ms bursts under the lock, so a request never waits long for it,
+and it carries the heartbeat `ping` — which the link-loss watchdog wants anyway,
+and which is the clock correlation's observation for free.
 
 **M4a is worth doing and merging on its own.** It is a move with no new
 behaviour, it makes the hardware suite test the daemon's codec instead of a copy

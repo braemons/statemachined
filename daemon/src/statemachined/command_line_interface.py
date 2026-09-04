@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import time
+from pathlib import Path
 
 from . import __version__
 from .board_pin_labels import high_lines, word_bits
@@ -39,7 +40,7 @@ def note(text: str) -> None:
     print(text, file=sys.stderr, flush=True)
 
 
-def show_unsolicited(msg: dict) -> None:
+def show_unsolicited(msg: dict, line: str = "") -> None:
     t = msg.get(Field.MSG_TYPE)
     if t == MsgType.LOG:
         note(f"  log [{msg.get('level', '?')}] {msg.get('message', '')}")
@@ -308,6 +309,43 @@ def cmd_monitor(args, session: RequestResponseSession) -> int:
         return 0
 
 
+# ------------------------------------------------------------------ serve ---
+
+
+def cmd_serve(args) -> int:
+    """Run the daemon: the API, the device, and the trace.
+
+    The one subcommand that does not open a link itself. Everything else here
+    is a bench instrument -- one command out, one reply back, and the port
+    closed again -- and this is the opposite: it owns the port for as long as it
+    runs, which is why it is refused if something else already has it.
+
+    Deliberately not part of `open_session` above. A bench command borrows a
+    board somebody is holding; a daemon takes it.
+    """
+    import uvicorn
+
+    from .api.application import create_application
+    from .daemon_configuration import DEFAULT_CONFIGURATION_PATH, DaemonConfiguration
+
+    configuration = DaemonConfiguration.load_from_toml_file(
+        Path(args.config) if args.config else DEFAULT_CONFIGURATION_PATH
+    )
+    # The command line wins over the file, so that a bench run can point at a
+    # different board without editing /etc.
+    if args.target_was_given:
+        configuration.device_target = args.target
+
+    note(f"statemachined serving on {args.host}:{args.port}, device {configuration.device_target}")
+    uvicorn.run(
+        create_application(configuration),
+        host=args.host,
+        port=args.port,
+        log_level="warning",
+    )
+    return 0
+
+
 # ------------------------------------------------------------------- main ---
 
 
@@ -388,11 +426,32 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("monitor", help="read lines and check their CRCs, sending nothing")
     s.set_defaults(func=cmd_monitor)
 
+    s = sub.add_parser("serve", help="run the daemon: the API, the device, and the trace")
+    s.add_argument("--host", default="0.0.0.0", help="address to serve on (default: %(default)s)")
+    s.add_argument("--port", type=int, default=8081, help="port (default: %(default)s)")
+    s.add_argument(
+        "--config",
+        default="",
+        help="the TOML to read (default: /etc/braemons/statemachined.toml, and its "
+        "absence means the built-in defaults)",
+    )
+    s.set_defaults(func=cmd_serve)
+
     return p
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+
+    # `serve` owns the port rather than borrowing it, so it does not go through
+    # open_session below -- and it needs to know whether -t was actually typed,
+    # since the config file is otherwise the authority.
+    if getattr(args, "func", None) is cmd_serve:
+        args.target_was_given = "-t" in (argv or sys.argv[1:]) or "--target" in (
+            argv or sys.argv[1:]
+        )
+        return cmd_serve(args)
+
     try:
         link, session = open_session(args)
     except Exception as exc:  # pyserial raises several unrelated types

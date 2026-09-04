@@ -15,7 +15,7 @@ in unnoticed.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer
 
 from .trial_outcome import TrialCancelReason, TrialOutcome
 
@@ -60,6 +60,11 @@ class TrialResultRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trial_id: int
+    #: An IntEnum, because the wire carries the number and it is a contract --
+    #: these values are in every .tdr the lab has written. It is serialised by
+    #: **name** wherever this model becomes JSON: a `.tdr` needs the number and
+    #: a person reading an API response needs the word, and the two audiences
+    #: are not the same one.
     outcome: TrialOutcome
     cancel_reason: TrialCancelReason = TrialCancelReason.NONE
     total_duration_microseconds: int = 0
@@ -73,6 +78,14 @@ class TrialResultRecord(BaseModel):
     path_was_truncated: bool = False
     first_visit_sequence_number: int = 0
     total_visit_count: int = 0
+
+    @field_serializer("outcome")
+    def _serialise_outcome_by_name(self, outcome: TrialOutcome) -> str:
+        return outcome.name
+
+    @field_serializer("cancel_reason")
+    def _serialise_cancel_reason_by_name(self, reason: TrialCancelReason) -> str:
+        return reason.name
 
     @property
     def missing_visit_count(self) -> int:

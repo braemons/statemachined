@@ -56,7 +56,11 @@ from .message_framing import DeviceRefusedTheCommand
 from .message_vocabulary import Field, MsgType
 from .request_response_session import PROTOCOL_VERSION, RequestResponseSession, random_seed
 from .serial_link import DEFAULT_BAUD, DEFAULT_TARGET, DEFAULT_TIMEOUT, SerialLink
-from .trial_result_reassembly import read_trial_result
+from .trial_result_reassembly import (
+    ReassembledTrialResult,
+    TrialResultCollector,
+    read_trial_result,
+)
 
 
 class DeviceNotConnected(RuntimeError):
@@ -98,6 +102,7 @@ class DeviceSupervisor:
         session_seed: str | None = None,
         on_state_visit: Callable[[ObservedStateVisit], None] | None = None,
         on_unsolicited_message: Callable[[dict], None] | None = None,
+        on_trial_result: Callable[[TrialResultRecord], None] | None = None,
     ):
         self.target = target
         self.line_map = line_map if line_map is not None else LineMap()
@@ -111,6 +116,11 @@ class DeviceSupervisor:
 
         self.on_state_visit = on_state_visit or (lambda observed: None)
         self.on_unsolicited_message = on_unsolicited_message or (lambda message: None)
+        #: Called when a whole result has been collected by `pump_incoming_lines`.
+        #: A daemon does not sit waiting for one -- a result arrives unasked, in
+        #: the middle of whatever else the link is doing.
+        self.on_trial_result = on_trial_result or (lambda result: None)
+        self._result_collector = TrialResultCollector()
 
         self._link: SerialLink | None = None
         self._session: RequestResponseSession | None = None
@@ -317,25 +327,35 @@ class DeviceSupervisor:
             raise NoGraphSetCommitted("no trial has been configured on this connection")
         compiled_graph = compiled.graph_named(graph_name)
 
-        raw_result = read_trial_result(session, timeout=timeout)
-        visits = [
-            decode_state_visit_row(
-                row,
-                compiled_graph.state_names_by_index,
-                compiled_graph.transition_target_names_by_state_index,
-            )
-            for row in raw_result.rows
-        ]
-        begin = raw_result.begin
+        assert compiled_graph is not None  # named above, for the reader
+        return self._name_a_reassembled_result(read_trial_result(session, timeout=timeout))
+
+    def _name_a_reassembled_result(
+        self, reassembled: ReassembledTrialResult
+    ) -> TrialResultRecord:
+        """Turn a result's indices into the names of the graph that ran it."""
+        compiled = self._require_committed_graph_set()
+        graph_name = self.armed_graph_name
+        if graph_name is None:
+            raise NoGraphSetCommitted("no trial has been configured on this connection")
+        compiled_graph = compiled.graph_named(graph_name)
+        begin = reassembled.begin
         return TrialResultRecord(
             trial_id=begin["trial_id"],
             outcome=TrialOutcome(begin["outcome"]),
             cancel_reason=TrialCancelReason(begin.get("cancel_reason", 0)),
             total_duration_microseconds=begin.get("total_us", 0),
-            visits=visits,
+            visits=[
+                decode_state_visit_row(
+                    row,
+                    compiled_graph.state_names_by_index,
+                    compiled_graph.transition_target_names_by_state_index,
+                )
+                for row in reassembled.rows
+            ],
             path_was_truncated=bool(begin.get("truncated", False)),
             first_visit_sequence_number=begin.get("first_seq", 0),
-            total_visit_count=begin.get("total_visits", len(visits)),
+            total_visit_count=begin.get("total_visits", len(reassembled.rows)),
         )
 
     def run_trial_to_completion(
@@ -377,17 +397,73 @@ class DeviceSupervisor:
     def read_state_report(self) -> dict:
         return self._require_session().state(timeout=self.timeout)
 
+    def pump_incoming_lines(self, budget_seconds: float = 0.05) -> int:
+        """Read whatever the device has said, for a bounded moment.
+
+        The daemon's read path, and the counterpart of `wait_for_trial_result`:
+        that one sits until a result arrives, which is right for a bench script
+        and impossible for a process that also has an API to answer. This
+        returns after `budget_seconds` whatever happened, so the thread calling
+        it can give the link back.
+
+        Do not mix the two on one connection. Both consume lines, and a result
+        half-collected by one of them cannot be finished by the other.
+        """
+        session = self._require_session()
+        deadline = time.monotonic() + budget_seconds
+        lines_read = 0
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            # The budget is the read's timeout, not a loop condition around a
+            # blocking read: this call holds the device lock, so a read that
+            # waited for the *command* timeout would make every request queue
+            # behind an idle link.
+            line = session.link.read_line(timeout=remaining)
+            if line is None:
+                break
+            lines_read += 1
+            self._route_one_incoming_line(session, line)
+        return lines_read
+
+    def _route_one_incoming_line(self, session: RequestResponseSession, line: str) -> None:
+        message = session.receive(line)
+        if message is None:
+            # Unsolicited, junk, or blank -- `receive` has already routed it to
+            # the sinks this supervisor installed. Result chunks are unsolicited
+            # by that rule, so they come back here rather than being returned.
+            return
+        # A reply to a command nobody is waiting for: a command that timed out
+        # and whose answer arrived late. Worth seeing rather than swallowing.
+        self.on_unsolicited_message(message)
+
+    def _collect_result_chunk(self, line: str, message: dict) -> None:
+        """Feed one `result_*` line to the collector, and report a whole one."""
+        try:
+            reassembled = self._result_collector.feed(line, message)
+        except ValueError as exc:
+            self.on_unsolicited_message({"msg_type": "error", "message": str(exc)})
+            return
+        if reassembled is not None:
+            self.on_trial_result(self._name_a_reassembled_result(reassembled))
+
     # ------------------------------------------------------ the visit stream ---
 
-    def _handle_unsolicited_message(self, message: dict) -> None:
+    def _handle_unsolicited_message(self, message: dict, line: str = "") -> None:
         """Route what the device says without being asked.
 
         `visit` is decoded here because this is the only place that holds both
         halves: the compiled graph that gives an index a name, and the clock
-        that gives a device microsecond a host time. Everything else is handed
-        on untouched.
+        that gives a device microsecond a host time. Result chunks go to the
+        collector. Everything else is handed on untouched.
         """
-        if message.get(Field.MSG_TYPE) != MsgType.VISIT:
+        message_type = message.get(Field.MSG_TYPE)
+        if message_type in (MsgType.RESULT_BEGIN, MsgType.RESULT_PATH, MsgType.RESULT_END):
+            if line:
+                self._collect_result_chunk(line, message)
+            return
+        if message_type != MsgType.VISIT:
             self.on_unsolicited_message(message)
             return
         observed = self._decode_visit_message(message)

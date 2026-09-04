@@ -68,6 +68,13 @@
 // set is single-buffered, so the staged copy a single graph needed is gone, and
 // both images fit 255 again. Both boards therefore report the same capacities,
 // which is the state worth being in.
+// How many distributions one trial may override with `configure`'s `patch`.
+// Small on purpose: a patch is "this trial's foreperiod is 250-900 ms", not a
+// second way to author a graph, and every entry costs the twelve bytes of the
+// values it has to remember in order to put them back.
+#ifndef STATEMACHINED_MAX_PATCHED_DISTRIBUTIONS
+#define STATEMACHINED_MAX_PATCHED_DISTRIBUTIONS 8
+#endif
 #ifndef STATEMACHINED_MAX_PATH
 #define STATEMACHINED_MAX_PATH 255
 #endif
@@ -105,6 +112,9 @@ constexpr uint16_t kMaxLine = STATEMACHINED_MAX_LINE;
 /// else a graph refers to by index, so a distribution can be uploaded without
 /// the device having to find somewhere to put its array.
 constexpr uint8_t kMaxChoiceOptions = STATEMACHINED_MAX_CHOICE_OPTIONS;
+
+/// Per-trial distribution overrides. See STATEMACHINED_MAX_PATCHED_DISTRIBUTIONS.
+constexpr uint8_t kMaxPatchedDistributions = STATEMACHINED_MAX_PATCHED_DISTRIBUTIONS;
 /// Indices into the StateGraph's shared pools. Everything in a graph is stored
 /// in one flat array per kind and referred to by position -- that is what keeps
 /// a graph inside 32 KB -- so a bare uint8_t crossing a call boundary could be

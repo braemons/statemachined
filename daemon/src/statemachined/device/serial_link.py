@@ -19,6 +19,7 @@ firmware question, not one this file can answer.
 from __future__ import annotations
 
 import re
+import time
 
 import serial
 
@@ -54,6 +55,9 @@ class SerialLink:
         timeout: float = DEFAULT_TIMEOUT,
     ):
         self.url = to_url(target)
+        self._timeout = timeout
+        #: Whatever has arrived and is not yet a whole line. See read_line().
+        self._receive_buffer = bytearray()
         # baudrate is meaningless for socket:// and harmless there; passing it
         # unconditionally keeps one construction path for both transports.
         self._port = serial.serial_for_url(self.url, baudrate=baud, timeout=timeout)
@@ -62,16 +66,49 @@ class SerialLink:
         self._port.write((line + "\n").encode("ascii"))
         self._port.flush()
 
-    def read_line(self) -> str | None:
-        """One line, or None if the read timed out.
+    def read_line(self, timeout: float | None = None) -> str | None:
+        """One **complete** line, or None if none arrived before the timeout.
+
+        `timeout` overrides the port's for this call. A daemon polling the link
+        between commands wants tens of milliseconds where a command waiting for
+        its reply wants seconds, and the difference matters: a poll that blocked
+        for the command timeout would hold the device lock for that long and
+        make every request wait behind it.
 
         A timeout is not an error here. Sitting quiet is what a healthy device
         does between replies, and `monitor` spends its whole life doing it.
+
+        Buffered rather than `readline()`, and that is a correctness fix rather
+        than a performance one: pyserial's `readline()` returns whatever it has
+        when the timeout expires, newline or not, so a line that straddled a
+        timeout would be delivered in halves and both halves would fail their
+        CRC. It never bit at a two-second timeout and a board that writes a line
+        in microseconds; it bites immediately once anything polls the link on a
+        short timeout, which is what a daemon that must stay responsive between
+        commands has to do.
         """
-        raw = self._port.readline()
-        if not raw:
-            return None
-        return raw.decode("ascii", errors="replace").rstrip("\r\n")
+        effective_timeout = self._timeout if timeout is None else timeout
+        # The port's own timeout as well, not only this loop's deadline. A
+        # `read()` that is already waiting does not care what this function
+        # decided afterwards, so a short poll behind a long port timeout would
+        # block for the long one -- which is the whole failure this parameter
+        # exists to prevent.
+        if self._port.timeout != effective_timeout:
+            self._port.timeout = effective_timeout
+        deadline = time.monotonic() + effective_timeout
+        while True:
+            newline_at = self._receive_buffer.find(b"\n")
+            if newline_at >= 0:
+                line = self._receive_buffer[:newline_at]
+                del self._receive_buffer[: newline_at + 1]
+                return line.decode("ascii", errors="replace").rstrip("\r")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return None
+            waiting = getattr(self._port, "in_waiting", 0) or 1
+            chunk = self._port.read(waiting)
+            if chunk:
+                self._receive_buffer.extend(chunk)
 
     def reset_input(self) -> None:
         """Drop whatever is already buffered.
@@ -80,6 +117,7 @@ class SerialLink:
         left open earlier may have left a partial line in the driver; starting a
         session on top of that produces one spurious framing complaint.
         """
+        self._receive_buffer.clear()
         try:
             self._port.reset_input_buffer()
         except (OSError, serial.SerialException, AttributeError):

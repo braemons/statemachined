@@ -37,7 +37,7 @@ class RequestResponseSession:
     def __init__(
         self,
         link: SerialLink,
-        on_unsolicited: Callable[[dict], None] | None = None,
+        on_unsolicited: Callable[[dict, str], None] | None = None,
         on_junk: Callable[[str, str], None] | None = None,
     ):
         self.link = link
@@ -51,7 +51,11 @@ class RequestResponseSession:
         # still handled below, for the wrap and for a device with its own
         # version of the same bug.
         self.message_id = 1
-        self.on_unsolicited = on_unsolicited or (lambda msg: None)
+        #: Called with the parsed message **and the raw line**. The line is
+        #: needed because a result's rolling checksum is over bytes, so a
+        #: reader that only saw parsed dicts could not check it -- and the
+        #: result chunks are exactly the messages that arrive unsolicited.
+        self.on_unsolicited = on_unsolicited or (lambda msg, line: None)
         self.on_junk = on_junk or (lambda line, why: None)
         self.hello_ack: dict | None = None
 
@@ -136,7 +140,7 @@ class RequestResponseSession:
             self.on_junk(line, str(exc))
             return None
         if msg.get(Field.MSG_TYPE) in UNSOLICITED:
-            self.on_unsolicited(msg)
+            self.on_unsolicited(msg, line)
             return None
         return msg
 

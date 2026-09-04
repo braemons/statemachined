@@ -222,6 +222,7 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id) {
   // NOT clear the committed graph: reconnecting the bridge must not cost a
   // re-upload.
   session_seed_ = seed;
+  revert_distribution_patches();
   builder_.abandon();
   reader_.reset();
   state_ = LinkState::Idle;
@@ -320,7 +321,23 @@ void HostLinkSession::on_wiring(const JsonObject& m, uint16_t message_id) {
     }
   }
 
+  const LineBitmask previous_safe_levels = wiring_.output_safe_levels;
   set_wiring(next, /*from_host=*/true);
+
+  // Adopt new safe levels straight away. A `wiring` is only accepted while no
+  // trial is armed or running (above), so there is nothing this can disturb --
+  // and the alternative is a board that has been told what "safe" means here
+  // and is still driving the previous rig's idea of it until the next reset.
+  //
+  // Through pending_ops_ rather than by driving anything: this is the link's
+  // thread of control and it touches no pin. The next scan applies it, exactly
+  // as it does for the outputs a start() owes.
+  if (next.output_safe_levels != previous_safe_levels) {
+    const OutputUpdate safe = fail_safe();
+    pending_ops_.set_high = (pending_ops_.set_high | safe.set_high) & ~safe.set_low;
+    pending_ops_.set_low = (pending_ops_.set_low | safe.set_low) & ~safe.set_high;
+  }
+
   send_ack(message_id);
 }
 
@@ -455,6 +472,11 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
     }
   }
 
+  // Any previous trial's overrides come off before this one's go on, so a
+  // trial that was armed and never started cannot leave its foreperiod behind.
+  revert_distribution_patches();
+  if (!apply_distribution_patches(m, message_id)) return;  // refusal already sent
+
   runner_ = TrialRunner(live_set_, graph_index);
   rebind_runner();
   runner_.set_trial_cap_ms(cap_ms);
@@ -547,6 +569,99 @@ void HostLinkSession::on_cancel(const JsonObject& m, uint16_t message_id, Micros
   w.key_bool("cancelled", cancelled);
   w.key_i32("outcome", static_cast<int32_t>(runner_.result().outcome));
   send(w, message_id);
+}
+
+bool HostLinkSession::apply_distribution_patches(const JsonObject& m, uint16_t message_id) {
+  if (m.type_of("patch") == JsonType::Missing) return true;
+
+  JsonArray patches;
+  if (!m.array("patch", &patches)) {
+    send_error(message_id, "bad_json", "patch must be an array", "patch");
+    return false;
+  }
+
+  JsonSpan element;
+  JsonType element_type = JsonType::Missing;
+  while (patches.next(&element, &element_type)) {
+    if (element_type != JsonType::Object) {
+      send_error(message_id, "bad_json", "a patch entry is not an object", "patch");
+      revert_distribution_patches();
+      return false;
+    }
+    JsonObject entry(element.p, element.n);
+    if (!entry.valid()) {
+      send_error(message_id, "bad_json", json_error_str(entry.error()), "patch");
+      revert_distribution_patches();
+      return false;
+    }
+
+    uint8_t index = 0;
+    if (!entry.u8("i", &index)) {
+      send_error(message_id, "bad_json", "a patch entry has no i", "patch");
+      revert_distribution_patches();
+      return false;
+    }
+    if (index >= live_set_.n_distributions) {
+      send_error(message_id, "bad_index", "no distribution has that index", "patch");
+      revert_distribution_patches();
+      return false;
+    }
+    if (n_patched_distributions_ >= kMaxPatchedDistributions) {
+      send_error(message_id, "too_many", "max_patched_distributions", "patch");
+      revert_distribution_patches();
+      return false;
+    }
+
+    // The inverse of the patch, not the patch: what to put back when the trial
+    // ends. Saved before anything is written, so a refusal below still reverts
+    // cleanly.
+    RandomDistribution& distribution = live_set_.distributions[index];
+    PatchedDistribution& saved = patched_distributions_[n_patched_distributions_++];
+    saved.index = index;
+    saved.a = distribution.a;
+    saved.b = distribution.b;
+    saved.c = distribution.c;
+
+    // Only a, b and c. `kind` may not be patched: that would change the shape
+    // of the draw, which is a different graph and a different set_version.
+    int32_t value = 0;
+    if (entry.type_of("a") != JsonType::Missing) {
+      if (!entry.i32("a", &value)) {
+        send_error(message_id, "bad_json", "patch a", "patch");
+        revert_distribution_patches();
+        return false;
+      }
+      distribution.a = value;
+    }
+    if (entry.type_of("b") != JsonType::Missing) {
+      if (!entry.i32("b", &value)) {
+        send_error(message_id, "bad_json", "patch b", "patch");
+        revert_distribution_patches();
+        return false;
+      }
+      distribution.b = value;
+    }
+    if (entry.type_of("c") != JsonType::Missing) {
+      if (!entry.i32("c", &value)) {
+        send_error(message_id, "bad_json", "patch c", "patch");
+        revert_distribution_patches();
+        return false;
+      }
+      distribution.c = value;
+    }
+  }
+  return true;
+}
+
+void HostLinkSession::revert_distribution_patches() {
+  for (uint8_t i = 0; i < n_patched_distributions_; ++i) {
+    const PatchedDistribution& saved = patched_distributions_[i];
+    RandomDistribution& distribution = live_set_.distributions[saved.index];
+    distribution.a = saved.a;
+    distribution.b = saved.b;
+    distribution.c = saved.c;
+  }
+  n_patched_distributions_ = 0;
 }
 
 void HostLinkSession::on_ping(uint16_t message_id, Microseconds now_us) {
@@ -649,6 +764,9 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
     // The host learns of an outcome without having to ask for it. A trial that
     // ended silently would be indistinguishable from a hung one.
     emit_result();
+    // After the result, not before: the record reports the durations that were
+    // drawn, and the patch is what they were drawn from.
+    revert_distribution_patches();
     state_ = LinkState::Idle;
   }
   return ops;
@@ -668,6 +786,7 @@ OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
   // bridge that comes back does not have to re-upload one. It sends hello
   // anyway, which is what brings a fresh session seed.
   if (state_ != LinkState::Greeting) state_ = LinkState::Idle;
+  revert_distribution_patches();
   armed_trial_id_ = 0;
   builder_.abandon();
   reader_.reset();

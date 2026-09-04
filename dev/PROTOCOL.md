@@ -398,7 +398,16 @@ The per-trial message. Arms the device for exactly one trial.
 `patch` indices are into the set's shared distribution pool, like every other
 distribution index. It is why a set does not have to be re-uploaded when only
 the timings change, which is the common case. It cannot change the *shape* of
-anything — that would be a different graph, and a different `set_version`.
+anything — `kind` may not be patched, because that would be a different graph
+and a different `set_version`.
+
+**The override lasts exactly one trial.** The device keeps the values it
+replaced and puts them back when the trial ends, when another `configure`
+replaces the patches, and whenever a session resets: a patch that outlived its
+trial would be a timing nobody could account for afterwards. A patch entry
+naming a distribution that does not exist is refused with `bad_index`, and a
+malformed one applies **nothing** — a trial running with half a patch on it is
+not a state this protocol admits.
 
 Answered with `armed`, or `error`.
 

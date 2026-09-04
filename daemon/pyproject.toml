@@ -27,6 +27,9 @@ dependencies = [
     # models become the API's schema at M4f, which is why this is pydantic
     # rather than dataclasses plus hand-written checks.
     "pydantic>=2.13.5",
+    "fastapi>=0.141.1",
+    "uvicorn>=0.52.4",
+    "httpx>=0.28.1",
 ]
 
 [project.scripts]
