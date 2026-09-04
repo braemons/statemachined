@@ -49,6 +49,23 @@ struct DeviceIdentity {
   /// Measured at boot on a real board, not declared, so the host learns the
   /// timing resolution it is actually getting rather than the hoped-for one.
   uint32_t measured_scan_hz = 0;
+
+  /// What is written on the board beside each line, indexed by line number:
+  /// `input_pin_labels[3]` is the label of input line 3. Answered to the host
+  /// by the `pins` command (dev/PROTOCOL.md 3.6).
+  ///
+  /// **This is the table that drives pinMode(), not a copy of it.** A host
+  /// cannot otherwise know which pin a line is, or even which lines are inputs:
+  /// the direction is fixed when this firmware is compiled and no command
+  /// changes it. Before `pins` existed the host had to keep its own copy of
+  /// this table keyed by the board name -- which is a hand-copied pin map, and
+  /// a hand-copied pin map is the silent wrong-valve bug the HAL refuses to
+  /// have for exactly the same reason.
+  ///
+  /// nullptr means this build has no pins worth naming, and `pins` is then
+  /// refused with `no_pin_map` rather than answered with something invented.
+  const char* const* input_pin_labels = nullptr;
+  const char* const* output_pin_labels = nullptr;
 };
 
 /// How well the board is keeping to its scan period, reported to the host in
@@ -210,6 +227,7 @@ class HostLinkSession {
   void on_cancel(const JsonObject& m, uint16_t message_id, Microseconds now_us);
   void on_ping(uint16_t message_id, Microseconds now_us);
   void on_wiring(const JsonObject& m, uint16_t message_id);
+  void on_pins_request(const JsonObject& m, uint16_t message_id);
 
   /// Apply `configure`'s `patch`, remembering what to put back. False and a
   /// refusal already sent if any entry is unusable -- and nothing is applied in

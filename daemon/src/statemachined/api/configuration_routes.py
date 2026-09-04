@@ -38,6 +38,15 @@ def replace_configuration(request: Request, configuration: DaemonConfiguration) 
     device_target_changed = configuration.device_target != service.configuration.device_target
     line_map_changed = configuration.line_map != service.configuration.line_map
 
+    # As with PATCH /api/device/lines: a map that does not match the board is
+    # refused before it is kept, so the rig keeps running on the one it had.
+    if line_map_changed and service.supervisor.is_connected:
+        try:
+            resolved = configuration.line_map.resolved_against(service.supervisor.pin_map)
+        except ValueError as exc:
+            raise refusal(422, "line_map_does_not_match_the_board", str(exc), "line_map")
+        service.supervisor.resolved_line_map = resolved
+
     service.configuration = configuration
     service.supervisor.line_map = configuration.line_map
     service.supervisor.target = configuration.device_target

@@ -30,6 +30,13 @@ trace_directory = "build/bench/trace"
 # The reference board's wiring, as dev/HARDWARE.md describes it. Kept identical
 # to graphs/uno-r4-minima-lines.json, and a unit test says so -- two line maps
 # for one board that disagree is a wire in the wrong hole at 2 a.m.
+#
+# `line_index` is the bit position on the wire; `pin_label` is the pin. Both are
+# given here and the daemon checks them against what the board answers
+# (dev/PROTOCOL.md 3.6), so a disagreement stops it connecting. A line may name
+# the pin alone -- { name = "lever", pin_label = "D6" } -- and have the index
+# resolved from the board, which is the form worth using on a new rig: a bit
+# position is written nowhere on the hardware and D6 is.
 [line_map]
 input_lines = [
   { name = "start_switch", line_index = 0, pin_label = "D2", debounce_milliseconds = 20 },

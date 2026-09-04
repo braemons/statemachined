@@ -1262,3 +1262,105 @@ TEST_CASE("the entry state's output actions reach the caller of advance_trial") 
   const OutputUpdate second = h.device.advance_trial(0, 2000);
   CHECK((second.set_high & (1u << 2)) == 0);
 }
+
+// ------------------------------------------------------------- the pin map ---
+//
+// dev/PROTOCOL.md 3.6. The command exists so that a host can stop keeping its
+// own copy of the board's pin table: which pin a line is, and which direction
+// it has, are fixed when this firmware is compiled, and before `pins` there was
+// no way to ask.
+
+TEST_CASE("pins answers with the labels this build was compiled with") {
+  DeviceIdentity board;
+  board.board = "test_board";
+  board.input_line_count = 3;
+  board.output_line_count = 2;
+  static const char* const kIn[] = {"D2", "D3", "D4"};
+  static const char* const kOut[] = {"D10", "A0"};
+  board.input_pin_labels = kIn;
+  board.output_pin_labels = kOut;
+
+  Host h(board);
+  greet(h);
+
+  const auto in =
+      h.send(R"({"msg_type":"pins","message_id":)" + h.next_message_id() + R"(,"dir":"in")");
+  REQUIRE(in.size() == 1);
+  REQUIRE(type_of(in[0]) == "pin_map");
+  CHECK(in[0].find(R"("dir":"in")") != std::string::npos);
+  CHECK(in[0].find(R"("n":3)") != std::string::npos);
+  CHECK(in[0].find(R"("pins":["D2","D3","D4"])") != std::string::npos);
+
+  // The other direction is a different set of pins over a different numbering:
+  // output line 0 is not input line 0, and a host that assumed otherwise would
+  // be driving a valve from a lever's number.
+  const auto out =
+      h.send(R"({"msg_type":"pins","message_id":)" + h.next_message_id() + R"(,"dir":"out")");
+  REQUIRE(out.size() == 1);
+  CHECK(out[0].find(R"("dir":"out")") != std::string::npos);
+  CHECK(out[0].find(R"("pins":["D10","A0"])") != std::string::npos);
+}
+
+TEST_CASE("pins names only the lines this board has") {
+  // The label table may be longer than the board's line count -- the native HAL
+  // carries one table for every line the config allows. What is answered is
+  // what this board actually has, because that is what a host is allowed to
+  // address.
+  DeviceIdentity board;
+  board.input_line_count = 2;
+  board.output_line_count = 1;
+  static const char* const kLabels[] = {"P0", "P1", "P2", "P3"};
+  board.input_pin_labels = kLabels;
+  board.output_pin_labels = kLabels;
+
+  Host h(board);
+  greet(h);
+  const auto in =
+      h.send(R"({"msg_type":"pins","message_id":)" + h.next_message_id() + R"(,"dir":"in")");
+  REQUIRE(in.size() == 1);
+  CHECK(in[0].find(R"("pins":["P0","P1"])") != std::string::npos);
+}
+
+TEST_CASE("a build with no pin map refuses rather than inventing one") {
+  // The native build before it had labels, and every board flashed before this
+  // command existed. A host that gets this keeps whatever it assumed -- and,
+  // which is the entire point, knows that it assumed it.
+  DeviceIdentity nameless;
+  nameless.input_pin_labels = nullptr;
+  nameless.output_pin_labels = nullptr;
+
+  Host h(nameless);
+  greet(h);
+  const auto r =
+      h.send(R"({"msg_type":"pins","message_id":)" + h.next_message_id() + R"(,"dir":"in")");
+  REQUIRE(r.size() == 1);
+  REQUIRE(type_of(r[0]) == "error");
+  CHECK(r[0].find("no_pin_map") != std::string::npos);
+}
+
+TEST_CASE("pins requires a direction, and refuses one it does not know") {
+  Host h;
+  greet(h);
+  const auto missing = h.send(R"({"msg_type":"pins","message_id":)" + h.next_message_id());
+  REQUIRE(missing.size() == 1);
+  REQUIRE(type_of(missing[0]) == "error");
+  CHECK(missing[0].find("bad_json") != std::string::npos);
+
+  const auto sideways = h.send(R"({"msg_type":"pins","message_id":)" + h.next_message_id() +
+                               R"(,"dir":"sideways")");
+  REQUIRE(sideways.size() == 1);
+  REQUIRE(type_of(sideways[0]) == "error");
+  CHECK(sideways[0].find("bad_field") != std::string::npos);
+}
+
+TEST_CASE("a host may not send pin_map at us") {
+  // One namespace on the wire, and a device that answered its own reply type as
+  // if it were a command would be a bug this way round too.
+  Host h;
+  greet(h);
+  const auto r =
+      h.send(R"({"msg_type":"pin_map","message_id":)" + h.next_message_id() + R"(,"dir":"in")");
+  REQUIRE(r.size() == 1);
+  REQUIRE(type_of(r[0]) == "error");
+  CHECK(r[0].find("unknown_type") != std::string::npos);
+}

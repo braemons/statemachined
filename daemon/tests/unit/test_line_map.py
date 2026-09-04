@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
+from statemachined.device.device_pin_map import DevicePinMap
 from statemachined.model.line_map import LineMap
 
 
@@ -107,3 +108,119 @@ def test_an_empty_line_map_still_produces_a_whole_wiring():
     # partial one would leave a board moved between rigs carrying half of each.
     fields = LineMap().wiring_message_fields()
     assert fields == {"invert": 0, "enable": 0, "safe": 0, "debounce_ms": []}
+
+
+# --------------------------------------------------- resolved against a board ---
+#
+# dev/PROTOCOL.md §3.6. A pin label used to be a comment: free text, checked
+# against nothing, and wrong in exactly the way nothing downstream could see.
+# Now the board answers with the table its own `pinMode()` was called over, and
+# these are the rules for what happens when the config and the board disagree.
+
+
+def reference_board() -> DevicePinMap:
+    return DevicePinMap(
+        input_pin_labels=["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"],
+        output_pin_labels=["D10", "D11", "D12", "A0", "A1", "A2", "A3", "A4"],
+        source="device",
+    )
+
+
+def test_a_line_may_be_configured_by_pin_alone():
+    """Which is the point: a bit position is not written on the board, and D6 is."""
+    resolved = LineMap.model_validate(
+        {
+            "input_lines": [{"name": "lever", "pin_label": "D6"}],
+            "output_lines": [{"name": "valve", "pin_label": "A0"}],
+        }
+    ).resolved_against(reference_board())
+    assert resolved.input_line_index_for_name("lever") == 4
+    assert resolved.output_line_index_for_name("valve") == 3
+
+
+def test_the_two_numberings_are_not_one():
+    """Input line 3 and output line 3 are different pins. A resolution that
+    looked a label up in the wrong direction is a lever's number driving a
+    valve, which is the whole failure mode."""
+    board = reference_board()
+    assert board.line_index_for_label("in", "D5") == 3
+    assert board.line_index_for_label("out", "A0") == 3
+    # D5 is not an output at all, however good it looks in an input row.
+    assert board.line_index_for_label("out", "D5") is None
+
+
+def test_a_line_index_that_contradicts_its_pin_is_refused():
+    contradiction = LineMap.model_validate(
+        {"input_lines": [{"name": "lever", "line_index": 4, "pin_label": "D2"}]}
+    )
+    with pytest.raises(ValueError) as refused:
+        contradiction.resolved_against(reference_board())
+    # Both halves, and which is which: "one of these is wrong" is only useful
+    # with the board's own answer beside it.
+    assert "'D6'" in str(refused.value) and "line 0" in str(refused.value)
+
+
+def test_a_pin_this_board_does_not_have_is_refused_with_the_ones_it_does():
+    with pytest.raises(ValueError) as refused:
+        LineMap.model_validate(
+            {"input_lines": [{"name": "lever", "pin_label": "A0"}]}
+        ).resolved_against(reference_board())
+    # A0 exists on this board -- as an output. Naming it as an input is the
+    # mistake, and the message has to say what the inputs are.
+    assert "not an input" in str(refused.value)
+    assert "D2" in str(refused.value)
+
+
+def test_case_does_not_matter():
+    """`a0` and `A0` are the same hole in the board, and refusing a config over
+    the difference is pedantry with a soldering iron in the room."""
+    resolved = LineMap.model_validate(
+        {"output_lines": [{"name": "valve", "pin_label": "a0"}]}
+    ).resolved_against(reference_board())
+    assert resolved.output_line_index_for_name("valve") == 3
+
+
+def test_a_line_number_this_board_does_not_have_is_refused():
+    with pytest.raises(ValueError) as refused:
+        LineMap.model_validate(
+            {"input_lines": [{"name": "lever", "line_index": 20}]}
+        ).resolved_against(reference_board())
+    assert "no such input line" in str(refused.value)
+
+
+def test_an_assumed_map_fills_gaps_and_overrules_nothing():
+    """Firmware older than `pins` leaves the daemon with its own table, which is
+    a hand-copied pin map -- the thing the command exists to replace. It may
+    help; it may not contradict, because asserting on it is the mistake."""
+    assumed = DevicePinMap(["D2", "D3"], ["D10"], source="assumed")
+    kept = LineMap.model_validate(
+        {"input_lines": [{"name": "lever", "line_index": 7, "pin_label": "D2"}]}
+    ).resolved_against(assumed)
+    assert kept.input_line_index_for_name("lever") == 7
+
+
+def test_a_board_that_names_no_pins_cannot_resolve_a_pin_only_line():
+    """And says so in terms of what to do about it, since both fixes are the
+    reader's to choose between."""
+    with pytest.raises(ValueError) as refused:
+        LineMap.model_validate(
+            {"input_lines": [{"name": "lever", "pin_label": "D6"}]}
+        ).resolved_against(DevicePinMap(source="unknown"))
+    assert "line_index" in str(refused.value) and "`pins`" in str(refused.value)
+
+
+def test_a_line_that_says_neither_is_refused_at_the_config():
+    """Before any board is involved: there is nothing to resolve from."""
+    with pytest.raises(ValidationError) as refused:
+        LineMap.model_validate({"input_lines": [{"name": "nowhere"}]})
+    assert "neither which line it is nor which pin" in str(refused.value)
+
+
+def test_an_unresolved_map_refuses_to_produce_masks():
+    """The boundary where "not yet resolved" stops being representable. A mask
+    built from a missing index would be a wiring command for line zero."""
+    with pytest.raises(ValueError) as refused:
+        LineMap.model_validate(
+            {"input_lines": [{"name": "lever", "pin_label": "D6"}]}
+        ).wiring_message_fields()
+    assert "has not been resolved" in str(refused.value)

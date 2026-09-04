@@ -164,6 +164,29 @@ is how you look at a board that is still running the demo.
 
 ## 5. Prove the pins reach the line numbers
 
+First, ask the board which pin each line *is*. It answers out of the same table
+its firmware calls `pinMode()` over, so this is the board's own word and not
+this tool's:
+
+```sh
+make bringup ARGS="--hello pins"
+```
+
+```
+  inputs
+    line 0   D2
+    ...
+  outputs
+    line 3   A0
+```
+
+Firmware older than `PROTOCOL.md` §3.6 answers `no_pin_map` here, which is not
+a failure — it means the daemon will fall back to its own table and label every
+pin it shows as **assumed**. Flash current firmware if you would rather it were
+checked.
+
+Then watch the lines move:
+
 ```sh
 make bringup ARGS="state"
 ```
@@ -183,7 +206,9 @@ and names the pins from `HARDWARE.md`:
 ```
 
 Hold the start switch and ask again: `in` goes from `0` to `1`. Hold both
-switches: `3`. `ARGS="watch"` polls it a few times a second so you can do that
+switches: `3`. **This is the only check that cannot be done in software**: the
+`pins` command settles what the firmware believes, and this settles whether the
+wire is in that hole. `ARGS="watch"` polls it a few times a second so you can do that
 with both hands on the wires.
 
 The same reply carries `scan.overruns` and `scan.worst_gap` — scan periods that

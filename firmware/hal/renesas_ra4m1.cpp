@@ -50,6 +50,23 @@ namespace {
 constexpr uint8_t kInputPins[] = {2, 3, 4, 5, 6, 7, 8, 9};
 constexpr uint8_t kOutputPins[] = {10, 11, 12, A0, A1, A2, A3, A4};
 
+// The same two tables, as what is silkscreened on the board -- because "A0" is
+// pin 14 to the core and "A0" to the person holding the wire, and the number is
+// no use to them. Kept adjacent to the arrays above and not in some header, so
+// that moving a line moves its label in the same edit; the static_asserts below
+// are what make "in the same edit" more than an intention.
+//
+// In flash, not in the 32 KB, and measured rather than assumed: both tables
+// land at 0x15300 in the rig image, and answering `pins` costs 624 B of flash
+// and 8 B of RAM -- the two pointers the session's DeviceIdentity carries.
+constexpr const char* kInputPinLabels[] = {"D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"};
+constexpr const char* kOutputPinLabels[] = {"D10", "D11", "D12", "A0", "A1", "A2", "A3", "A4"};
+
+static_assert(sizeof(kInputPinLabels) / sizeof(kInputPinLabels[0]) == sizeof(kInputPins),
+              "every input line needs exactly one label");
+static_assert(sizeof(kOutputPinLabels) / sizeof(kOutputPinLabels[0]) == sizeof(kOutputPins),
+              "every output line needs exactly one label");
+
 constexpr uint8_t kInputCount = sizeof(kInputPins);
 constexpr uint8_t kOutputCount = sizeof(kOutputPins);
 
@@ -151,6 +168,9 @@ void init() {
   // Real on a UART, ignored on native USB CDC, which runs at bus speed.
   STATEMACHINED_LINK.begin(921600);
 }
+
+const char* const* input_pin_labels() { return kInputPinLabels; }
+const char* const* output_pin_labels() { return kOutputPinLabels; }
 
 LineBitmask read_inputs() {
   // One register read per port, not one per line. The Renesas core's

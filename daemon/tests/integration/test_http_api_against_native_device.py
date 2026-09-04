@@ -136,6 +136,81 @@ def test_renaming_a_line_is_free_and_changes_no_graph(api):
     ]
 
 
+# ------------------------------------------------------------ the pin map ---
+#
+# dev/PROTOCOL.md §3.6. The daemon asks the device which pins it has rather than
+# keeping a copy of the firmware's table, and these are the three things that
+# buys: labels that are the board's own word, a config that can name a pin
+# instead of a bit position, and a disagreement that is refused loudly instead
+# of driving the wrong line for a session.
+
+
+def test_the_pin_labels_are_the_devices_own_word(api):
+    lines = api.get("/api/device/lines").json()
+    assert lines["pin_labels_came_from"] == "device"
+    # The native build has no pins and says so rather than borrowing a board's
+    # labels -- a "D2" here would be exactly the lie this command prevents.
+    assert lines["board_input_pins"][:3] == ["sim0", "sim1", "sim2"]
+    assert api.get("/api/device").json()["pin_labels_came_from"] == "device"
+
+
+def test_a_line_may_name_a_pin_instead_of_a_number(native_device, tmp_path):
+    """The point of the whole exercise: the config says the thing somebody can
+    check against the hardware, and the daemon asks the board what it means."""
+    configuration = configuration_for(
+        native_device,
+        tmp_path,
+        line_map={
+            "input_lines": [{"name": "lever", "pin_label": "sim6"}],
+            "output_lines": [{"name": "valve", "pin_label": "sim3", "safe_level_is_high": True}],
+        },
+    )
+    with TestClient(create_application(configuration)) as api:
+        lines = api.get("/api/device/lines").json()
+        assert [line["line_index"] for line in lines["input_lines"]] == [6]
+        assert [line["line_index"] for line in lines["output_lines"]] == [3]
+        # And it was pushed as that line: safe levels are a mask over indices,
+        # so a resolution that had not happened would fail safe on the wrong pin.
+        assert api.get("/api/device").json()["has_wiring"] is True
+
+
+def test_a_pin_this_board_does_not_have_stops_the_daemon_connecting(native_device, tmp_path):
+    """Loud, and early. The alternative is a rig that runs a whole session with
+    a lever's line number driving a valve, which no test downstream can see."""
+    configuration = configuration_for(
+        native_device,
+        tmp_path,
+        line_map={"input_lines": [{"name": "lever", "pin_label": "D6"}], "output_lines": []},
+    )
+    with TestClient(create_application(configuration)) as api:
+        device = api.get("/api/device").json()
+        assert device["connected"] is False
+        assert "D6" in device["link"]["last_error"]
+        # And it says what this board does have, because "wrong" without "and
+        # here is what is right" is a bug report rather than an error message.
+        assert "sim0" in device["link"]["last_error"]
+
+
+def test_a_line_map_that_contradicts_the_board_is_refused_before_it_is_kept(api):
+    """A PATCH is not a place to discover this either. The rig keeps running on
+    the map it had."""
+    lines = api.get("/api/device/lines").json()
+    contradiction = {
+        "input_lines": [
+            {"name": "start_switch", "line_index": 0, "pin_label": "sim5"},
+        ],
+        "output_lines": [],
+    }
+    response = api.patch("/api/device/lines", json=contradiction)
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "line_map_does_not_match_the_board"
+    # Untouched: the names it had before are the names it has now.
+    after = api.get("/api/device/lines").json()
+    assert [line["name"] for line in after["input_lines"]] == [
+        line["name"] for line in lines["input_lines"]
+    ]
+
+
 # -------------------------------------------------------------- the store ---
 
 

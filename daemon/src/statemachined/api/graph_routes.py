@@ -118,7 +118,10 @@ def validate_stored_graph(request: Request, graph_name: str) -> dict:
 
     try:
         compiled = compile_graph_set_for_device(
-            [graph], service.configuration.line_map, service.supervisor.capabilities, 0
+            # The resolved map, the same one an upload would use: a graph
+            # checked against the configured indices and uploaded against the
+            # board's would be checked against something that never runs.
+            [graph], service.supervisor.resolved_line_map, service.supervisor.capabilities, 0
         )
     except GraphSetCompilationError as exc:
         return {"valid": False, "detail": str(exc)}

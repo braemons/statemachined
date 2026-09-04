@@ -50,7 +50,9 @@ from ..model.graph_definition import GraphDefinition
 from ..model.line_map import LineMap
 from ..model.trial_outcome import TrialCancelReason, TrialOutcome
 from ..model.trial_record import StateVisitRecord, TrialResultRecord, decode_state_visit_row
+from ..board_pin_labels import PIN_MAPS
 from .device_clock_correlation import DeviceClockCorrelation, HostTimeEstimate
+from .device_pin_map import DevicePinMap
 from .graph_set_upload import send_compiled_upload_messages
 from .message_framing import DeviceRefusedTheCommand
 from .message_vocabulary import Field, MsgType
@@ -127,6 +129,15 @@ class DeviceSupervisor:
         self.hello_ack: dict | None = None
         self.capabilities: DeviceCapabilities | None = None
         self.session_seed: str | None = None
+        #: What the board says its pins are called (dev/PROTOCOL.md §3.6), or
+        #: what this daemon assumed when the board could not say. Read once per
+        #: connection, because it cannot change without a reflash -- and a
+        #: reflash is a reconnect.
+        self.pin_map = DevicePinMap()
+        #: The configured map with every `line_index` resolved and checked
+        #: against the board. This is what is pushed and what graphs compile
+        #: against; `line_map` is what somebody wrote in the config file.
+        self.resolved_line_map = self.line_map
 
         self.committed_graph_set: CompiledGraphSet | None = None
         self._graphs_of_the_committed_set: list[GraphDefinition] = []
@@ -177,6 +188,18 @@ class DeviceSupervisor:
         self.armed_trial_id = None
         self.armed_graph_name = None
 
+        # Before the wiring, because the wiring is a set of masks over line
+        # numbers and this is what says which number is which pin. A line map
+        # that does not match the board is refused here -- with the link closed
+        # again -- rather than pushed: masks built from a wrong index are a
+        # valve driven from a lever's line, and nothing downstream would say so.
+        self.pin_map = self.read_pin_map()
+        try:
+            self.resolved_line_map = self.line_map.resolved_against(self.pin_map)
+        except ValueError:
+            self.disconnect()
+            raise
+
         self.push_wiring()
         return hello_ack
 
@@ -216,13 +239,56 @@ class DeviceSupervisor:
             raise DeviceNotConnected(f"no link to {self.target} is open")
         return self._session
 
+    # -------------------------------------------------------- the pin map ---
+
+    def read_pin_map(self) -> DevicePinMap:
+        """Ask the board what its pins are called. Never fatal.
+
+        Two requests, one per direction, because §3.6 answers one at a time --
+        both directions do not fit one line on a board with many lines, and a
+        reply carrying half a map would be worse than none.
+
+        A board that refuses -- `no_pin_map`, or `unknown_type` from any
+        firmware flashed before the command existed -- is not an error. It is
+        the common case in a rack that has not been reflashed yet, and the
+        daemon falls back to `board_pin_labels.py` **and says that it did**.
+        """
+        session = self._require_session()
+        try:
+            inputs = session.request(MsgType.PINS, timeout=self.timeout, dir="in")
+            outputs = session.request(MsgType.PINS, timeout=self.timeout, dir="out")
+        except DeviceRefusedTheCommand:
+            return self._pin_map_this_daemon_assumes()
+        return DevicePinMap(
+            input_pin_labels=[str(label) for label in inputs.get("pins", [])],
+            output_pin_labels=[str(label) for label in outputs.get("pins", [])],
+            source="device",
+        )
+
+    def _pin_map_this_daemon_assumes(self) -> DevicePinMap:
+        """The host's own table, for a board that cannot answer for itself.
+
+        Marked `assumed` all the way up to the UI. It is a hand-copied pin map,
+        which is the thing §3.6 exists to stop being the only option -- so it is
+        used, and it is never presented as the board's word.
+        """
+        board = (self.hello_ack or {}).get("board", "")
+        labels = PIN_MAPS.get(board or "", {})
+        if not labels:
+            return DevicePinMap(source="unknown")
+        return DevicePinMap(
+            input_pin_labels=list(labels.get("in", [])),
+            output_pin_labels=list(labels.get("out", [])),
+            source="assumed",
+        )
+
     # --------------------------------------------------------- the wiring ---
 
     def push_wiring(self) -> dict:
         """Tell the board what it is wired to. dev/PROTOCOL.md 3.5."""
         session = self._require_session()
         return session.request(
-            MsgType.WIRING, timeout=self.timeout, **self.line_map.wiring_message_fields()
+            MsgType.WIRING, timeout=self.timeout, **self.resolved_line_map.wiring_message_fields()
         )
 
     # ------------------------------------------------------- the graph set ---
@@ -241,7 +307,7 @@ class DeviceSupervisor:
             raise DeviceNotConnected("the device has not been greeted, so its caps are unknown")
 
         compiled = compile_graph_set_for_device(
-            graphs, self.line_map, self.capabilities, set_version
+            graphs, self.resolved_line_map, self.capabilities, set_version
         )
         # Not committed on this side until the device says set_ok. From
         # set_begin until then the board holds no graph at all (PROTOCOL.md

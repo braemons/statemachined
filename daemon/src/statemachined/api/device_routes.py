@@ -44,6 +44,11 @@ def read_device(request: Request) -> dict:
             supervisor.capabilities.model_dump() if supervisor.capabilities else None
         ),
         "has_wiring": state_report.get("has_wiring", hello_ack.get("has_wiring")),
+        # Whether this daemon knows which pin each line is because the board
+        # said so, or because it assumed. dev/PROTOCOL.md §3.6, and the whole
+        # reason that command exists: before it, there was no third answer to
+        # "which pin is line 4" beyond a table copied out of the firmware.
+        "pin_labels_came_from": supervisor.pin_map.source,
         "committed_set": (
             {
                 "set_version": committed.set_version,
@@ -87,21 +92,40 @@ def read_lines(request: Request) -> dict:
     pins somebody wired: there is no read-back path from a pin.
     """
     service = service_of(request)
+    supervisor = service.supervisor
     state_report = service.read_device_state()
     input_word = int(state_report.get("io", {}).get("in", 0))
     output_word = int(state_report.get("io", {}).get("out", 0))
-    line_map = service.configuration.line_map
+    # Resolved where there is a board to resolve against, so that a line
+    # configured by pin reports the index it will actually be uploaded with.
+    line_map = supervisor.resolved_line_map if supervisor.is_connected else (
+        service.configuration.line_map
+    )
+    pin_map = supervisor.pin_map
+
+    def described(definition, word: int) -> dict:
+        line_index = definition.line_index
+        # `is_high_now` is the only member added to a line here, and that is a
+        # contract rather than an oversight: a client edits what it read and
+        # PATCHes it back, and LineMap forbids members it does not declare. The
+        # board's own pin names go beside the lists, not inside them.
+        return definition.model_dump() | {
+            "is_high_now": (bool(word >> line_index & 1) if line_index is not None else None)
+        }
 
     return {
-        "input_lines": [
-            definition.model_dump() | {"is_high_now": bool(input_word >> definition.line_index & 1)}
-            for definition in line_map.input_lines
-        ],
-        "output_lines": [
-            definition.model_dump()
-            | {"is_high_now": bool(output_word >> definition.line_index & 1)}
-            for definition in line_map.output_lines
-        ],
+        "input_lines": [described(d, input_word) for d in line_map.input_lines],
+        "output_lines": [described(d, output_word) for d in line_map.output_lines],
+        # Indexed by line number, so a client reads the board's own name for
+        # line 4 as `board_input_pins[4]`.
+        #
+        # `device` means the board answered `pins` and these labels are its own.
+        # `assumed` means this daemon fell back to its own table for firmware
+        # older than that command, and every label here is a belief rather than
+        # a fact. See dev/PROTOCOL.md §3.6.
+        "pin_labels_came_from": pin_map.source,
+        "board_input_pins": pin_map.input_pin_labels,
+        "board_output_pins": pin_map.output_pin_labels,
     }
 
 
@@ -114,13 +138,31 @@ def replace_the_line_map(request: Request, line_map: LineMap) -> dict:
     that only this side knows about is a debounce that is wrong after a reset.
     """
     service = service_of(request)
-    service.configuration.line_map = line_map
-    service.supervisor.line_map = line_map
-    if not service.supervisor.is_connected:
+    supervisor = service.supervisor
+    if not supervisor.is_connected:
+        service.configuration.line_map = line_map
+        supervisor.line_map = line_map
+        supervisor.resolved_line_map = line_map
         return {"pushed_to_device": False, "line_map": line_map.model_dump()}
+
+    # Resolved against the board *before* anything is kept, so a map naming a
+    # pin this board does not have is refused with the rig still running on the
+    # map it had. See dev/PROTOCOL.md §3.6.
+    try:
+        resolved = line_map.resolved_against(supervisor.pin_map)
+    except ValueError as exc:
+        raise refusal(422, "line_map_does_not_match_the_board", str(exc), "line_map")
+
+    service.configuration.line_map = line_map
+    supervisor.line_map = line_map
+    supervisor.resolved_line_map = resolved
     with service.device_lock:
-        service.supervisor.push_wiring()
-    return {"pushed_to_device": True, "line_map": line_map.model_dump()}
+        supervisor.push_wiring()
+    return {
+        "pushed_to_device": True,
+        "line_map": line_map.model_dump(),
+        "resolved_line_map": resolved.model_dump(),
+    }
 
 
 @router.get("/firmware")

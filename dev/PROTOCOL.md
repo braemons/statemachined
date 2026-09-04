@@ -476,6 +476,39 @@ a debounce must not take the safe levels with it.
 > first scan correct on a board nobody has greeted, and `hello_ack`'s
 > `has_wiring` is how a host tells the two apart.
 
+### 3.6 `pins`
+
+```json
+{"msg_type":"pins","message_id":9,"dir":"in","crc":"...."}
+```
+
+Asks the device what its lines are called and, by asking twice, which of them
+are inputs and which are outputs. Answered with §4.6's `pin_map`, or with
+`error` / `no_pin_map` by a build that has no pins worth naming.
+
+**Why this is on the wire at all.** Which pin a line is, and which direction it
+has, are fixed when the firmware is compiled: the HAL's `kInputPins` and
+`kOutputPins` are what `init()` calls `pinMode()` over, and no command changes
+either. A host therefore cannot *derive* the map, and the only alternative to
+asking is keeping a copy of the board's table keyed by the `board` string — a
+hand-copied pin map, which is the failure the RA4M1 HAL refuses to risk with the
+Arduino core's table and which is no safer one layer up. A host that guesses
+wrong drives a valve from a lever's line number and nothing anywhere says so.
+
+| field | |
+|---|---|
+| `dir` | **Required.** `"in"` or `"out"`. Anything else is `error` / `bad_field` |
+
+**One direction per request, and no chunking.** Both directions in one reply do
+not fit `max_line` on a 32-line board, and a reply that silently carried half
+the map would be worse than none: the host would believe it had the whole
+thing. One direction always fits. A device whose labels somehow do not answers
+`error` / `too_long` rather than truncating.
+
+`pins` is legal whenever `hello` has been answered, changes nothing, and may be
+asked at any time — including during a trial, though a host with any sense asks
+once per connection.
+
 ---
 
 ## 4. Device → host
@@ -683,6 +716,40 @@ skipped.** It is counted rather than absorbed for exactly that reason: a board
 quietly missing scans looks identical to a board that is fine, and the
 difference is a response window measured wrongly. A bridge should surface it.
 
+### 4.6 `pin_map`
+
+```json
+{"msg_type":"pin_map","message_id":31,"in_reply_to":9,"dir":"in","n":8,
+ "pins":["D2","D3","D4","D5","D6","D7","D8","D9"],"crc":"...."}
+```
+
+The answer to §3.6. `pins[i]` is what is written on the board beside line `i` of
+that direction — silkscreen, not an Arduino pin number: `"A0"` is pin 14 to the
+core and `A0` to the person holding the wire, and only one of those is any use
+on a bench.
+
+`n` is this board's line count in that direction and is the length of `pins`. It
+matches `hello_ack`'s `n_input_lines` / `n_output_lines`; a label table in the
+firmware may be longer, and what is answered is what the board actually has,
+because that is what a host is allowed to address.
+
+**Input line *n* and output line *n* are different pins.** They are two
+independent numberings over two disjoint sets of pins, which is why `dir` is
+echoed back: a reply that did not say which direction it described could be
+filed under the wrong one, and that is a lever's number driving a valve.
+
+A label is free text and carries no structure — a board with screw terminals may
+answer `"TB1-3"`, and a host build answers `"sim0"` because it has no pins and
+should not pretend to. What a host may rely on is only that the label is stable
+for a given firmware build, and that it names the same physical thing the line
+number does.
+
+**What this does not prove.** That the wire is actually in the hole the label
+names. Nothing in software can: there is no read-back path from a pin. It closes
+the gap between the firmware's table and the host's belief about it, which is
+the gap that used to be closed by copying; the gap to the soldering iron is
+closed by watching a level change when somebody presses the lever.
+
 ---
 
 ## 5. Errors
@@ -706,6 +773,8 @@ the other two.
 | `graph_mismatch` | `configure` named a `set_version` the device does not hold |
 | `unknown_trial` | A `start` or `cancel` for a `trial_id` that is not the armed one |
 | `busy` | A trial is in flight and the command is not legal during one |
+| `no_pin_map` | `pins` was asked of a build that does not name its pins. The host keeps whatever it assumed, and knows that it assumed it |
+| `bad_field` | A field was present, parsable, and not one of the values it is allowed to be — `pins` with a `dir` that is neither `"in"` nor `"out"` |
 | `internal` | A bug. Should never appear; if it does, it is one |
 
 **Every refusal names what to change.** An error whose `context` is empty is a

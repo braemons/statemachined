@@ -180,6 +180,10 @@ DeviceIdentity make_identity() {
   id.input_line_count = kBoardInputLines;
   id.output_line_count = kBoardOutputLines;
   id.measured_scan_hz = g_health.hz;
+  // The HAL's own tables, not a copy: see hal.h. This is what lets a host stop
+  // assuming which pin a line is and which direction it has.
+  id.input_pin_labels = hal::input_pin_labels();
+  id.output_pin_labels = hal::output_pin_labels();
   return id;
 }
 

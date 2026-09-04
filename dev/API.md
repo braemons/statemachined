@@ -72,6 +72,7 @@ What is attached, what it can hold, and how the link is behaving.
   "measured_scan_hz": 9871,
   "capabilities": { "max_states": 32, "max_graphs": 20, "max_path": 255, "...": 0 },
   "has_wiring": true,
+  "pin_labels_came_from": "device",
   "committed_set": { "set_version": 7, "graph_names": ["go-nogo", "2afc"] },
   "link": { "connection_count": 1, "dropped_lines": 0, "bad_lines": 0 },
   "scan": { "hz": 9871, "overruns": 4, "worst_gap": 2, "tx_stalls": 0 },
@@ -86,6 +87,12 @@ again.
 `scan` is diagnosis rather than control, and it is the honest half of the
 timing claim: a board that quietly misses scans looks exactly like a board that
 is fine, so a missed scan is counted and reported.
+
+`pin_labels_came_from` is `device` when the board answered `pins`
+(PROTOCOL.md §3.6) and this daemon therefore knows which pin each line is, and
+`assumed` when it fell back to its own table for firmware older than that
+command. `unknown` is a board neither knows. A client showing a pin label should
+show that difference: one is the board's word and the other is a belief.
 
 ### `GET /api/device/lines`
 
@@ -102,7 +109,10 @@ doing now.
   "output_lines": [
     { "name": "reward_valve", "line_index": 3, "pin_label": "A0",
       "safe_level_is_high": true, "is_high_now": true }
-  ]
+  ],
+  "board_input_pins": ["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"],
+  "board_output_pins": ["D10", "D11", "D12", "A0", "A1", "A2", "A3", "A4"],
+  "pin_labels_came_from": "device"
 }
 ```
 
@@ -111,6 +121,18 @@ anything outside the device can check that a graph's line numbers reach the pins
 somebody wired: there is no read-back path from a pin, and the output word is
 the engine's own shadow rather than a measurement.
 
+`board_input_pins` and `board_output_pins` are **the board's own answer**,
+indexed by line number: `board_input_pins[4]` is what the firmware says input
+line 4 is. They sit beside the two lists rather than inside them, because a
+client reads this object, edits it, and PATCHes it back — and `LineMap` refuses
+members it does not declare. `is_high_now` is the one member added to a line
+here, and that is a contract.
+
+The line's own `pin_label` is what the *config* calls the pin. The two agree or
+the daemon refused to connect (PROTOCOL.md §3.6), so what showing both is worth
+is that a person can see which is which — and where `pin_labels_came_from` is
+not `device`, that the board's column is an assumption.
+
 ### `PATCH /api/device/lines`
 
 Change the line map. The body is a whole `LineMap` (§`model/line_map.py`).
@@ -118,6 +140,14 @@ Change the line map. The body is a whole `LineMap` (§`model/line_map.py`).
 **Renaming a line is free.** Names are the daemon's alone and never reach the
 wire, so a rename changes no graph and needs no upload — which is what lets a
 paradigm be authored against words instead of a pinout.
+
+**A line may name a pin instead of a number.** `{"name": "lever", "pin_label":
+"D6"}` with no `line_index` is resolved against what the board answered, which
+is the form worth using: a bit position is not written anywhere on the hardware
+and `D6` is. Where both are given they are checked, and a body whose pin and
+line contradict the board — or which names a pin this board does not have — is
+refused `422 line_map_does_not_match_the_board`, **before anything is kept**, so
+the rig carries on with the map it had.
 
 **The rest is the wiring**, and it is pushed to the device in the same call:
 invert, enable, debounce and the output safe levels (PROTOCOL.md §3.5). It is

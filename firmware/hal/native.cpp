@@ -24,6 +24,32 @@ LineBitmask inputs_ = 0;
 LineBitmask levels_ = 0;
 }  // namespace
 
+// No pins, and the labels say so rather than borrowing a board's.
+//
+// A host build could plausibly answer "D2" here and let the integration tests
+// look more like a rig. It would be a lie of exactly the kind the `pins`
+// command exists to prevent: nothing here is wired to anything. "sim0" is
+// honest, and it still exercises the whole path -- a host that resolves a
+// config's `pin = "sim0"` against this device is doing precisely what it does
+// against a board, which is asking rather than assuming.
+constexpr const char* kSimulatedLineLabels[] = {
+    "sim0",  "sim1",  "sim2",  "sim3",  "sim4",  "sim5",  "sim6",  "sim7",
+    "sim8",  "sim9",  "sim10", "sim11", "sim12", "sim13", "sim14", "sim15",
+    "sim16", "sim17", "sim18", "sim19", "sim20", "sim21", "sim22", "sim23",
+    "sim24", "sim25", "sim26", "sim27", "sim28", "sim29", "sim30", "sim31",
+};
+
+// One table for both directions: input line 3 and output line 3 are different
+// things on a board and neither of them is here, so inventing two sets of names
+// would only suggest otherwise.
+static_assert(sizeof(kSimulatedLineLabels) / sizeof(kSimulatedLineLabels[0]) >= kMaxLines,
+              "every input line this build reports needs a label");
+static_assert(sizeof(kSimulatedLineLabels) / sizeof(kSimulatedLineLabels[0]) >= kMaxOutputLines,
+              "every output line this build reports needs a label");
+
+const char* const* input_pin_labels() { return kSimulatedLineLabels; }
+const char* const* output_pin_labels() { return kSimulatedLineLabels; }
+
 void init() {
   levels_ = 0;
   inputs_ = 0;

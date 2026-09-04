@@ -13,6 +13,13 @@
 // So the table says which edits are which, and the save button says what it
 // will do rather than "save".
 //
+// The **pin** column is two things side by side, and the difference is the one
+// that used to be invisible: what the config calls this pin, and what the board
+// itself answered when asked (dev/PROTOCOL.md 3.6). They agree or the daemon
+// refused to connect, so what showing both is worth is that a person can see
+// *which* is which -- and where the board could not answer, the panel says the
+// labels are assumed rather than quietly showing them as fact.
+//
 // `is_high_now` keeps updating while you edit, and that is the point of the
 // panel: there is no read-back path from a pin, so watching a lamp move when
 // somebody presses a lever is the only way to confirm a graph's line numbers
@@ -98,6 +105,13 @@ export class LineMapPanelElement extends BasePanelElement {
   }
 
   paint(live) {
+    // Indexed by line number, which is how the board answers: the label of
+    // line 4 is board_input_pins[4]. Held for the build below rather than
+    // looked up per row, since a poll must not rebuild rows at all.
+    this.boardInputPins = live.board_input_pins || [];
+    this.boardOutputPins = live.board_output_pins || [];
+    this.pinLabelSource = live.pin_labels_came_from || "unknown";
+
     // The tables, only when the thing they are editing is a different object.
     // Everything else a poll knows -- the levels -- is painted below without
     // touching a field.
@@ -127,7 +141,60 @@ export class LineMapPanelElement extends BasePanelElement {
           "Renaming is free: names never reach the wire. Everything else is the wiring, " +
           "is pushed to the device on save, and is refused while a trial is armed.",
       }),
+      this.pinProvenance(),
     );
+  }
+
+  /// Where the "on the board" column came from, said plainly.
+  ///
+  /// A label the board vouched for can be shown as a fact. One this daemon
+  /// assumed -- from its own table, for firmware older than the `pins` command
+  /// -- is a belief, and the failure it hides is a valve driven from a lever's
+  /// line number. So it is labelled, rather than looking identical.
+  pinProvenance() {
+    if (this.pinLabelSource === "device") {
+      return this.make("p", { class: "muted" }, [
+        this.make("span", { class: "pill good", text: "pins from the board" }),
+        this.make("span", {
+          text:
+            "  The board answered which pin each line is, out of the same table its firmware " +
+            "drives the pins with. A pin column that disagreed would have stopped the daemon " +
+            "connecting.",
+        }),
+      ]);
+    }
+    if (this.pinLabelSource === "assumed") {
+      return this.make("p", { class: "muted" }, [
+        this.make("span", { class: "pill warn", text: "pins assumed" }),
+        this.make("span", {
+          text:
+            "  This board's firmware is older than the `pins` command, so the pin names come " +
+            "from a table in the daemon rather than from the board. They are a belief. Flash " +
+            "current firmware to have them checked.",
+        }),
+      ]);
+    }
+    return this.make("p", { class: "muted" }, [
+      this.make("span", { class: "pill", text: "pins unknown" }),
+      this.make("span", {
+        text:
+          "  Neither the board nor this daemon knows what this board's pins are called. Line " +
+          "numbers are all there is; the levels beside them are the only check.",
+      }),
+    ]);
+  }
+
+  /// What the board calls this line, or nothing where nobody knows.
+  boardPinCell(labels, lineIndex) {
+    const label = lineIndex == null ? "" : labels[lineIndex] || "";
+    return this.make("td", {
+      class: this.pinLabelSource === "device" ? "mono" : "mono muted",
+      text: label || "-",
+      title:
+        this.pinLabelSource === "device"
+          ? "what the board answered for this line"
+          : "assumed by the daemon; this board did not say",
+    });
   }
 
   /// The one thing a poll may touch: a class on a dot that is already there.
@@ -154,6 +221,7 @@ export class LineMapPanelElement extends BasePanelElement {
         this.make("td", {}, [this.textField(line, "name")]),
         this.make("td", { class: "mono", text: `${line.line_index}` }),
         this.make("td", {}, [this.textField(line, "pin_label", "5rem")]),
+        this.boardPinCell(this.boardInputPins, line.line_index),
         this.make("td", {}, [this.checkBox(line, "reads_active_low")]),
         this.make("td", {}, [this.checkBox(line, "is_enabled")]),
         this.make("td", {}, [this.numberField(line, "debounce_milliseconds")]),
@@ -165,7 +233,11 @@ export class LineMapPanelElement extends BasePanelElement {
           this.make("th", { text: "" }),
           this.make("th", { text: "name" }),
           this.make("th", { text: "line" }),
-          this.make("th", { text: "pin" }),
+          this.make("th", { text: "pin", title: "what this config calls it -- editable" }),
+          this.make("th", {
+            text: "on the board",
+            title: "what the board answered when asked (dev/PROTOCOL.md 3.6)",
+          }),
           this.make("th", { text: "active low", title: "reads inverted -- opto-isolated inputs routinely do" }),
           this.make("th", { text: "enabled", title: "a disabled line reads zero however the pin is driven" }),
           this.make("th", { text: "debounce ms" }),
@@ -182,6 +254,7 @@ export class LineMapPanelElement extends BasePanelElement {
         this.make("td", {}, [this.textField(line, "name")]),
         this.make("td", { class: "mono", text: `${line.line_index}` }),
         this.make("td", {}, [this.textField(line, "pin_label", "5rem")]),
+        this.boardPinCell(this.boardOutputPins, line.line_index),
         this.make("td", {}, [this.checkBox(line, "safe_level_is_high")]),
       ]),
     );
@@ -191,7 +264,11 @@ export class LineMapPanelElement extends BasePanelElement {
           this.make("th", { text: "" }),
           this.make("th", { text: "name" }),
           this.make("th", { text: "line" }),
-          this.make("th", { text: "pin" }),
+          this.make("th", { text: "pin", title: "what this config calls it -- editable" }),
+          this.make("th", {
+            text: "on the board",
+            title: "what the board answered when asked (dev/PROTOCOL.md 3.6)",
+          }),
           this.make("th", {
             text: "safe level high",
             title:

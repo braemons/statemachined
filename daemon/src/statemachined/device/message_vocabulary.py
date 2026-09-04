@@ -52,6 +52,7 @@ class MsgType(StrEnum):
     PING = "ping"
     STATE = "state"
     WIRING = "wiring"
+    PINS = "pins"
 
     # Device -> host.
     HELLO_ACK = "hello_ack"
@@ -69,6 +70,7 @@ class MsgType(StrEnum):
     PONG = "pong"
     STATE_REPORT = "state_report"
     VISIT = "visit"
+    PIN_MAP = "pin_map"
 
 
 #: Device messages that answer nothing and may arrive at any time, so a reader
@@ -103,4 +105,9 @@ class ErrorCode(StrEnum):
     GRAPH_MISMATCH = "graph_mismatch"
     UNKNOWN_TRIAL = "unknown_trial"
     BUSY = "busy"
+    #: `pins` was asked of firmware that does not name its pins -- every board
+    #: flashed before dev/PROTOCOL.md §3.6 existed. Not a failure: the host
+    #: keeps whatever it assumed, and knows that it assumed it.
+    NO_PIN_MAP = "no_pin_map"
+    BAD_FIELD = "bad_field"
     INTERNAL = "internal"

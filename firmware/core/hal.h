@@ -78,5 +78,22 @@ size_t link_write_some(const char* src, size_t n);
 /// on rather than waiting for a heartbeat to time out.
 bool link_up();
 
+// ---------------------------------------------------------------- the pins ---
+
+/// What is written on the board beside each line, indexed by line number, or
+/// nullptr where this build has no pins worth naming.
+///
+/// These come from the same table that `init()` calls pinMode() over, and that
+/// is the whole point of them. Which pin a line is, and which direction it has,
+/// are decided when this firmware is compiled; nothing on the wire changes
+/// either. A host that wants to know therefore has to be *told* by the board,
+/// and the alternative -- a table in the host keyed by the board name -- is a
+/// hand-copied pin map, which is what the RA4M1 HAL refuses to keep of the
+/// Arduino core's for exactly the reason it would be wrong here.
+///
+/// Answered to the host by the `pins` command. See dev/PROTOCOL.md 3.6.
+const char* const* input_pin_labels();
+const char* const* output_pin_labels();
+
 }  // namespace hal
 }  // namespace statemachined

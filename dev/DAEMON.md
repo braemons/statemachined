@@ -721,9 +721,24 @@ which is what keeps the UI an honest test of it.
 | | |
 |---|---|
 | `GET /api/device` | connected, board, `fw`, `proto`, measured `scan_hz`, `caps`, `has_set`, `set_version`, `n_graphs`, link counters, uptime |
-| `GET /api/device/lines` | per line: index, direction, pin label, **your name for it**, invert, enable, safe level, debounce, and its live level |
+| `GET /api/device/lines` | per line: index, direction, pin label, **your name for it**, invert, enable, safe level, debounce, and its live level. Beside the two lists: `board_input_pins` / `board_output_pins`, which are the board's own answer, and `pin_labels_came_from` |
 | `PATCH /api/device/lines` | rename a line; change invert/enable/safe/debounce. Pushes the wiring config and persists it — §3.4 |
 | `GET /api/device/firmware` | the running version against what the installed package ships. See §6.3 |
+
+**The board is asked which pin each line is, not told.** `pins`
+(`PROTOCOL.md` §3.6) answers with the same table the firmware calls `pinMode()`
+over, so a config may name a pin — `pin_label = "D6"` — and the daemon resolves
+it to a line number by asking. Where a config names both, they are checked, and
+a disagreement stops the daemon connecting: masks built from a wrong index drive
+the wrong pin for a whole session and nothing downstream can see it. The wiring
+is pushed only after this, since the wiring *is* masks over these numbers.
+
+Firmware older than that command answers `no_pin_map`, which is not a failure.
+The daemon falls back to its own table (`board_pin_labels.py`), and
+`pin_labels_came_from` says `assumed` rather than `device` everywhere the labels
+appear — because a hand-copied pin map is precisely what §3.6 exists to stop
+being the only option, and using one silently would be worse than using one
+loudly.
 
 **Renaming a line is free** — names are the daemon's alone and never reach the
 wire. The rest is the *wiring*, which after §3.3 is a standalone command rather
@@ -999,7 +1014,7 @@ consequences worth writing down:
 | | |
 |---|---|
 | **Device** | board, link health, firmware, and the live `in`/`out` bit rows — the thing `statemachined-bringup state` prints today, but named and updating |
-| **Lines** | the map. Rename, invert, enable, safe level, debounce — and the live level of every line beside it, which is the only way to confirm from outside that a graph's line numbers reach the pins somebody wired. A rename is free and nothing is re-uploaded; the rest is the `wiring` command and is pushed on save |
+| **Lines** | the map. Rename, invert, enable, safe level, debounce — and the live level of every line beside it, which is the only way to confirm from outside that a graph's line numbers reach the pins somebody wired. A rename is free and nothing is re-uploaded; the rest is the `wiring` command and is pushed on save. The pin column is shown twice: what this config calls it, and what the board answered — with a badge saying whether the board answered at all |
 | **Graphs** | the store, and the editor: states, timeouts, terminal outcomes, actions, and a predicate editor where the three masks are checkboxes over *named* lines. An SVG node diagram rendered from the graph, read-only in v1 |
 | **Session** | the current trial, the state the machine is in, the last result's path |
 | **Trace** | the live tail of §4.6, one row per state visit, filterable by `trial_id`. The one view that is useful with nobody in the room, because it is still there in the morning |
@@ -1134,6 +1149,7 @@ milestones that used to be M5 and M6 are now M8 and M9.
 | **M4f** ✅ | FastAPI: device, lines, graphs, trial, config, state/stream, and the trace of §4.6; the triald client; `statemachined serve`. [`dev/API.md`](API.md) written first, the way `PROTOCOL.md` was. It found `patch`: documented on the wire since M2 and implemented nowhere, so a host that sent one got a silently unpatched trial — see below |
 | **M4g** ✅ | The web UI and the `/elements/` contract; mDNS. Six elements, each with a shadow root and a `base` attribute, served as package data by `api/web_user_interface_routes.py`; the shell at `/`, the contract at `/elements/`. `mdns_service_advertisement.py` publishes `_statemachined._tcp` with vstimd's stable `id=`, hashed from `/etc/machine-id`, and never fatally. The UI's own tests are the compiler it does not have: every module it imports exists, every `/api/` path it calls is a route, every module parses, and the editor's outcome names are the ones the store accepts |
 | **M4h** ▶️ | **The bench: this UI in front of a real board.** Promoted ahead of packaging, because until somebody has clicked through the six panels with a device on the other end, everything above is a set of tests agreeing with each other. `make bench` runs the daemon, the API and the UI against `TARGET` -- a board on a cable, or `make bench-device` and `socket://127.0.0.1:5300` for the same firmware built for this machine -- from `daemon/bench/statemachined_bench_configuration.toml`, whose store is seeded from `graphs/` under `build/` so deleting a graph in the browser never deletes an example. The bridge the integration tests use moved to `daemon/bench/native_device_on_a_socket.py` and is now shared rather than copied, and `make integration-device`, named by three docstrings and existing in none, exists. **Done against the R4**: reflashed to M4c firmware, wiring pushed, the set uploaded, and a whole configure → start → result through the HTTP API. **Left**: the browser. No panel of this UI has ever been rendered |
+| **M4i** ✅ | **The board says which pin each line is** (`PROTOCOL.md` §3.6). The daemon kept its own copy of the firmware's pin table, keyed by the board name — a hand-copied pin map, which is the thing the RA4M1 HAL refuses to keep of the Arduino core's table for exactly the reason it was wrong here: a host cannot otherwise know which pin a line is, or even which lines are inputs, because both are fixed when the firmware is compiled. `pins`/`pin_map` answers out of the same table `pinMode()` is called over, one direction per request so a 32-line board's labels cannot overflow a line. A config may now name a pin instead of a bit position; where it names both they are checked, and a disagreement stops the daemon connecting rather than driving the wrong line for a session. Firmware older than the command answers `no_pin_map`, the daemon falls back to its own table, and every label it shows is then marked `assumed` rather than passing as the board's word. 624 B of flash and 8 B of RAM |
 | **M5** | Packaging: nfpm, systemd, sysusers, udev, logrotate, the builder containers, `release.yml`, one line in `packages/sources.txt`. **Installed on the Pi 5 alongside vstimd and triald** |
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
 | **M7** | **Data flash** (§3.4): the `hal.h` addition, the RA4M1 implementation, a file-backed `native.cpp` stand-in, the boot-time read, and `persist`. Deferred deliberately: the compile-time safe levels of §3.4 hold the fail-safe hole shut without it, and this is easier to build once a daemon exists to exercise it. Renode covers the HAL addition |

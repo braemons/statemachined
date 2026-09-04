@@ -158,6 +158,8 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
       return on_state_request(message_id, now_us);
     case MsgType::Wiring:
       return on_wiring(m, message_id);
+    case MsgType::Pins:
+      return on_pins_request(m, message_id);
     case MsgType::Configure:
       return on_configure(m, message_id);
     case MsgType::Start:
@@ -193,6 +195,7 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
     case MsgType::Pong:
     case MsgType::StateReport:
     case MsgType::Visit:
+    case MsgType::PinMap:
     case MsgType::Unknown:
       break;
   }
@@ -258,6 +261,50 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id) {
   // running the compile-time defaults, which a daemon needs to know before it
   // decides whether to push a wiring or to trust the one that is there.
   w.key_bool("has_wiring", have_wiring_);
+  send(w, message_id);
+}
+
+void HostLinkSession::on_pins_request(const JsonObject& m, uint16_t message_id) {
+  // dev/PROTOCOL.md 3.6. One direction per request, and `dir` is required.
+  //
+  // Not both in one reply: the labels of a 32-line board do not fit in
+  // `max_line`, and a reply that silently held half of them would be worse than
+  // no reply at all -- the host would believe it had the whole map. One
+  // direction always fits, so this needs no chunking and no partial answer.
+  JsonSpan dir;
+  if (!m.str("dir", &dir)) {
+    send_error(message_id, "bad_json", "no dir", "dir");
+    return;
+  }
+  const bool inputs = json_str_eq(dir, "in");
+  if (!inputs && !json_str_eq(dir, "out")) {
+    send_error(message_id, "bad_field", "dir is \"in\" or \"out\"", "dir");
+    return;
+  }
+
+  const char* const* labels = inputs ? identity_.input_pin_labels : identity_.output_pin_labels;
+  const uint8_t count = inputs ? identity_.input_line_count : identity_.output_line_count;
+  if (labels == nullptr) {
+    // Nothing invented. A host that gets this keeps whatever it assumed and --
+    // this is the point -- knows that it assumed it.
+    send_error(message_id, "no_pin_map", "this build does not name its pins", "dir");
+    return;
+  }
+
+  JsonWriter w(tx_, sizeof(tx_));
+  w.begin(msg_type_name(MsgType::PinMap), tx_message_id_);
+  w.in_reply_to(message_id);
+  w.key_str("dir", inputs ? "in" : "out");
+  w.key_u32("n", count);
+  w.begin_array("pins");
+  for (uint8_t i = 0; i < count; ++i) w.elem_str(labels[i] != nullptr ? labels[i] : "");
+  w.end_array();
+  if (w.overflowed()) {
+    // A board with more or longer labels than a line can hold. Refused rather
+    // than truncated, for the same reason the whole map is not sent at once.
+    send_error(message_id, "too_long", "the pin map does not fit one line", "pins");
+    return;
+  }
   send(w, message_id);
 }
 

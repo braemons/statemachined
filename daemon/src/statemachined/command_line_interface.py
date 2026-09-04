@@ -161,6 +161,35 @@ def cmd_state(args, session: RequestResponseSession) -> int:
     return 0
 
 
+def cmd_pins(args, session: RequestResponseSession) -> int:
+    """What this board calls its pins, and which of them are inputs.
+
+    The command a person runs before wiring anything, and the one that settles
+    an argument about a line number without opening the firmware. dev/PROTOCOL.md
+    §3.6: the board answers out of the same table its `pinMode()` was called
+    over, so this is the board's word rather than a table in this tool.
+    """
+    for direction, heading in (("in", "inputs"), ("out", "outputs")):
+        try:
+            reply = session.request(MsgType.PINS, dir=direction)
+        except DeviceRefusedTheCommand as refusal:
+            # Older firmware, and not an error worth a non-zero exit: a board
+            # that does not name its pins is the normal state of every one
+            # flashed before the command existed. Anything else -- "no hello
+            # yet", above all -- is left to the handler in main(), which knows
+            # what to suggest.
+            if refusal.code not in (ErrorCode.NO_PIN_MAP, ErrorCode.UNKNOWN_TYPE):
+                raise
+            print(f"  {heading:8} {refusal.code}: {refusal.message}")
+            note("       This firmware predates `pins`; the daemon falls back to its own table.")
+            continue
+        pins = reply.get("pins", [])
+        print(f"  {heading}")
+        for line_index, label in enumerate(pins):
+            print(f"    line {line_index:<3} {label}")
+    return 0
+
+
 def cmd_ping(args, session: RequestResponseSession) -> int:
     for i in range(args.count):
         started = time.monotonic()
@@ -421,6 +450,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="seconds (default: %(default)s)",
     )
     s.set_defaults(func=cmd_watch)
+
+    s = sub.add_parser("pins", help="which pin each line is, as the board itself says")
+    s.set_defaults(func=cmd_pins)
 
     s = sub.add_parser("ping", help="round trip and uptime")
     s.add_argument("-n", "--count", type=int, default=1)

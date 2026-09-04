@@ -72,6 +72,8 @@ DeviceIdentity native_device_identity() {
   // Declared rather than measured, unlike a board's: there is no scan floor to
   // measure on a machine that is also running a browser.
   identity.measured_scan_hz = kScanHz;
+  identity.input_pin_labels = hal::input_pin_labels();
+  identity.output_pin_labels = hal::output_pin_labels();
   return identity;
 }
 

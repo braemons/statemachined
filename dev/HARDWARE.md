@@ -21,7 +21,7 @@ Eight in, eight out. The board has more usable pins than that, but D0/D1 are the
 UART and D13 carries the on-board LED; a line map that quietly includes either
 is one that surprises somebody at 2 a.m.
 
-| statemachined input | Pin | | statemachined output | Pin |
+| input line | Pin | | output line | Pin |
 |---|---|---|---|---|
 | 0 | D2 | | 0 | D10 |
 | 1 | D3 | | 1 | D11 |
@@ -36,6 +36,49 @@ Defined in `firmware/hal/renesas_ra4m1.cpp`, as two arrays indexed by line
 number. The Arduino pin number is turned into a port and a bit with the core's
 own `digitalPinToBspPin()` rather than a hand-written table: a hand-copied pin
 map is a silent wrong-valve bug and the core already knows the answer.
+
+**Three things about this table are load-bearing, and none of them is
+configurable.**
+
+**Which pin is an input and which is an output is fixed when the firmware is
+compiled.** `init()` calls `pinMode()` over these two arrays and nothing
+afterwards changes a direction: the `wiring` command (`PROTOCOL.md` §3.5)
+carries invert, enable, debounce and output safe levels, and no direction field
+exists in it. So a rig that needs D9 to drive a valve does not edit a config
+file — it edits `kInputPins`/`kOutputPins` and reflashes. That is deliberate. A
+direction that could be changed over the wire is a valve line that can be turned
+into an input by a bad config, and a board comes up long before any config
+reaches it.
+
+**Input line *n* and output line *n* are different pins.** They are two
+independent numberings over two disjoint sets of pins, because the protocol
+carries two separate words. Input line 3 is D5; output line 3 is A0. There is no
+line 3 in the sense of "one pin".
+
+**The line number is what a graph means — and the board is asked what the pin
+labels are, rather than told.** `line_index` in
+`/etc/braemons/statemachined.toml` is a bit position in those words and is the
+only part that reaches the device. `pin_label` beside it names the pin, and it
+used to be free text checked against nothing: writing `D9` next to input line 1
+did not move it — line 1 is D3 because `kInputPins[1]` is 3 — it only put a
+wrong label on the web UI for the next person.
+
+It is checked now. The `pins` command (`PROTOCOL.md` §3.6) answers with this
+table, out of the firmware that holds it, so:
+
+- a line may name **only** a pin — `pin = "D6"` — and the daemon resolves it to
+  line 4 by asking the board;
+- a line naming both has them **checked**, and a pair that disagree stops the
+  daemon connecting rather than being pushed;
+- a line naming a pin this board does not have — or naming an output's pin as an
+  input — is refused, with the board's actual pins in the message.
+
+`make bringup ARGS="--hello pins"` prints exactly what the board answers.
+
+What none of that proves is that the wire is in the hole the label names. There
+is no read-back path from a pin, so the Lines panel showing each line's live
+level is still the only verification of *that*: press the lever, watch which dot
+lights.
 
 The graph pools are sized for 32 lines on every board so the data structures do
 not change shape per target. What this board can physically drive is the eight
@@ -190,6 +233,20 @@ budgets a ping at 8 periods and a `state_report` at 20, against the 3.0 and 9.1
 measured here. Reverting the handoff fails it on the first assertion, which is
 the point — a measurement written down once is a measurement that quietly stops
 being true.
+
+### What `pins` costs — measured 2026-09-04
+
+The board answering which pin each line is (`PROTOCOL.md` §3.6) is the cheapest
+thing in this document.
+
+| | rig image |
+|---|---|
+| Flash | 69 048 B → **69 672 B** (+624 B: two label tables, the handler, the two names) |
+| RAM | 13 656 B → **13 664 B** (+8 B: the two pointers `DeviceIdentity` carries) |
+
+The label tables are in flash — `nm` puts both at 0x15300 — because a
+`constexpr` table of pointers to string literals is not copied into RAM. What
+the 8 B buys is a host that no longer keeps its own copy of this pinout.
 
 ### The graph set, over the link — measured 2026-09-04
 
