@@ -13,12 +13,19 @@
 // So the table says which edits are which, and the save button says what it
 // will do rather than "save".
 //
-// The **pin** column is two things side by side, and the difference is the one
-// that used to be invisible: what the config calls this pin, and what the board
-// itself answered when asked (dev/PROTOCOL.md 3.6). They agree or the daemon
-// refused to connect, so what showing both is worth is that a person can see
-// *which* is which -- and where the board could not answer, the panel says the
-// labels are assumed rather than quietly showing them as fact.
+// The **pin** column is a chooser rather than a text box, wherever the board
+// answered `pins` (dev/PROTOCOL.md 3.6). The board owns the labels: which pin
+// line 4 is was decided when the firmware was compiled, and typing a different
+// string here cannot move a wire. What a person legitimately decides is the
+// *assignment* -- "the lever is on D6" -- and that is a choice among this
+// board's pins, so it is offered as one. Choosing a pin sets the line number
+// with it, because they are the same fact said twice.
+//
+// A free-text box could only be wrong: the daemon would refuse the save, which
+// is the right answer to a question the UI should not have asked. Where the
+// board could not answer -- firmware older than the command -- the box comes
+// back, because then there is nothing to choose from and a typed label is all
+// anybody has.
 //
 // `is_high_now` keeps updating while you edit, and that is the point of the
 // panel: there is no read-back path from a pin, so watching a lamp move when
@@ -50,9 +57,11 @@ export class LineMapPanelElement extends BasePanelElement {
     //: draft is the question, and a counter is the cheapest way to ask it.
     this.draftGeneration = 0;
     this.builtGeneration = -1;
-    //: The live dots, by line index, so a poll can touch them and nothing else.
-    this.inputDotByLineIndex = new Map();
-    this.outputDotByLineIndex = new Map();
+    //: The live dots, paired with the line they belong to rather than keyed by
+    //: line number: choosing a different pin changes the number, and a dot
+    //: keyed by the old one would go on reporting the old line.
+    this.inputDots = [];
+    this.outputDots = [];
   }
 
   renderShell() {
@@ -128,8 +137,8 @@ export class LineMapPanelElement extends BasePanelElement {
   }
 
   buildTables() {
-    this.inputDotByLineIndex = new Map();
-    this.outputDotByLineIndex = new Map();
+    this.inputDots = [];
+    this.outputDots = [];
     this.body.replaceChildren(
       this.make("h3", { text: "Inputs" }),
       this.inputTable(),
@@ -158,8 +167,8 @@ export class LineMapPanelElement extends BasePanelElement {
         this.make("span", {
           text:
             "  The board answered which pin each line is, out of the same table its firmware " +
-            "drives the pins with. A pin column that disagreed would have stopped the daemon " +
-            "connecting.",
+            "drives the pins with, so the pin column offers those and nothing else. Which " +
+            "pin a line is cannot be edited here -- it is compiled into the firmware.",
         }),
       ]);
     }
@@ -169,8 +178,9 @@ export class LineMapPanelElement extends BasePanelElement {
         this.make("span", {
           text:
             "  This board's firmware is older than the `pins` command, so the pin names come " +
-            "from a table in the daemon rather than from the board. They are a belief. Flash " +
-            "current firmware to have them checked.",
+            "from a table in the daemon rather than from the board, and the pin column is a " +
+            "text box because there is no authoritative list to choose from. They are a " +
+            "belief. Flash current firmware to have them checked.",
         }),
       ]);
     }
@@ -184,59 +194,102 @@ export class LineMapPanelElement extends BasePanelElement {
     ]);
   }
 
-  /// What the board calls this line, or nothing where nobody knows.
-  boardPinCell(labels, lineIndex) {
-    const label = lineIndex == null ? "" : labels[lineIndex] || "";
-    return this.make("td", {
-      class: this.pinLabelSource === "device" ? "mono" : "mono muted",
-      text: label || "-",
-      title:
-        this.pinLabelSource === "device"
-          ? "what the board answered for this line"
-          : "assumed by the daemon; this board did not say",
+  /// The pin: a choice among the board's own, or a text box where there is no
+  /// list to choose from.
+  ///
+  /// `lineNumberCell` is the cell showing the line number, updated in place
+  /// when a pin is chosen. Rebuilding the row instead would take the focus out
+  /// of whatever the person is holding -- the rule at the top of this file --
+  /// and the two values are one fact anyway.
+  pinField(line, boardPins, lineNumberCell) {
+    if (this.pinLabelSource !== "device") {
+      return this.textField(line, "pin_label", "5rem");
+    }
+
+    const chooser = this.make("select", {
+      title: "the pins this board answered with. Which line each one is, is the firmware's",
+      onChange: (event) => {
+        const pinLabel = event.target.value;
+        const lineIndex = boardPins.indexOf(pinLabel);
+        this.edit(line, "pin_label", pinLabel);
+        // Both, together. A label without its line number is the disagreement
+        // the daemon would refuse the save over, and it would be this panel's
+        // fault rather than the person's.
+        this.edit(line, "line_index", lineIndex < 0 ? null : lineIndex);
+        lineNumberCell.textContent = lineIndex < 0 ? "-" : `${lineIndex}`;
+      },
     });
+    // A line whose pin this board does not have cannot happen through the API
+    // -- the daemon refuses it -- but it can be looked at here after a board
+    // was swapped for one with fewer pins, and dropping the row would hide it.
+    if (!boardPins.includes(line.pin_label)) {
+      chooser.append(
+        this.make("option", {
+          value: line.pin_label || "",
+          text: line.pin_label ? `${line.pin_label} (not on this board)` : "(unassigned)",
+          selected: true,
+        }),
+      );
+    }
+    for (const pinLabel of boardPins) {
+      chooser.append(
+        this.make("option", {
+          value: pinLabel,
+          text: pinLabel,
+          selected: pinLabel === line.pin_label,
+        }),
+      );
+    }
+    return chooser;
   }
 
   /// The one thing a poll may touch: a class on a dot that is already there.
+  ///
+  /// The level is looked up by the line number the *draft* row now has, so a
+  /// pin chosen but not yet saved lights the dot of the line it was moved to.
+  /// That is the point of the panel: "I think the lever is on D7" is a question
+  /// somebody answers by pressing the lever and watching, before saving
+  /// anything.
   showLiveLevels(live) {
-    for (const line of live.input_lines) {
-      setLevel(this.inputDotByLineIndex.get(line.line_index), line.is_high_now);
-    }
-    for (const line of live.output_lines) {
-      setLevel(this.outputDotByLineIndex.get(line.line_index), line.is_high_now);
-    }
+    const byLineIndex = (lines) => new Map(lines.map((l) => [l.line_index, l.is_high_now]));
+    const inputs = byLineIndex(live.input_lines);
+    const outputs = byLineIndex(live.output_lines);
+    for (const { line, dot } of this.inputDots) setLevel(dot, inputs.get(line.line_index));
+    for (const { line, dot } of this.outputDots) setLevel(dot, outputs.get(line.line_index));
   }
 
-  /// A dot, remembered by line index so the poll can find it again.
-  levelDot(dotsByLineIndex, lineIndex) {
+  /// A dot, remembered with its row so the poll can find it again.
+  levelDot(dots, line) {
     const dot = this.make("span", { class: "level" });
-    dotsByLineIndex.set(lineIndex, dot);
+    dots.push({ line, dot });
     return dot;
   }
 
   inputTable() {
-    const rows = this.draft.input_lines.map((line) =>
-      this.make("tr", {}, [
-        this.make("td", {}, [this.levelDot(this.inputDotByLineIndex, line.line_index)]),
+    const rows = this.draft.input_lines.map((line) => {
+      const lineNumberCell = this.make("td", {
+        class: "mono",
+        text: line.line_index == null ? "-" : `${line.line_index}`,
+      });
+      return this.make("tr", {}, [
+        this.make("td", {}, [this.levelDot(this.inputDots, line)]),
         this.make("td", {}, [this.textField(line, "name")]),
-        this.make("td", { class: "mono", text: `${line.line_index}` }),
-        this.make("td", {}, [this.textField(line, "pin_label", "5rem")]),
-        this.boardPinCell(this.boardInputPins, line.line_index),
+        lineNumberCell,
+        this.make("td", {}, [this.pinField(line, this.boardInputPins, lineNumberCell)]),
         this.make("td", {}, [this.checkBox(line, "reads_active_low")]),
         this.make("td", {}, [this.checkBox(line, "is_enabled")]),
         this.make("td", {}, [this.numberField(line, "debounce_milliseconds")]),
-      ]),
-    );
+      ]);
+    });
     return this.make("table", {}, [
       this.make("thead", {}, [
         this.make("tr", {}, [
           this.make("th", { text: "" }),
           this.make("th", { text: "name" }),
           this.make("th", { text: "line" }),
-          this.make("th", { text: "pin", title: "what this config calls it -- editable" }),
           this.make("th", {
-            text: "on the board",
-            title: "what the board answered when asked (dev/PROTOCOL.md 3.6)",
+            text: "pin",
+            title: "this board's own pins. Which line each one is, is the firmware's",
           }),
           this.make("th", { text: "active low", title: "reads inverted -- opto-isolated inputs routinely do" }),
           this.make("th", { text: "enabled", title: "a disabled line reads zero however the pin is driven" }),
@@ -248,26 +301,28 @@ export class LineMapPanelElement extends BasePanelElement {
   }
 
   outputTable() {
-    const rows = this.draft.output_lines.map((line) =>
-      this.make("tr", {}, [
-        this.make("td", {}, [this.levelDot(this.outputDotByLineIndex, line.line_index)]),
+    const rows = this.draft.output_lines.map((line) => {
+      const lineNumberCell = this.make("td", {
+        class: "mono",
+        text: line.line_index == null ? "-" : `${line.line_index}`,
+      });
+      return this.make("tr", {}, [
+        this.make("td", {}, [this.levelDot(this.outputDots, line)]),
         this.make("td", {}, [this.textField(line, "name")]),
-        this.make("td", { class: "mono", text: `${line.line_index}` }),
-        this.make("td", {}, [this.textField(line, "pin_label", "5rem")]),
-        this.boardPinCell(this.boardOutputPins, line.line_index),
+        lineNumberCell,
+        this.make("td", {}, [this.pinField(line, this.boardOutputPins, lineNumberCell)]),
         this.make("td", {}, [this.checkBox(line, "safe_level_is_high")]),
-      ]),
-    );
+      ]);
+    });
     return this.make("table", {}, [
       this.make("thead", {}, [
         this.make("tr", {}, [
           this.make("th", { text: "" }),
           this.make("th", { text: "name" }),
           this.make("th", { text: "line" }),
-          this.make("th", { text: "pin", title: "what this config calls it -- editable" }),
           this.make("th", {
-            text: "on the board",
-            title: "what the board answered when asked (dev/PROTOCOL.md 3.6)",
+            text: "pin",
+            title: "this board's own pins. Which line each one is, is the firmware's",
           }),
           this.make("th", {
             text: "safe level high",

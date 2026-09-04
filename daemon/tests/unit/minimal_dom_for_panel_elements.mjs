@@ -33,6 +33,7 @@ class MinimalNode {
     this.type = "";
     this.value = "";
     this.checked = false;
+    this.selected = false;
     this.disabled = false;
     this.title = "";
   }

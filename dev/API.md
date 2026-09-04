@@ -129,9 +129,11 @@ members it does not declare. `is_high_now` is the one member added to a line
 here, and that is a contract.
 
 The line's own `pin_label` is what the *config* calls the pin. The two agree or
-the daemon refused to connect (PROTOCOL.md §3.6), so what showing both is worth
-is that a person can see which is which — and where `pin_labels_came_from` is
-not `device`, that the board's column is an assumption.
+the daemon refused to connect (PROTOCOL.md §3.6). What a client should do with
+the difference is offer these lists as the **choices** — the assignment of a
+name to a pin is the rig's to make, the label itself is the board's — and,
+where `pin_labels_came_from` is not `device`, show that its labels are an
+assumption. The web UI's Lines panel is the worked example.
 
 ### `PATCH /api/device/lines`
 

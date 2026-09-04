@@ -331,6 +331,93 @@ def test_a_poll_does_not_take_the_focus_out_of_a_field_somebody_is_editing() -> 
     assert result["revertedValue"] == "lever"
 
 
+def test_the_pin_is_chosen_from_the_boards_own_pins_and_not_typed() -> None:
+    """The board owns the labels (dev/PROTOCOL.md §3.6): which pin line 4 is was
+    decided when the firmware was compiled, and typing a different string cannot
+    move a wire. So where the board answered, the pin column offers *its* pins.
+
+    A text box there could only be wrong -- the daemon would refuse the save,
+    which is the right answer to a question the UI should not have asked.
+
+    Choosing a pin sets the line number with it, because they are one fact said
+    twice, and a label sent without its number is the disagreement the daemon
+    refuses over.
+    """
+    module = (web_directory() / "elements" / "line_map_panel_element.js").as_uri()
+    lines = {
+        "input_lines": [
+            {"name": "lever", "line_index": 4, "pin_label": "D6", "is_high_now": False}
+        ],
+        "output_lines": [],
+        "board_input_pins": ["D2", "D3", "D4", "D5", "D6", "D7"],
+        "board_output_pins": ["D10", "A0"],
+        "pin_labels_came_from": "device",
+    }
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ LineMapPanelElement }} = await import({module!r});\n"
+        f"const lines = {json_dumps(lines)};\n"
+        "const panel = new LineMapPanelElement();\n"
+        "panel.renderShell();\n"
+        "panel.adoptDraft(lines);\n"
+        "panel.paint(lines);\n"
+        "const chooser = panel.root.find((n) => n.tagName === 'select');\n"
+        "const offered = chooser.children.map((option) => option.value);\n"
+        "const before = chooser.children.find((o) => o.selected).value;\n"
+        "// Somebody moves the lever to D7 and says so.\n"
+        "chooser.value = 'D7';\n"
+        "chooser.dispatch('change');\n"
+        "const numbers = panel.root.descendants()\n"
+        "  .filter((n) => n.tagName === 'td' && n.className === 'mono').map((n) => n.textContent);\n"
+        "console.log(JSON.stringify({ offered, before, draft: panel.draft.input_lines[0],\n"
+        "  numbers, unsaved: panel.hasUnsavedEdits }));\n"
+    )
+    result = json.loads(printed)
+    assert result["offered"] == ["D2", "D3", "D4", "D5", "D6", "D7"]
+    assert result["before"] == "D6", "the pin the config named is the one shown as chosen"
+    # Both halves moved, and neither on its own.
+    assert result["draft"]["pin_label"] == "D7"
+    assert result["draft"]["line_index"] == 5
+    # And the line number on screen followed, in place -- rebuilding the row
+    # would have taken the focus out of whatever else was being edited.
+    assert result["numbers"] == ["5"]
+    assert result["unsaved"] is True
+
+
+def test_a_board_that_cannot_say_leaves_the_pin_a_text_box() -> None:
+    """Firmware older than `pins` gives the daemon nothing to offer, and a
+    chooser over an empty list would be a worse lie than a text box."""
+    module = (web_directory() / "elements" / "line_map_panel_element.js").as_uri()
+    lines = {
+        "input_lines": [{"name": "lever", "line_index": 4, "pin_label": "D6"}],
+        "output_lines": [],
+        "board_input_pins": [],
+        "board_output_pins": [],
+        "pin_labels_came_from": "unknown",
+    }
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ LineMapPanelElement }} = await import({module!r});\n"
+        f"const lines = {json_dumps(lines)};\n"
+        "const panel = new LineMapPanelElement();\n"
+        "panel.renderShell();\n"
+        "panel.adoptDraft(lines);\n"
+        "panel.paint(lines);\n"
+        "console.log(JSON.stringify({\n"
+        "  selects: panel.root.descendants().filter((n) => n.tagName === 'select').length,\n"
+        "  texts: panel.root.descendants().filter((n) => n.type === 'text').length,\n"
+        "  saidSo: panel.root.descendants().some((n) => n.textContent.includes('pins unknown')),\n"
+        "}));\n"
+    )
+    result = json.loads(printed)
+    assert result["selects"] == 0
+    # A name and a pin, both typed, because there is nothing to choose from.
+    assert result["texts"] == 2
+    assert result["saidSo"], "a panel showing unchecked labels has to say that they are unchecked"
+
+
 def test_the_line_map_draft_leaves_the_live_level_behind() -> None:
     """`is_high_now` is a reading, not configuration. The daemon's LineMap
     forbids fields it does not declare, so a draft still carrying it would be
