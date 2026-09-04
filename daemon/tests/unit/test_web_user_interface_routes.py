@@ -386,6 +386,103 @@ def test_the_pin_is_chosen_from_the_boards_own_pins_and_not_typed() -> None:
     assert result["unsaved"] is True
 
 
+def test_two_lines_cannot_be_saved_as_the_same_pin() -> None:
+    """The daemon refuses it -- "two names for one line is not a harmless alias:
+    a graph naming both would raise one line and believe it had raised two, and
+    the mistake is invisible in the record" -- so the panel must not offer to
+    send it.
+
+    Marked rather than forbidden. Preventing the choice would make swapping two
+    pins impossible: moving the lever from D6 to D7 while the pedal is on D7 has
+    to pass through a state where both are on D7. So a taken pin is offered with
+    what has it, the conflict is named, and the save button is held until it is
+    resolved -- loud and reversible, rather than a dead end.
+    """
+    module = (web_directory() / "elements" / "line_map_panel_element.js").as_uri()
+    lines = {
+        "input_lines": [
+            {"name": "lever", "line_index": 4, "pin_label": "D6", "is_high_now": False},
+            {"name": "pedal", "line_index": 5, "pin_label": "D7", "is_high_now": False},
+        ],
+        "output_lines": [],
+        "board_input_pins": ["D2", "D3", "D4", "D5", "D6", "D7"],
+        "board_output_pins": ["D10"],
+        "pin_labels_came_from": "device",
+    }
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ LineMapPanelElement }} = await import({module!r});\n"
+        f"const lines = {json_dumps(lines)};\n"
+        "const panel = new LineMapPanelElement();\n"
+        "panel.renderShell();\n"
+        "panel.adoptDraft(lines);\n"
+        "panel.paint(lines);\n"
+        "const choosers = panel.root.descendants().filter((n) => n.tagName === 'select');\n"
+        "const failures = () => panel.root.descendants()\n"
+        "  .filter((n) => n.className === 'failure').map((n) => n.textContent);\n"
+        "const pedalsOptions = () => choosers[1].children.map((o) => o.textContent);\n"
+        "const marked = pedalsOptions();\n"
+        "choosers[1].value = 'D6';\n"
+        "choosers[1].dispatch('change');\n"
+        "const conflicted = { failures: failures(), saveBlocked: panel.saveButton.disabled };\n"
+        "choosers[1].value = 'D7';\n"
+        "choosers[1].dispatch('change');\n"
+        "console.log(JSON.stringify({ marked, conflicted,\n"
+        "  resolvedFailures: failures(), saveAllowed: !panel.saveButton.disabled }));\n"
+    )
+    result = json.loads(printed)
+    # A pin already spoken for says so *before* it is chosen, not after a save
+    # is refused: the option carries the name of whatever has it.
+    assert "D6 — lever" in result["marked"]
+    assert "D7" in result["marked"], "a free pin is offered plainly"
+
+    assert len(result["conflicted"]["failures"]) == 1
+    assert "both input line 4" in result["conflicted"]["failures"][0]
+    assert result["conflicted"]["saveBlocked"] is True
+
+    # And putting it back clears both, because a dead end is not a fix.
+    assert result["resolvedFailures"] == []
+    assert result["saveAllowed"] is True
+
+
+def test_two_lines_cannot_be_saved_under_one_name() -> None:
+    """The other duplicate the daemon refuses, shown in the same place: both
+    come back as one refusal at save, so a person should see them together."""
+    module = (web_directory() / "elements" / "line_map_panel_element.js").as_uri()
+    lines = {
+        "input_lines": [
+            {"name": "lever", "line_index": 4, "pin_label": "D6"},
+            {"name": "pedal", "line_index": 5, "pin_label": "D7"},
+        ],
+        "output_lines": [],
+        "board_input_pins": ["D2", "D3", "D4", "D5", "D6", "D7"],
+        "board_output_pins": [],
+        "pin_labels_came_from": "device",
+    }
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ LineMapPanelElement }} = await import({module!r});\n"
+        f"const lines = {json_dumps(lines)};\n"
+        "const panel = new LineMapPanelElement();\n"
+        "panel.renderShell();\n"
+        "panel.adoptDraft(lines);\n"
+        "panel.paint(lines);\n"
+        "const names = panel.root.descendants().filter((n) => n.type === 'text');\n"
+        "names[1].value = 'lever';\n"
+        "names[1].dispatch('input');\n"
+        "console.log(JSON.stringify({\n"
+        "  failures: panel.root.descendants().filter((n) => n.className === 'failure')\n"
+        "    .map((n) => n.textContent),\n"
+        "  saveBlocked: panel.saveButton.disabled,\n"
+        "}));\n"
+    )
+    result = json.loads(printed)
+    assert result["failures"] == ['two input lines are called "lever".']
+    assert result["saveBlocked"] is True
+
+
 def test_a_board_that_cannot_say_leaves_the_pin_a_text_box() -> None:
     """Firmware older than `pins` gives the daemon nothing to offer, and a
     chooser over an empty list would be a worse lie than a text box."""

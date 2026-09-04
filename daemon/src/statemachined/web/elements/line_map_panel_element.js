@@ -27,6 +27,15 @@
 // back, because then there is nothing to choose from and a typed label is all
 // anybody has.
 //
+// **Two lines may not be the same pin**, and the daemon refuses that too --
+// "two names for one line is not a harmless alias: a graph naming both would
+// raise one line and believe it had raised two, and the mistake is invisible in
+// the record" (model/line_map.py). The chooser does not *prevent* it, though,
+// because preventing it makes swapping two pins impossible -- moving the lever
+// from D6 to D7 while the pedal is on D7 has to pass through a state where both
+// are on D7. So a taken pin is offered, marked with what has it, and the panel
+// refuses to save until it is resolved. Loud and reversible beats forbidden.
+//
 // `is_high_now` keeps updating while you edit, and that is the point of the
 // panel: there is no read-back path from a pin, so watching a lamp move when
 // somebody presses a lever is the only way to confirm a graph's line numbers
@@ -57,6 +66,9 @@ export class LineMapPanelElement extends BasePanelElement {
     //: draft is the question, and a counter is the cheapest way to ask it.
     this.draftGeneration = 0;
     this.builtGeneration = -1;
+    //: Every pin chooser on screen, so the annotations that say which pins are
+    //: taken can be refreshed without rebuilding a row.
+    this.pinChoosers = [];
     //: The live dots, paired with the line they belong to rather than keyed by
     //: line number: choosing a different pin changes the number, and a dot
     //: keyed by the old one would go on reporting the old line.
@@ -129,17 +141,17 @@ export class LineMapPanelElement extends BasePanelElement {
       this.builtGeneration = this.draftGeneration;
     }
     this.showLiveLevels(live);
-
-    // Disabling the button the pointer is on is fine; disabling the field
-    // somebody is typing in is not, and these are buttons.
-    this.saveButton.disabled = !this.hasUnsavedEdits;
+    this.showPinConflicts();
     this.revertButton.disabled = !this.hasUnsavedEdits;
   }
 
   buildTables() {
     this.inputDots = [];
     this.outputDots = [];
+    this.pinChoosers = [];
+    this.conflictSlot = this.make("div");
     this.body.replaceChildren(
+      this.conflictSlot,
       this.make("h3", { text: "Inputs" }),
       this.inputTable(),
       this.make("h3", { text: "Outputs" }),
@@ -201,7 +213,7 @@ export class LineMapPanelElement extends BasePanelElement {
   /// when a pin is chosen. Rebuilding the row instead would take the focus out
   /// of whatever the person is holding -- the rule at the top of this file --
   /// and the two values are one fact anyway.
-  pinField(line, boardPins, lineNumberCell) {
+  pinField(line, boardPins, lineNumberCell, direction) {
     if (this.pinLabelSource !== "device") {
       return this.textField(line, "pin_label", "5rem");
     }
@@ -217,8 +229,12 @@ export class LineMapPanelElement extends BasePanelElement {
         // fault rather than the person's.
         this.edit(line, "line_index", lineIndex < 0 ? null : lineIndex);
         lineNumberCell.textContent = lineIndex < 0 ? "-" : `${lineIndex}`;
+        // Another row may now be sharing this pin, or may have stopped sharing
+        // one. Both are facts about the whole table rather than this row.
+        this.showPinConflicts();
       },
     });
+    this.pinChoosers.push({ chooser, line, direction, boardPins });
     // A line whose pin this board does not have cannot happen through the API
     // -- the daemon refuses it -- but it can be looked at here after a board
     // was swapped for one with fewer pins, and dropping the row would hide it.
@@ -241,6 +257,81 @@ export class LineMapPanelElement extends BasePanelElement {
       );
     }
     return chooser;
+  }
+
+  /// Which lines two rows are both claiming, in each direction.
+  ///
+  /// By line number rather than by label, because the number is what the wire
+  /// carries and what the daemon refuses duplicates of. A pin chosen twice is
+  /// the same line twice; a *name* used twice is refused for its own reasons
+  /// and is checked here too, since both come back as one refusal at save and
+  /// a person should see them in the same place.
+  draftConflicts() {
+    const conflicts = [];
+    for (const [direction, lines] of [
+      ["in", this.draft.input_lines],
+      ["out", this.draft.output_lines],
+    ]) {
+      const where = direction === "in" ? "input" : "output";
+      conflicts.push(
+        ...sharedValues(lines, "line_index").map(([lineIndex, names]) => ({
+          direction,
+          lineIndex,
+          detail:
+            `${names.join(" and ")} are both ${where} line ${lineIndex}. Two names for one ` +
+            `line is not an alias: a graph naming both would raise one line and believe it ` +
+            `had raised two.`,
+        })),
+        ...sharedValues(lines, "name").map(([name, names]) => ({
+          direction,
+          lineIndex: null,
+          detail: `two ${where} lines are called "${name}".`,
+        })),
+      );
+    }
+    return conflicts;
+  }
+
+  /// Mark the taken pins, say what is wrong, and hold the save button.
+  ///
+  /// Not a rebuild: the option labels and one banner are updated in place, so
+  /// this can run on every change without touching whatever has focus.
+  showPinConflicts() {
+    const conflicts = this.draftConflicts();
+    const takenBy = new Map();
+    for (const { line, direction } of this.pinChoosers) {
+      if (line.line_index == null) continue;
+      const key = `${direction}:${line.line_index}`;
+      takenBy.set(key, [...(takenBy.get(key) || []), line.name]);
+    }
+
+    for (const { chooser, line, direction, boardPins } of this.pinChoosers) {
+      for (const option of [...chooser.children]) {
+        // By label rather than by position: an option's pin is what it says,
+        // and the row may carry an extra option for a pin this board does not
+        // have (which is line -1, and held by nothing).
+        const lineIndex = boardPins.indexOf(option.value);
+        // The row's own "(unassigned)" or "not on this board" option stands for
+        // no line, and its text says so already.
+        if (lineIndex < 0) continue;
+        const holders = (takenBy.get(`${direction}:${lineIndex}`) || []).filter(
+          (name) => name !== line.name,
+        );
+        // The bare label where nothing else has it, and who has it where
+        // something does -- so a pin already spoken for is visible *before* it
+        // is chosen rather than after the save is refused.
+        option.textContent =
+          holders.length === 0 ? option.value : `${option.value} — ${holders.join(", ")}`;
+      }
+    }
+
+    this.conflictSlot.replaceChildren(
+      ...conflicts.map((conflict) => this.make("div", { class: "failure", text: conflict.detail })),
+    );
+    // The daemon would refuse this map, so the panel does not offer to send it.
+    // Disabling a button is safe where disabling a field is not: nobody is
+    // typing into a button.
+    this.saveButton.disabled = !this.hasUnsavedEdits || conflicts.length > 0;
   }
 
   /// The one thing a poll may touch: a class on a dot that is already there.
@@ -275,7 +366,7 @@ export class LineMapPanelElement extends BasePanelElement {
         this.make("td", {}, [this.levelDot(this.inputDots, line)]),
         this.make("td", {}, [this.textField(line, "name")]),
         lineNumberCell,
-        this.make("td", {}, [this.pinField(line, this.boardInputPins, lineNumberCell)]),
+        this.make("td", {}, [this.pinField(line, this.boardInputPins, lineNumberCell, "in")]),
         this.make("td", {}, [this.checkBox(line, "reads_active_low")]),
         this.make("td", {}, [this.checkBox(line, "is_enabled")]),
         this.make("td", {}, [this.numberField(line, "debounce_milliseconds")]),
@@ -310,7 +401,7 @@ export class LineMapPanelElement extends BasePanelElement {
         this.make("td", {}, [this.levelDot(this.outputDots, line)]),
         this.make("td", {}, [this.textField(line, "name")]),
         lineNumberCell,
-        this.make("td", {}, [this.pinField(line, this.boardOutputPins, lineNumberCell)]),
+        this.make("td", {}, [this.pinField(line, this.boardOutputPins, lineNumberCell, "out")]),
         this.make("td", {}, [this.checkBox(line, "safe_level_is_high")]),
       ]);
     });
@@ -371,8 +462,12 @@ export class LineMapPanelElement extends BasePanelElement {
   edit(line, key, value) {
     line[key] = value;
     this.hasUnsavedEdits = true;
-    this.saveButton.disabled = false;
     this.revertButton.disabled = false;
+    // Renaming can create or clear a duplicate name, and this is also what
+    // enables the save button -- through the check rather than around it, so a
+    // map the daemon would refuse can never be offered.
+    if (key === "name") this.showPinConflicts();
+    else this.saveButton.disabled = false;
   }
 
   async save() {
@@ -417,3 +512,14 @@ function setLevel(dot, isHigh) {
 }
 
 defineElementOnce("statemachined-lines", LineMapPanelElement);
+
+/// Values held by more than one line, with the names holding them.
+function sharedValues(lines, key) {
+  const namesByValue = new Map();
+  for (const line of lines) {
+    const value = line[key];
+    if (value === null || value === undefined || value === "") continue;
+    namesByValue.set(value, [...(namesByValue.get(value) || []), line.name || "(unnamed)"]);
+  }
+  return [...namesByValue].filter(([, names]) => names.length > 1);
+}
