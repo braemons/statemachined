@@ -1,11 +1,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The graphs this repository ships, checked the way a session would check them.
 
-`graphs/` had been empty since M0 and the plan kept referring to it. These are
-the two paradigms dev/PLAN.md names -- a go/no-go and a two-alternative forced
-choice -- authored against the line map of the reference rig, and they are here
-as much to be *read* as to be run: they are the worked example of what a graph
-file is.
+`graphs/` had been empty since M0 and the plan kept referring to it. Two of
+these are the paradigms dev/PLAN.md names -- a go/no-go and a two-alternative
+forced choice -- authored against the line map of the reference rig, and they
+are here as much to be *read* as to be run: they are the worked example of what
+a graph file is. The third is `state-walk`, which is not a paradigm at all: it
+is the bench instrument, a deterministic march through its own states at a
+fixed 500 ms so that a person can watch the lamps and read the same march back
+out of the trace.
 
 The test is the useful one: they load, they compile against a real board's
 declared capacities, and they fit on it together, which is the question a
@@ -30,7 +33,7 @@ from statemachined.model.state_machine_config import StateMachineConfig
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 EXAMPLE_GRAPH_DIRECTORY = REPOSITORY_ROOT / "graphs"
 EXAMPLE_CONFIG_DIRECTORY = REPOSITORY_ROOT / "configs"
-EXAMPLE_GRAPH_NAMES = ["go-nogo", "two-alternative-forced-choice"]
+EXAMPLE_GRAPH_NAMES = ["go-nogo", "two-alternative-forced-choice", "state-walk"]
 
 #: The Uno R4 Minima rig image, as `hello_ack` declares it. Written out rather
 #: than imported from anywhere: if the firmware's capacities change, this is
@@ -160,7 +163,7 @@ def test_the_examples_share_the_foreperiod_they_both_declare():
         UNO_R4_MINIMA_CAPABILITIES,
         set_version=1,
     )
-    go_nogo, two_choice = compiled.graphs_by_slot
+    go_nogo, two_choice = compiled.graphs_by_slot[:2]
     assert (
         go_nogo.distribution_pool_index_by_name["foreperiod"]
         == two_choice.distribution_pool_index_by_name["foreperiod"]
@@ -175,3 +178,104 @@ def test_a_reward_is_a_pulse_the_device_serves_itself():
     reward = next(action for action in hit.on_entry if action.line == "reward_valve")
     assert reward.kind == "pulse"
     assert reward.pulse_ms == 40
+
+
+# ------------------------------------------------------------- the walk ---
+
+
+def test_the_walk_is_deterministic_once_it_has_started():
+    """The one property `state-walk` exists to have.
+
+    It is the graph somebody runs to answer "is this rig doing anything at
+    all", and the answer is only useful if the march is the same every time:
+    six states, 500 ms each, in one order. So every state after the trigger
+    leaves on a **timeout and nothing else** -- an input transition anywhere in
+    the walk would make the lamps depend on whether somebody leant on a lever,
+    which is exactly the doubt this graph is meant to remove.
+    """
+    walk = load_example_graph("state-walk")
+    assert walk.entry == "Ready"
+
+    # The trigger is the one place an input is consulted, and it is the entry.
+    assert [transition.goto for transition in walk.state_named("Ready").transitions] == ["Step1"]
+    assert walk.state_named("Ready").transitions[0].when.all == ["start_switch"]
+
+    walking = [state for state in walk.states if state.name.startswith("Step")]
+    assert len(walking) == 6
+    for state in walking:
+        assert state.transitions == [], f"{state.name} can be left by an input"
+        assert state.timeout is not None
+
+    # And the timeouts chain in declaration order, ending in the one terminal
+    # state. Asserted by walking it rather than by reading the file, because a
+    # `goto` pointing back up the list would still load, still fit, and loop
+    # until the trial cap.
+    seen = []
+    state = walk.state_named("Step1")
+    while state.timeout is not None:
+        seen.append(state.name)
+        state = walk.state_named(state.timeout.goto)
+    assert seen == ["Step1", "Step2", "Step3", "Step4", "Step5", "Step6"]
+    assert state.name == "Done"
+    assert state.outcome == "HIT"
+
+
+def test_every_step_of_the_walk_is_the_same_500_ms():
+    """One distribution, named once and shared by all six.
+
+    Six `fixed` entries saying 500 would spend six of the board's thirty-two
+    distribution slots on one number, and would let five of them drift.
+    """
+    walk = load_example_graph("state-walk")
+    assert list(walk.distributions) == ["step"]
+    assert walk.distributions["step"].duration_ms == 500
+    for state in walk.states:
+        if state.timeout is not None:
+            assert state.timeout.after == "step"
+
+
+def test_the_walk_leaves_exactly_one_lamp_lit_at_a_time():
+    """What makes it readable from across the room.
+
+    Each state raises its own lamp on entry and drops it on exit, rather than
+    the next state dropping the previous one's: the second form works until
+    somebody reorders the walk, and then two lamps are lit and the graph still
+    validates.
+    """
+    walk = load_example_graph("state-walk")
+    for state in walk.states:
+        if state.outcome is not None:
+            continue
+        assert len(state.on_entry) == 1 and state.on_entry[0].kind == "high"
+        assert len(state.on_exit) == 1 and state.on_exit[0].kind == "low"
+        assert state.on_entry[0].line == state.on_exit[0].line, (
+            f"{state.name} raises one line and drops another"
+        )
+
+
+def test_the_walk_touches_no_valve():
+    """A demonstration that opened a water valve six times would be a
+    demonstration nobody could run twice.
+
+    `reward_valve` is held open by a low and is the reason `safe_level_is_high`
+    exists at all; a bench instrument has no business near it.
+    """
+    walk = load_example_graph("state-walk")
+    driven = {action.line for state in walk.states for action in [*state.on_entry, *state.on_exit]}
+    assert driven == {"ready_lamp", "cue_lamp", "error_lamp"}
+
+
+def test_all_three_examples_fit_the_reference_board_together():
+    """The walk is meant to be loaded *beside* the paradigms, not instead of
+    them -- it is the thing you run when a paradigm is misbehaving."""
+    compiled = compile_graph_set_for_device(
+        [load_example_graph(name) for name in EXAMPLE_GRAPH_NAMES],
+        load_example_line_map(),
+        UNO_R4_MINIMA_CAPABILITIES,
+        set_version=1,
+    )
+    for pool_name, used in compiled.pool_usage.items():
+        assert used <= compiled.pool_capacity[pool_name], pool_name
+    # And with room left, because the next example added should not be the one
+    # that discovers the ceiling.
+    assert compiled.pool_usage["states"] <= 26

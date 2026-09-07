@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -953,3 +954,85 @@ def test_the_session_is_open_when_triald_uploaded_the_set(api):
     assert opened and opened[-1]["opened_by"] == "graph_names", (
         "the trace says which of the two calls opened it"
     )
+
+
+# --------------------------------------------------- the bench instrument ---
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+
+
+def the_shipped_walk_started_without_a_button() -> dict:
+    """`graphs/state-walk.json`, entered at Step1 instead of at Ready.
+
+    The shipped graph waits for `start_switch`, which is a button on a bench and
+    is not reachable from here -- the daemon sends commands to the device and
+    never drives its inputs. So the trigger is the one thing stubbed out, by
+    moving the entry past it. **Everything the walk is about is still the
+    shipped file**: the six states, their order, the one 500 ms distribution
+    they share, and the lamps they raise.
+    """
+    walk = json.loads((REPOSITORY_ROOT / "graphs" / "state-walk.json").read_text())
+    walk["name"] = "state-walk-from-step-one"
+    walk["entry"] = "Step1"
+    # And `Ready` goes with it: a graph is refused if it carries a state the
+    # entry cannot reach, which is the validator doing its job -- the trigger
+    # state is unreachable the moment the entry moves past it.
+    walk["states"] = [state for state in walk["states"] if state["name"] != "Ready"]
+    return walk
+
+
+def test_the_walk_marches_through_its_states_at_500_ms_each(api):
+    """The graph exists so somebody can answer "is this rig doing anything",
+    and this is the same question asked of the daemon.
+
+    Six states in one order, each 500 ms, ending HIT. Measured by the device's
+    own clock and reported in the result, which is the number worth asserting:
+    the host's idea of when a state was entered carries an uncertainty and this
+    does not.
+    """
+    # The walk names three lamps, and the fixture's map has one. So the map it
+    # was authored against is loaded first -- by line number, since this board
+    # has no D10 -- which is also the honest version of what a bench does: the
+    # graph and the map that gives its names meaning arrive together.
+    saved = api.put(
+        "/api/state-machine-configs/walk",
+        json={
+            "name": "walk",
+            "line_map": {
+                "input_lines": [{"name": "start_switch", "line_index": 0}],
+                "output_lines": [
+                    {"name": "ready_lamp", "line_index": 0},
+                    {"name": "cue_lamp", "line_index": 1},
+                    {"name": "error_lamp", "line_index": 2},
+                ],
+            },
+            "graphs": [the_shipped_walk_started_without_a_button()],
+        },
+    )
+    assert saved.status_code == 200, saved.json()
+    loaded = api.post("/api/state-machine-configs/walk/load")
+    assert loaded.status_code == 200, loaded.json()
+    opened = api.post("/api/session/open")
+    assert opened.status_code == 200, opened.json()
+    api.post("/api/trial/configure", json={"trial_id": 500, "graph": "state-walk-from-step-one"})
+    api.post("/api/trial/start", json={"trial_id": 500})
+
+    result = wait_until(
+        lambda: api.get("/api/trial/result").json()
+        if api.get("/api/trial/result").status_code == 200
+        else None,
+        timeout_seconds=15.0,
+    )
+    assert result is not None
+    assert result["outcome"] == "HIT"
+
+    visited = [visit["state_name"] for visit in result["visits"]]
+    assert visited == ["Step1", "Step2", "Step3", "Step4", "Step5", "Step6", "Done"]
+
+    # Drawn is what the distribution said; measured is what the device's clock
+    # saw. Both are checked, because a graph that drew 500 and dwelt for 5 would
+    # pass a test that only read the draw.
+    for visit in result["visits"][:-1]:
+        assert visit["drawn_duration_ms"] == 500
+        measured_ms = visit["measured_duration_microseconds"] / 1000
+        assert 495 <= measured_ms <= 520, f"{visit['state_name']} dwelt {measured_ms} ms"

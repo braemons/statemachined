@@ -91,6 +91,11 @@ def test_the_bench_state_machine_config_is_the_reference_boards() -> None:
     assert [graph.name for graph in config.graphs] == [
         "go-nogo",
         "two-alternative-forced-choice",
+        # Not a paradigm: the bench instrument, which is here because the first
+        # question at a bench is whether the rig moves at all, and answering it
+        # with a paradigm means reading a trace to find out that nothing was
+        # wrong with the rig.
+        "state-walk",
     ]
     assert config.line_map.input_lines and config.line_map.output_lines
 

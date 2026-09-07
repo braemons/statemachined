@@ -1,0 +1,63 @@
+{
+  "name": "state-walk",
+
+  "entry": "Ready",
+
+  "distributions": {
+    "step": { "kind": "fixed", "duration_ms": 500 }
+  },
+
+  "states": [
+    {
+      "name": "Ready",
+      "on_entry": [{ "line": "ready_lamp", "kind": "high" }],
+      "on_exit": [{ "line": "ready_lamp", "kind": "low" }],
+      "transitions": [
+        { "when": { "all": ["start_switch"] }, "goto": "Step1" }
+      ]
+    },
+
+    {
+      "name": "Step1",
+      "on_entry": [{ "line": "ready_lamp", "kind": "high" }],
+      "on_exit": [{ "line": "ready_lamp", "kind": "low" }],
+      "timeout": { "after": "step", "goto": "Step2" }
+    },
+    {
+      "name": "Step2",
+      "on_entry": [{ "line": "cue_lamp", "kind": "high" }],
+      "on_exit": [{ "line": "cue_lamp", "kind": "low" }],
+      "timeout": { "after": "step", "goto": "Step3" }
+    },
+    {
+      "name": "Step3",
+      "on_entry": [{ "line": "error_lamp", "kind": "high" }],
+      "on_exit": [{ "line": "error_lamp", "kind": "low" }],
+      "timeout": { "after": "step", "goto": "Step4" }
+    },
+    {
+      "name": "Step4",
+      "on_entry": [{ "line": "ready_lamp", "kind": "high" }],
+      "on_exit": [{ "line": "ready_lamp", "kind": "low" }],
+      "timeout": { "after": "step", "goto": "Step5" }
+    },
+    {
+      "name": "Step5",
+      "on_entry": [{ "line": "cue_lamp", "kind": "high" }],
+      "on_exit": [{ "line": "cue_lamp", "kind": "low" }],
+      "timeout": { "after": "step", "goto": "Step6" }
+    },
+    {
+      "name": "Step6",
+      "on_entry": [{ "line": "error_lamp", "kind": "high" }],
+      "on_exit": [{ "line": "error_lamp", "kind": "low" }],
+      "timeout": { "after": "step", "goto": "Done" }
+    },
+
+    {
+      "name": "Done",
+      "outcome": "HIT",
+      "on_entry": [{ "line": "ready_lamp", "kind": "high" }]
+    }
+  ]
+}
