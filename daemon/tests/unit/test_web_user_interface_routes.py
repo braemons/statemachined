@@ -963,3 +963,34 @@ def test_a_panel_folds_away_under_its_heading_and_its_own_controls_still_work() 
     assert result["stillOpen"], "clicking connect folded the panel instead of connecting"
     assert result["headingKeptItsTitle"]
 
+
+def test_restoring_the_focus_after_a_repaint_does_not_move_the_page() -> None:
+    """The Session panel rebuilds its manual controls every two seconds, and the
+    button a person just pressed -- "arm and start" -- is what has the focus.
+
+    A plain `focus()` scrolls that element back into view. So the page jumped
+    upward every two seconds under somebody watching the trace or the serial
+    monitor further down, for as long as a trial was running: the one moment
+    they are least able to look away and fix it.
+
+    What the repaint is restoring is the *caret*. Where the page is scrolled to
+    belongs to the reader, and a repaint nobody asked for must not take it.
+    """
+    module = (web_directory() / "elements" / "device_panel_element.js").as_uri()
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ DevicePanelElement }} = await import({module!r});\n"
+        "const panel = new DevicePanelElement();\n"
+        "panel.renderShell();\n"
+        "const pressed = panel.connectButton;\n"
+        "const focusedWith = [];\n"
+        "pressed.focus = (options) => focusedWith.push(options ?? null);\n"
+        "panel.root.activeElement = pressed;\n"
+        "panel.repaintPreservingFocus(() => {});\n"
+        "console.log(JSON.stringify({ focusedWith }));\n"
+    )
+    result = json.loads(printed)
+    assert result["focusedWith"] == [{"preventScroll": True}], (
+        "the focus was restored in a way that scrolls the page to it"
+    )

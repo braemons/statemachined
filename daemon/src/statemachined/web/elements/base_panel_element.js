@@ -331,7 +331,14 @@ export class BasePanelElement extends HTMLElement {
     if (path === null) return;
     const restored = this.descendantAtPath(path);
     if (restored === null || typeof restored.focus !== "function") return;
-    restored.focus();
+    // `preventScroll`, and it is not a nicety. The Session panel rebuilds its
+    // manual controls every two seconds, and after somebody presses "arm and
+    // start" that button is what has the focus -- so a plain `focus()` scrolled
+    // it back into view every two seconds, dragging the page up out from under
+    // a person watching the trace or the monitor below it. What this method is
+    // restoring is the caret, not the viewport: where the page is scrolled to
+    // is the reader's, and a repaint they did not ask for must not move it.
+    restored.focus({ preventScroll: true });
     if (selectionStart === null || typeof restored.setSelectionRange !== "function") return;
     try {
       restored.setSelectionRange(selectionStart, selectionEnd);
