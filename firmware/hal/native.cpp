@@ -138,7 +138,12 @@ void load_store() {
   for (size_t i = 0; i < kStoreBytes; ++i) store_[i] = 0xFF;
   std::FILE* f = std::fopen(store_path(), "rb");
   if (f == nullptr) return;
-  std::fread(store_, 1, kStoreBytes, f);
+  // A short read is not an error here, and the count is deliberately used
+  // rather than ignored: a file smaller than the store -- or one truncated by
+  // the power going during a save -- leaves the rest of the array at 0xFF,
+  // which is exactly what the unwritten part of a real erased sector reads as.
+  const size_t got = std::fread(store_, 1, kStoreBytes, f);
+  (void)got;
   std::fclose(f);
 }
 
