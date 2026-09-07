@@ -154,7 +154,7 @@ export class GraphStorePanelElement extends BasePanelElement {
       this.actionRow(),
       this.validationSummary(),
       this.make("div", { class: "scroller" }, [renderGraphNodeDiagram(this.graph)]),
-      this.make("h3", { text: "Distributions" }),
+      this.make("h3", { text: "Duration Distributions" }),
       this.distributionTable(),
       this.make("h3", { text: "States" }),
       ...this.graph.states.map((state) => this.stateBlock(state)),
