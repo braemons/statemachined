@@ -856,3 +856,57 @@ def test_the_two_directions_do_not_protect_each_others_names() -> None:
         ("out", "cue_lamp"),
         ("out", "ready_lamp"),
     ]
+
+
+def test_the_serial_monitor_is_closed_and_silent_until_somebody_opens_it() -> None:
+    """It is a debugging view, and a debugging view has two costs when it is on
+    by default.
+
+    The visible one: it is the loudest thing on the page for the people who need
+    it least -- every line in and out of the port, scrolling, under a session
+    somebody is trying to watch. The one that matters more: it holds a WebSocket
+    per open tab against a daemon whose whole reason for existing is one serial
+    port, for a question nobody has asked yet.
+
+    So it is collapsed, **and not connected while collapsed**. The second half
+    is the one worth a test: a panel that merely hid its table would still be
+    streaming, and nothing on screen would say so.
+    """
+    module = (web_directory() / "elements" / "serial_monitor_panel_element.js").as_uri()
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ SerialMonitorPanelElement }} = await import({module!r});\n"
+        "const panel = new SerialMonitorPanelElement();\n"
+        "let backfills = 0;\n"
+        "const socket = { addEventListener() {}, close() {} };\n"
+        "Object.defineProperty(panel, 'api', { value: {\n"
+        "  readDeviceMonitor: async () => { backfills += 1; return { lines: [], ring_capacity: 9 }; },\n"
+        "  openDeviceMonitorStream: () => socket,\n"
+        "} });\n"
+        "panel.renderShell();\n"
+        "const closedByDefault = panel.details.open === false;\n"
+        "await panel.start();\n"
+        "const socketsWhileClosed = panel.openSockets.length;\n"
+        "const backfillsWhileClosed = backfills;\n"
+        "panel.details.open = true;\n"
+        "await panel.theDisclosureWasToggled();\n"
+        "const socketsWhenOpened = panel.openSockets.length;\n"
+        "panel.details.open = false;\n"
+        "await panel.theDisclosureWasToggled();\n"
+        "console.log(JSON.stringify({ closedByDefault, socketsWhileClosed,\n"
+        "  backfillsWhileClosed, socketsWhenOpened, socketsAfterClosing: panel.openSockets.length,\n"
+        "  backfilledOnOpening: backfills }));\n"
+    )
+    result = json.loads(printed)
+    assert result["closedByDefault"]
+    assert result["socketsWhileClosed"] == 0, "a collapsed monitor was still streaming"
+    assert result["backfillsWhileClosed"] == 0, "a collapsed monitor still read the ring"
+    # And it works when opened -- including the backfill, which is what makes
+    # opening it *after* the fault still useful: the greeting and whatever
+    # prompted the click both happened before it.
+    assert result["socketsWhenOpened"] == 1
+    assert result["backfilledOnOpening"] == 1
+    # Closing it again gives the socket back rather than leaving one behind a
+    # panel nobody is looking at.
+    assert result["socketsAfterClosing"] == 0

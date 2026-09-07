@@ -43,12 +43,50 @@ export class SerialMonitorPanelElement extends BasePanelElement {
     this.failureSlot = this.make("div", { class: "failure-slot" });
     this.rows = this.make("tbody");
     this.status = this.make("span", { class: "muted" });
-    this.root.replaceChildren(
-      this.make("section", {}, [
-        this.make("h2", {}, [
-          this.make("span", { text: "Serial monitor" }),
-          this.status,
-          this.make("span", { class: "spacer" }),
+    this.lostSlot = this.make("div");
+    this.scroller = this.make("div", { class: "scroller", style: "max-height:60vh" }, [
+      this.make("table", {}, [
+        this.make("thead", {}, [
+          this.make("tr", {}, [
+            this.make("th", { text: "#" }),
+            this.make("th", { text: "host time" }),
+            this.make("th", { text: "" }),
+            this.make("th", { text: "line" }),
+          ]),
+        ]),
+        this.rows,
+      ]),
+    ]);
+
+    // Closed until somebody opens it, and **not connected while closed**. This
+    // is a debugging view: the question it answers is what crossed the wire,
+    // which nobody asks until something has already gone wrong. Left open by
+    // default it is the loudest thing on the page for the people who need it
+    // least -- and, worse, a WebSocket per open tab against a daemon whose
+    // whole reason for existing is one serial port. So the stream starts on the
+    // first open and stops on close; the daemon's ring keeps the history
+    // meanwhile, which is what makes closing it free rather than a decision to
+    // stop watching.
+    this.details = this.make("details", {}, [
+      this.make("summary", {}, [
+        this.make("span", { text: "Serial monitor" }),
+        this.status,
+        this.make("span", {
+          class: "muted",
+          text: "  every line in and out of the port. For debugging; open it when something " +
+            "does not add up.",
+        }),
+      ]),
+      this.make("div", {}, [
+        this.make("p", {
+          class: "muted",
+          text:
+            "The daemon's commands and the board's answers, in order, including the ones " +
+            "nothing understood. This is the wire, not the record: it is a few thousand lines " +
+            "deep and then the oldest go. For what a trial did, keep, and join to a .tdr " +
+            "afterwards, use the trace above.",
+        }),
+        this.make("div", { class: "row" }, [
           this.make("input", {
             type: "text",
             placeholder: "filter, e.g. wiring",
@@ -87,44 +125,66 @@ export class SerialMonitorPanelElement extends BasePanelElement {
             this.make("span", { text: "follow" }),
           ]),
         ]),
-        this.make("p", { class: "muted" }, [
-          this.make("span", {
-            text:
-              "Every line in and out of the serial port, as it went -- the daemon's commands " +
-              "and the board's answers, including the ones nothing understood. This is the " +
-              "wire, not the record: it is a few thousand lines deep and then the oldest go. " +
-              "For what a trial did, keep, and join to a .tdr afterwards, use Trace.",
-          }),
-        ]),
         this.failureSlot,
-        this.lostSlot = this.make("div"),
-        this.scroller = this.make("div", { class: "scroller", style: "max-height:60vh" }, [
-          this.make("table", {}, [
-            this.make("thead", {}, [
-              this.make("tr", {}, [
-                this.make("th", { text: "#" }),
-                this.make("th", { text: "host time" }),
-                this.make("th", { text: "" }),
-                this.make("th", { text: "line" }),
-              ]),
-            ]),
-            this.rows,
-          ]),
-        ]),
+        this.lostSlot,
+        this.scroller,
+      ]),
+    ]);
+    this.details.open = false;
+    this.details.addEventListener("toggle", () => this.theDisclosureWasToggled());
+
+    this.root.replaceChildren(
+      this.make("section", {}, [
+        this.make("h2", {}, [this.make("span", { text: "Serial monitor" })]),
+        this.details,
       ]),
     );
   }
 
-  async start() {
-    // What is already in the ring first, so the greeting that happened before
-    // this panel existed is on screen. Then the stream, from where that ended.
+  start() {
+    // Nothing until it is opened. `connectedCallback` calls this, so a panel
+    // that backfilled here would pay for a view nobody has looked at.
+    if (this.details.open) return this.beginWatching();
+    return undefined;
+  }
+
+  /// Returns the promise rather than dropping it: the backfill is async, and a
+  /// caller that cannot wait for it cannot tell "not connected yet" from "not
+  /// connecting at all" -- which is the one property this disclosure has to have.
+  theDisclosureWasToggled() {
+    if (!this.details.open) return this.stopWatching();
+    return this.beginWatching();
+  }
+
+  /// The ring first, then the stream from where it ended.
+  ///
+  /// The backfill is what makes opening this late still useful: the greeting,
+  /// and the fault that prompted somebody to open it, both happened before the
+  /// click. A monitor that started at "now" would miss every fault that had
+  /// already happened, which is most of them.
+  async beginWatching() {
+    if (this.openSockets.length > 0) return;
     await this.attempt(async () => {
       const backfill = await this.api.readDeviceMonitor(0, BACKFILL_LINES);
       this.lines = backfill.lines;
       this.ringCapacity = backfill.ring_capacity;
       this.repaintRows();
     });
-    this.openStream();
+    // Checked again: the disclosure may have been closed while the backfill was
+    // in flight, and opening a socket then would leave one running behind a
+    // closed panel -- exactly what this is meant to avoid.
+    if (this.details.open) this.openStream();
+  }
+
+  stopWatching() {
+    for (const socket of this.openSockets) {
+      try {
+        socket.close();
+      } catch {
+        /* already closing */
+      }
+    }
+    this.openSockets = [];
   }
 
   openStream() {
@@ -145,7 +205,7 @@ export class SerialMonitorPanelElement extends BasePanelElement {
       this.repaintRows();
     });
     socket.addEventListener("close", () => {
-      if (this.isConnected && this.openSockets.includes(socket)) {
+      if (this.isConnected && this.details.open && this.openSockets.includes(socket)) {
         this.openSockets = this.openSockets.filter((each) => each !== socket);
         setTimeout(() => {
           if (this.isConnected) this.openStream();

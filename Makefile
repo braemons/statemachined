@@ -108,7 +108,7 @@ BENCH_PORT      ?= 8081
 
 .PHONY: bench
 bench:                      ## the daemon + web UI against a device: make bench TARGET=...
-	@mkdir -p $(BENCH_STORE) $(BENCH_CONFIGS) build/bench/trace
+	@mkdir -p $(BENCH_STORE) $(BENCH_CONFIGS) build/bench/trace build/bench/recordings
 	@for graph in graphs/*.json; do \
 	  [ -f "$(BENCH_STORE)/$$(basename $$graph)" ] || cp "$$graph" $(BENCH_STORE)/; \
 	done
