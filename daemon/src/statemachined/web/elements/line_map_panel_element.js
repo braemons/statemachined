@@ -13,6 +13,21 @@
 // So the table says which edits are which, and the save button says what it
 // will do rather than "save".
 //
+// **Adding a line does not create one.** Every line the board has exists
+// whether anybody has named it or not -- which pin each one is was compiled
+// into the firmware -- so what is added here is a *name* for one, and a new row
+// therefore arrives already sitting on the free pin with the lowest line
+// number. There is nothing else it could sensibly be on, and a row with no pin
+// is a row the daemon refuses. When every pin has a name the button is off, and
+// says so: a board has a fixed number of lines and no amount of clicking makes
+// a ninth input.
+//
+// **Removing is that fact backwards**: the line stays, the name stops. The one
+// thing that makes it dangerous is a graph that names it, so the panel reads
+// the loaded config's graphs once and holds the save if a name they use has
+// gone -- with the graph named. Otherwise the discovery happens at the next
+// upload, which is the start of a session, with an animal in the booth.
+//
 // The **pin** column is a chooser rather than a text box, wherever the board
 // answered `pins` (dev/PROTOCOL.md 3.6). The board owns the labels: which pin
 // line 4 is was decided when the firmware was compiled, and typing a different
@@ -83,6 +98,12 @@ export class LineMapPanelElement extends BasePanelElement {
     //: keyed by the old one would go on reporting the old line.
     this.inputDots = [];
     this.outputDots = [];
+    //: Which line names the loaded config's graphs actually name, so that
+    //: removing one can say what it would break. Read once when the panel
+    //: opens and again after a save, not on the poll: a graph set does not
+    //: change twice a second, and this panel's rule is that the poll paints
+    //: dots and nothing else.
+    this.namesUsedByGraphs = { in: new Map(), out: new Map() };
   }
 
   renderShell() {
@@ -125,11 +146,42 @@ export class LineMapPanelElement extends BasePanelElement {
   }
 
   start() {
+    this.readWhichLinesTheGraphsName();
     this.pollEvery(LEVEL_POLL_SECONDS, async () => {
       const lines = await this.api.readDeviceLines();
       if (this.draft === null) this.adoptDraft(lines);
       this.paint(lines);
     });
+  }
+
+  /// Which line names the loaded config's graphs use, and which graph uses each.
+  ///
+  /// A line map and the graphs that name it live in one state-machine config,
+  /// so this panel can answer the question a delete button otherwise cannot:
+  /// *what breaks*. Removing `reward_valve` while go-nogo pulses it does not
+  /// fail here -- it fails at the next upload, with an animal in the booth --
+  /// so the panel refuses the save and says which graph is the reason.
+  ///
+  /// Never fatal. A rig with no config loaded has no graphs to check against,
+  /// and the panel is still the place somebody wires a board.
+  async readWhichLinesTheGraphsName() {
+    this.namesUsedByGraphs = { in: new Map(), out: new Map() };
+    try {
+      const session = await this.api.readSession();
+      const loaded = session.state_machine_config;
+      if (loaded === null) return;
+      const config = await this.api.readStateMachineConfig(loaded.name);
+      for (const graph of config.graphs || []) {
+        for (const [direction, name] of lineNamesUsedBy(graph)) {
+          const used = this.namesUsedByGraphs[direction];
+          used.set(name, [...new Set([...(used.get(name) || []), graph.name])]);
+        }
+      }
+    } catch {
+      // An older daemon, or a rig with nothing loaded. The map is still
+      // editable; only the warning is missing, and a warning that guessed
+      // would be worse than none.
+    }
   }
 
   /// Take the daemon's map as the thing being edited.
@@ -174,13 +226,17 @@ export class LineMapPanelElement extends BasePanelElement {
       this.conflictSlot,
       this.make("h3", { text: "Inputs" }),
       this.inputTable(),
+      this.addControls("in"),
       this.make("h3", { text: "Outputs" }),
       this.outputTable(),
+      this.addControls("out"),
       this.make("p", {
         class: "muted",
         text:
           "Renaming is free: names never reach the wire. Everything else is the wiring, " +
-          "is pushed to the device on save, and is refused while a trial is armed.",
+          "is pushed to the device on save, and is refused while a trial is armed. " +
+          "Adding a line does not create one -- every line the board has exists whether it " +
+          "is named or not -- it gives one a name a graph can use.",
       }),
       this.pinProvenance(),
     );
@@ -308,6 +364,38 @@ export class LineMapPanelElement extends BasePanelElement {
           detail: `two ${where} lines are called "${name}".`,
         })),
       );
+
+      // A row naming neither a pin nor a line number. Only reachable where the
+      // board could not say what its pins are called, since a new row is put
+      // on a free pin wherever there is a list of them -- and the daemon
+      // refuses it with the same words, one round trip later.
+      conflicts.push(
+        ...lines
+          .filter((line) => line.line_index == null && !line.pin_label)
+          .map((line) => ({
+            direction,
+            lineIndex: null,
+            detail:
+              `the ${where} line "${line.name}" says neither which pin it is nor which ` +
+              `line. Give it a pin -- a bit position is written nowhere on the hardware.`,
+          })),
+      );
+
+      // A name a graph uses, removed or renamed out from under it. The upload
+      // is where this would otherwise be found -- "no output line is called
+      // 'reward_valve'" -- and by then a session is starting.
+      const stillNamed = new Set(lines.map((line) => line.name));
+      for (const [name, graphNames] of this.namesUsedByGraphs[direction]) {
+        if (stillNamed.has(name)) continue;
+        conflicts.push({
+          direction,
+          lineIndex: null,
+          detail:
+            `no ${where} line is called "${name}" any more, and ${graphNames.join(" and ")} ` +
+            `name${graphNames.length === 1 ? "s" : ""} it. Put the name back, or edit the ` +
+            `graph first -- an upload would be refused at the start of a session.`,
+        });
+      }
     }
     return conflicts;
   }
@@ -390,6 +478,7 @@ export class LineMapPanelElement extends BasePanelElement {
         this.make("td", {}, [this.checkBox(line, "reads_active_low")]),
         this.make("td", {}, [this.checkBox(line, "is_enabled")]),
         this.make("td", {}, [this.numberField(line, "debounce_milliseconds")]),
+        this.make("td", {}, [this.removeButton("in", line)]),
       ]);
     });
     return this.make("table", {}, [
@@ -405,6 +494,7 @@ export class LineMapPanelElement extends BasePanelElement {
           this.make("th", { text: "active low", title: "reads inverted -- opto-isolated inputs routinely do" }),
           this.make("th", { text: "enabled", title: "a disabled line reads zero however the pin is driven" }),
           this.make("th", { text: "debounce ms" }),
+          this.make("th", { text: "" }),
         ]),
       ]),
       this.make("tbody", {}, rows),
@@ -423,6 +513,7 @@ export class LineMapPanelElement extends BasePanelElement {
         lineNumberCell,
         this.make("td", {}, [this.pinField(line, this.boardOutputPins, lineNumberCell, "out")]),
         this.make("td", {}, [this.checkBox(line, "safe_level_is_high")]),
+        this.make("td", {}, [this.removeButton("out", line)]),
       ]);
     });
     return this.make("table", {}, [
@@ -441,10 +532,148 @@ export class LineMapPanelElement extends BasePanelElement {
               "What this line is driven to on reset, link loss or a refused graph. " +
               "Per line, because an active-low valve driver is opened by a low.",
           }),
+          this.make("th", { text: "" }),
         ]),
       ]),
       this.make("tbody", {}, rows),
     ]);
+  }
+
+  // ------------------------------------------------------ adding a line ---
+  //
+  // What a person adds is not a *line* -- the board's lines exist whether
+  // anybody names them or not, and which pin each is was compiled into the
+  // firmware. What is added is a **name for one**, which is why a new row
+  // arrives already on a pin: the free one with the lowest line number, since
+  // an unnamed pin is exactly what there is to claim. A row with no pin would
+  // be a row the daemon refuses.
+  //
+  // Removing is the same fact backwards. The line stays; the name stops. A
+  // graph naming it goes on naming something that is no longer there, which is
+  // why `draftConflicts` checks the loaded config's graphs and holds the save.
+
+  /// The pins of one direction that no row in the draft has claimed.
+  unclaimedPins(direction) {
+    const boardPins = direction === "in" ? this.boardInputPins : this.boardOutputPins;
+    const lines = direction === "in" ? this.draft.input_lines : this.draft.output_lines;
+    const claimed = new Set(lines.map((line) => line.pin_label));
+    return boardPins.filter((pinLabel) => !claimed.has(pinLabel));
+  }
+
+  addLine(direction) {
+    const free = this.unclaimedPins(direction);
+    const boardPins = direction === "in" ? this.boardInputPins : this.boardOutputPins;
+    // Where the board did not answer, there is no list to take a free pin from
+    // -- so the row arrives blank and the person types the label their own
+    // notes use. It is the same fallback the pin column already makes.
+    const pinLabel = free.length > 0 ? free[0] : "";
+    const lineIndex = boardPins.indexOf(pinLabel);
+    const where = direction === "in" ? "input" : "output";
+    const line =
+      direction === "in"
+        ? {
+            name: this.aFreeNameFor(where, lineIndex),
+            line_index: lineIndex < 0 ? null : lineIndex,
+            pin_label: pinLabel,
+            reads_active_low: false,
+            is_enabled: true,
+            debounce_milliseconds: 0,
+          }
+        : {
+            name: this.aFreeNameFor(where, lineIndex),
+            line_index: lineIndex < 0 ? null : lineIndex,
+            pin_label: pinLabel,
+            safe_level_is_high: false,
+          };
+    (direction === "in" ? this.draft.input_lines : this.draft.output_lines).push(line);
+    this.theShapeOfTheDraftChanged();
+  }
+
+  addEveryUnclaimedPin(direction) {
+    for (let remaining = this.unclaimedPins(direction).length; remaining > 0; remaining -= 1) {
+      this.addLine(direction);
+    }
+  }
+
+  removeLine(direction, line) {
+    const lines = direction === "in" ? this.draft.input_lines : this.draft.output_lines;
+    const at = lines.indexOf(line);
+    if (at >= 0) lines.splice(at, 1);
+    this.theShapeOfTheDraftChanged();
+  }
+
+  /// A placeholder nothing else is called. Named after the line it is on,
+  /// because that is the one thing about a new row that is already true.
+  aFreeNameFor(where, lineIndex) {
+    const taken = new Set(
+      [...this.draft.input_lines, ...this.draft.output_lines].map((line) => line.name),
+    );
+    const stem = lineIndex < 0 ? `${where}_line` : `${where}_${lineIndex}`;
+    if (!taken.has(stem)) return stem;
+    for (let suffix = 2; ; suffix += 1) {
+      if (!taken.has(`${stem}_${suffix}`)) return `${stem}_${suffix}`;
+    }
+  }
+
+  /// A row appeared or went away, so the tables have to be rebuilt.
+  ///
+  /// The generation counter is what the poll consults, but waiting for the next
+  /// poll would leave a click looking ignored for half a second -- so this
+  /// rebuilds now and tells the poll it has. The dots come back on the next
+  /// read; `setLevel` is written to survive a dot whose line it has no reading
+  /// for yet.
+  theShapeOfTheDraftChanged() {
+    this.hasUnsavedEdits = true;
+    this.draftGeneration += 1;
+    this.buildTables();
+    this.builtGeneration = this.draftGeneration;
+    this.showPinConflicts();
+    this.revertButton.disabled = false;
+  }
+
+  /// "add a line", and what is left to add.
+  ///
+  /// The count is the useful half: a board has a fixed number of lines, and the
+  /// question somebody actually has is "is there another input free" -- which
+  /// no list of the rows already named can answer.
+  addControls(direction) {
+    const free = this.unclaimedPins(direction);
+    const where = direction === "in" ? "input" : "output";
+    const knowsThePins = this.pinLabelSource === "device";
+    return this.make("div", { class: "row" }, [
+      this.make("button", {
+        text: `add an ${where} line`,
+        disabled: knowsThePins && free.length === 0,
+        onClick: () => this.addLine(direction),
+      }),
+      free.length > 1 && knowsThePins
+        ? this.make("button", {
+            text: `name all ${free.length} remaining`,
+            onClick: () => this.addEveryUnclaimedPin(direction),
+          })
+        : null,
+      this.make("span", {
+        class: "muted",
+        text: !knowsThePins
+          ? "  This board did not say what its pins are called, so a new row arrives blank."
+          : free.length === 0
+            ? `  Every ${where} pin on this board has a name.`
+            : `  Free: ${free.join(", ")}`,
+      }),
+    ]);
+  }
+
+  /// Remove the name, not the line. Says what it would break, where it would.
+  removeButton(direction, line) {
+    const usedBy = this.namesUsedByGraphs[direction].get(line.name) || [];
+    return this.make("button", {
+      text: "remove",
+      title:
+        usedBy.length > 0
+          ? `${line.name} is named by ${usedBy.join(", ")}; removing it holds the save`
+          : `stop naming ${line.pin_label || "this line"}`,
+      onClick: () => this.removeLine(direction, line),
+    });
   }
 
   // -------------------------------------------------------------- fields ---
@@ -497,6 +726,9 @@ export class LineMapPanelElement extends BasePanelElement {
     // the map now is, and a save that was accepted with something normalised
     // should show the normalised version.
     this.discardTheDraft();
+    // A rename that was saved is now what the graphs have to agree with, and
+    // the config on disk may have moved under this panel besides.
+    this.readWhichLinesTheGraphsName();
     if (!saved.pushed_to_device) {
       this.showFailure(
         new Error(
@@ -519,6 +751,30 @@ export function draftOf(lines) {
     input_lines: lines.input_lines.map(withoutLiveLevel),
     output_lines: lines.output_lines.map(withoutLiveLevel),
   };
+}
+
+/// Every line name a graph mentions, as [direction, name].
+///
+/// Two places name a line and they are different directions: a transition's
+/// predicate watches **inputs** (`all`/`any`/`none`), and a state's entry and
+/// exit actions drive **outputs**. Collapsing them would be the same mistake
+/// the line map itself refuses -- input line 3 and output line 3 are different
+/// pins -- so an input called `lever` does not protect an output called
+/// `lever` from being removed.
+export function lineNamesUsedBy(graph) {
+  const used = [];
+  for (const state of graph.states || []) {
+    for (const action of [...(state.on_entry || []), ...(state.on_exit || [])]) {
+      if (action.line) used.push(["out", action.line]);
+    }
+    for (const transition of state.transitions || []) {
+      const predicate = transition.when || {};
+      for (const key of ["all", "any", "none"]) {
+        for (const name of predicate[key] || []) used.push(["in", name]);
+      }
+    }
+  }
+  return used;
 }
 
 function withoutLiveLevel(line) {

@@ -707,3 +707,146 @@ def test_the_editors_outcome_names_are_the_ones_the_store_accepts() -> None:
     block = re.search(r"const OUTCOME_NAMES = \[(.*?)\];", source, re.S).group(1)
     offered = {name for name in re.findall(r'"([A-Z_]*)"', block) if name}
     assert offered == set(DECLARABLE_TERMINAL_OUTCOMES)
+
+
+#: A small board: three inputs, two outputs, one of each already named. Small so
+#: that "every pin has a name" is reachable in a test, and consistent -- D6 is
+#: input line 0 because it is first in the board's own list, which is the only
+#: thing a line number ever means.
+LINES_WITH_TWO_FREE_INPUT_PINS = {
+    "input_lines": [
+        {"name": "lever", "line_index": 0, "pin_label": "D6", "is_high_now": False},
+    ],
+    "output_lines": [
+        {"name": "reward_valve", "line_index": 1, "pin_label": "A0", "is_high_now": False},
+    ],
+    "board_input_pins": ["D6", "D7", "D8"],
+    "board_output_pins": ["D10", "A0"],
+    "pin_labels_came_from": "device",
+}
+
+
+def drive_the_line_panel(script: str, lines=None) -> dict:
+    """Build the Lines panel over `lines`, run `script`, and read what it printed."""
+    module = (web_directory() / "elements" / "line_map_panel_element.js").as_uri()
+    return json.loads(
+        run_in_node(
+            f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+            "installMinimalDom();\n"
+            f"const {{ LineMapPanelElement }} = await import({module!r});\n"
+            f"const lines = {json_dumps(LINES_WITH_TWO_FREE_INPUT_PINS if lines is None else lines)};\n"
+            "const panel = new LineMapPanelElement();\n"
+            "panel.renderShell();\n"
+            "panel.adoptDraft(lines);\n"
+            "panel.paint(lines);\n" + script
+        )
+    )
+
+
+def test_a_new_line_arrives_on_a_free_pin_rather_than_blank() -> None:
+    """Adding a line does not create one -- the board's lines exist whether they
+    are named or not -- so the row arrives on the free pin with the lowest line
+    number. A blank row would be one the daemon refuses, and a person cannot
+    invent a ninth input by clicking.
+    """
+    result = drive_the_line_panel(
+        "panel.addLine('in');\n"
+        "console.log(JSON.stringify({ added: panel.draft.input_lines.at(-1),\n"
+        "  free: panel.unclaimedPins('in'), unsaved: panel.hasUnsavedEdits,\n"
+        "  saveOffered: !panel.saveButton.disabled }));\n"
+    )
+    assert result["added"]["pin_label"] == "D7"
+    assert result["added"]["line_index"] == 1, "resolved from the board's own table, not guessed"
+    assert result["added"]["name"] == "input_1", "named after the line it is on, and unique"
+    assert result["free"] == ["D8"]
+    assert result["unsaved"] is True
+    assert result["saveOffered"] is True
+
+
+def test_every_remaining_pin_can_be_named_at_once() -> None:
+    """The panel's answer to "the board has eight inputs and I want all of them"."""
+    result = drive_the_line_panel(
+        "panel.addEveryUnclaimedPin('in');\n"
+        "console.log(JSON.stringify({ pins: panel.draft.input_lines.map((l) => l.pin_label),\n"
+        "  free: panel.unclaimedPins('in') }));\n"
+    )
+    assert result["pins"] == ["D6", "D7", "D8"]
+    assert result["free"] == []
+
+
+def test_a_board_with_every_pin_named_offers_no_more() -> None:
+    """A board has a fixed number of lines. The button says so rather than
+    adding a row the daemon would refuse."""
+    result = drive_the_line_panel(
+        "panel.addEveryUnclaimedPin('in');\n"
+        "const buttons = panel.root.descendants().filter((n) => n.tagName === 'button');\n"
+        "const add = buttons.find((b) => b.textContent.startsWith('add an input'));\n"
+        "console.log(JSON.stringify({ disabled: add.disabled }));\n"
+    )
+    assert result["disabled"] is True
+
+
+def test_removing_a_line_a_graph_names_holds_the_save() -> None:
+    """The failure this exists to move earlier.
+
+    Removing `reward_valve` while go-nogo pulses it does not fail in the panel
+    and does not fail at the PATCH -- it fails at the next upload, which is the
+    start of a session with an animal in the booth. So the panel reads the
+    loaded config's graphs and refuses to offer the save, naming the graph.
+    """
+    result = drive_the_line_panel(
+        # What readWhichLinesTheGraphsName() would have loaded from the config.
+        "panel.namesUsedByGraphs = { in: new Map(), out: new Map([['reward_valve', ['go-nogo']]]) };\n"
+        "panel.removeLine('out', panel.draft.output_lines[0]);\n"
+        "const banners = panel.root.descendants()\n"
+        "  .filter((n) => n.className === 'failure').map((n) => n.textContent);\n"
+        "console.log(JSON.stringify({ banners, saveOffered: !panel.saveButton.disabled,\n"
+        "  outputs: panel.draft.output_lines.length }));\n"
+    )
+    assert result["outputs"] == 0, "the row goes -- loud and reversible beats forbidden"
+    assert result["saveOffered"] is False
+    assert any("reward_valve" in banner and "go-nogo" in banner for banner in result["banners"])
+
+
+def test_removing_a_line_no_graph_names_is_just_allowed() -> None:
+    result = drive_the_line_panel(
+        "panel.namesUsedByGraphs = { in: new Map(), out: new Map() };\n"
+        "panel.removeLine('in', panel.draft.input_lines[0]);\n"
+        "const banners = panel.root.descendants().filter((n) => n.className === 'failure');\n"
+        "console.log(JSON.stringify({ banners: banners.length,\n"
+        "  saveOffered: !panel.saveButton.disabled, free: panel.unclaimedPins('in') }));\n"
+    )
+    assert result["banners"] == 0
+    assert result["saveOffered"] is True
+    # And the pin it was on is offered again, because a name is all that went.
+    assert result["free"] == ["D6", "D7", "D8"]
+
+
+def test_the_two_directions_do_not_protect_each_others_names() -> None:
+    """An input called `lever` is not the output called `lever`: two numberings
+    over two disjoint sets of pins, which is the same mistake the line map
+    itself refuses to let a config make."""
+    module = (web_directory() / "elements" / "line_map_panel_element.js").as_uri()
+    graph = {
+        "name": "go-nogo",
+        "states": [
+            {
+                "name": "Wait",
+                "on_entry": [{"line": "ready_lamp", "kind": "high"}],
+                "on_exit": [{"line": "cue_lamp", "kind": "low"}],
+                "transitions": [{"when": {"all": ["lever"], "none": ["abort"]}, "goto": "Hit"}],
+            }
+        ],
+    }
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ lineNamesUsedBy }} = await import({module!r});\n"
+        f"console.log(JSON.stringify(lineNamesUsedBy({json_dumps(graph)})));\n"
+    )
+    assert sorted(map(tuple, json.loads(printed))) == [
+        ("in", "abort"),
+        ("in", "lever"),
+        ("out", "cue_lamp"),
+        ("out", "ready_lamp"),
+    ]
