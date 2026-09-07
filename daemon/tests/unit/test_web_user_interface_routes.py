@@ -871,6 +871,10 @@ def test_the_serial_monitor_is_closed_and_silent_until_somebody_opens_it() -> No
     So it is collapsed, **and not connected while collapsed**. The second half
     is the one worth a test: a panel that merely hid its table would still be
     streaming, and nothing on screen would say so.
+
+    The fold is the panel's own -- the one every panel has -- and not a second
+    `<details>` inside it. Two nested disclosures said the same thing twice, and
+    the outer one shut a panel that was still holding a socket open behind it.
     """
     module = (web_directory() / "elements" / "serial_monitor_panel_element.js").as_uri()
     printed = run_in_node(
@@ -885,21 +889,24 @@ def test_the_serial_monitor_is_closed_and_silent_until_somebody_opens_it() -> No
         "  openDeviceMonitorStream: () => socket,\n"
         "} });\n"
         "panel.renderShell();\n"
-        "const closedByDefault = panel.details.open === false;\n"
+        "panel.installDisclosure();\n"
+        "const closedByDefault = panel.collapsed === true;\n"
+        "// And exactly one disclosure: the panel\'s own.\n"
+        "const disclosures = panel.root.descendants()\n"
+        "  .filter((n) => n.tagName === \'details\' || n.className === \'disclosure\').length;\n"
         "await panel.start();\n"
         "const socketsWhileClosed = panel.openSockets.length;\n"
         "const backfillsWhileClosed = backfills;\n"
-        "panel.details.open = true;\n"
-        "await panel.theDisclosureWasToggled();\n"
+        "await panel.setCollapsed(false);\n"
         "const socketsWhenOpened = panel.openSockets.length;\n"
-        "panel.details.open = false;\n"
-        "await panel.theDisclosureWasToggled();\n"
-        "console.log(JSON.stringify({ closedByDefault, socketsWhileClosed,\n"
+        "await panel.setCollapsed(true);\n"
+        "console.log(JSON.stringify({ closedByDefault, disclosures, socketsWhileClosed,\n"
         "  backfillsWhileClosed, socketsWhenOpened, socketsAfterClosing: panel.openSockets.length,\n"
         "  backfilledOnOpening: backfills }));\n"
     )
     result = json.loads(printed)
     assert result["closedByDefault"]
+    assert result["disclosures"] == 1, "the monitor has two disclosures again"
     assert result["socketsWhileClosed"] == 0, "a collapsed monitor was still streaming"
     assert result["backfillsWhileClosed"] == 0, "a collapsed monitor still read the ring"
     # And it works when opened -- including the backfill, which is what makes
@@ -910,3 +917,49 @@ def test_the_serial_monitor_is_closed_and_silent_until_somebody_opens_it() -> No
     # Closing it again gives the socket back rather than leaving one behind a
     # panel nobody is looking at.
     assert result["socketsAfterClosing"] == 0
+
+
+def test_a_panel_folds_away_under_its_heading_and_its_own_controls_still_work() -> None:
+    """A view holds four panels now, and on a laptop in a booth the one being
+    watched is below the fold. So every panel folds: the heading is the handle,
+    and the body goes under it.
+
+    Two things are worth pinning. The fold has to be *general* -- it is
+    installed by the base class by walking the section every panel builds, so a
+    panel that changes its markup would silently lose it. And the heading is not
+    only a handle: the Device panel keeps its `connect` button up there, and a
+    click on that must connect rather than fold the panel away under the
+    person's hand.
+    """
+    module = (web_directory() / "elements" / "device_panel_element.js").as_uri()
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ DevicePanelElement }} = await import({module!r});\n"
+        "const panel = new DevicePanelElement();\n"
+        "panel.renderShell();\n"
+        "panel.installDisclosure();\n"
+        "const section = panel.root.children.find((n) => n.tagName === 'section');\n"
+        "const heading = section.children[0];\n"
+        "const contents = section.children[1];\n"
+        "const openByDefault = panel.collapsed === false && contents.hidden === false;\n"
+        "// The body went under the heading rather than being dropped.\n"
+        "const bodyIsInside = contents.children.includes(panel.body);\n"
+        "heading.dispatch('click', { target: heading });\n"
+        "const foldedByTheHeading = panel.collapsed && contents.hidden;\n"
+        "heading.dispatch('click', { target: panel.disclosureToggle });\n"
+        "const unfoldedByTheToggle = panel.collapsed === false;\n"
+        "// The connect button is in the heading, and it is not a fold handle.\n"
+        "heading.dispatch('click', { target: panel.connectButton });\n"
+        "console.log(JSON.stringify({ openByDefault, bodyIsInside, foldedByTheHeading,\n"
+        "  unfoldedByTheToggle, stillOpen: panel.collapsed === false,\n"
+        "  headingKeptItsTitle: heading.children.some((n) => n.textContent === 'Device') }));\n"
+    )
+    result = json.loads(printed)
+    assert result["openByDefault"], "a panel nobody asked to fold must be readable"
+    assert result["bodyIsInside"], "the fold moved the panel's body out of the panel"
+    assert result["foldedByTheHeading"]
+    assert result["unfoldedByTheToggle"]
+    assert result["stillOpen"], "clicking connect folded the panel instead of connecting"
+    assert result["headingKeptItsTitle"]
+

@@ -58,7 +58,7 @@ export class SerialMonitorPanelElement extends BasePanelElement {
       ]),
     ]);
 
-    // Closed until somebody opens it, and **not connected while closed**. This
+    // Folded until somebody opens it, and **not connected while folded**. This
     // is a debugging view: the question it answers is what crossed the wire,
     // which nobody asks until something has already gone wrong. Left open by
     // default it is the loudest thing on the page for the people who need it
@@ -67,24 +67,22 @@ export class SerialMonitorPanelElement extends BasePanelElement {
     // first open and stops on close; the daemon's ring keeps the history
     // meanwhile, which is what makes closing it free rather than a decision to
     // stop watching.
-    this.details = this.make("details", {}, [
-      this.make("summary", {}, [
-        this.make("span", { text: "Serial monitor" }),
-        this.status,
-        this.make("span", {
-          class: "muted",
-          text: "  every line in and out of the port. For debugging; open it when something " +
-            "does not add up.",
-        }),
-      ]),
-      this.make("div", {}, [
+    //
+    // The fold is the panel's own, the one every panel has. It was a `<details>`
+    // *inside* the panel, from before the panels folded -- which left this one
+    // with two nested disclosures saying the same thing, and a person who used
+    // the outer one got a panel that looked shut while still holding a socket
+    // open behind it.
+    this.root.replaceChildren(
+      this.make("section", {}, [
+        this.make("h2", {}, [this.make("span", { text: "Serial monitor" }), this.status]),
         this.make("p", {
           class: "muted",
           text:
             "The daemon's commands and the board's answers, in order, including the ones " +
             "nothing understood. This is the wire, not the record: it is a few thousand lines " +
             "deep and then the oldest go. For what a trial did, keep, and join to a .tdr " +
-            "afterwards, use the trace above.",
+            "afterwards, use the trace above. Folded, this panel holds no connection at all.",
         }),
         this.make("div", { class: "row" }, [
           this.make("input", {
@@ -129,22 +127,18 @@ export class SerialMonitorPanelElement extends BasePanelElement {
         this.lostSlot,
         this.scroller,
       ]),
-    ]);
-    this.details.open = false;
-    this.details.addEventListener("toggle", () => this.theDisclosureWasToggled());
-
-    this.root.replaceChildren(
-      this.make("section", {}, [
-        this.make("h2", {}, [this.make("span", { text: "Serial monitor" })]),
-        this.details,
-      ]),
     );
+  }
+
+  /// The one panel that arrives folded, because folded it costs the rig nothing.
+  get collapsedByDefault() {
+    return true;
   }
 
   start() {
     // Nothing until it is opened. `connectedCallback` calls this, so a panel
     // that backfilled here would pay for a view nobody has looked at.
-    if (this.details.open) return this.beginWatching();
+    if (!this.collapsed) return this.beginWatching();
     return undefined;
   }
 
@@ -152,7 +146,7 @@ export class SerialMonitorPanelElement extends BasePanelElement {
   /// caller that cannot wait for it cannot tell "not connected yet" from "not
   /// connecting at all" -- which is the one property this disclosure has to have.
   theDisclosureWasToggled() {
-    if (!this.details.open) return this.stopWatching();
+    if (this.collapsed) return this.stopWatching();
     return this.beginWatching();
   }
 
@@ -170,10 +164,10 @@ export class SerialMonitorPanelElement extends BasePanelElement {
       this.ringCapacity = backfill.ring_capacity;
       this.repaintRows();
     });
-    // Checked again: the disclosure may have been closed while the backfill was
-    // in flight, and opening a socket then would leave one running behind a
-    // closed panel -- exactly what this is meant to avoid.
-    if (this.details.open) this.openStream();
+    // Checked again: the panel may have been folded again while the backfill
+    // was in flight, and opening a socket then would leave one running behind a
+    // shut panel -- exactly what this is meant to avoid.
+    if (!this.collapsed) this.openStream();
   }
 
   stopWatching() {
@@ -205,7 +199,7 @@ export class SerialMonitorPanelElement extends BasePanelElement {
       this.repaintRows();
     });
     socket.addEventListener("close", () => {
-      if (this.isConnected && this.details.open && this.openSockets.includes(socket)) {
+      if (this.isConnected && !this.collapsed && this.openSockets.includes(socket)) {
         this.openSockets = this.openSockets.filter((each) => each !== socket);
         setTimeout(() => {
           if (this.isConnected) this.openStream();

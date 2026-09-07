@@ -12,6 +12,15 @@
 import { DaemonApiClient, DaemonRefusedTheRequest } from "./daemon_api_client.js";
 import { adoptSharedStyles } from "./shared_panel_stylesheet.js";
 
+/// The controls a panel may keep in its heading beside the title. A click on
+/// one of them is that control's click, not a request to fold the panel.
+const HEADING_CONTROL_TAGS = new Set(["button", "select", "input", "textarea", "a", "label"]);
+
+/// A tag name, lowercase, however this DOM spells it.
+function tagNameOf(node) {
+  return (node?.tagName || "").toLowerCase();
+}
+
 export class BasePanelElement extends HTMLElement {
   static observedAttributes = ["base"];
 
@@ -30,6 +39,7 @@ export class BasePanelElement extends HTMLElement {
 
   connectedCallback() {
     this.renderShell();
+    this.installDisclosure();
     this.start();
   }
 
@@ -51,6 +61,125 @@ export class BasePanelElement extends HTMLElement {
   renderShell() {}
   start() {}
   stopped() {}
+
+  /// Whether this panel arrives folded when nobody has said otherwise.
+  ///
+  /// False for all but one: a panel folded by default is a panel a person has
+  /// to find. The serial monitor is the exception, and for a reason bigger than
+  /// screen space -- folded, it holds no WebSocket.
+  get collapsedByDefault() {
+    return false;
+  }
+
+  /// Somebody just folded or unfolded this panel.
+  ///
+  /// Only their doing, never the initial state, so a panel may start work here
+  /// without racing `start()`.
+  theDisclosureWasToggled() {}
+
+  // -------------------------------------------------------- disclosure ---
+  //
+  // Every panel is built the same way -- one `section`, an `h2` at the top of
+  // it, everything else after -- so folding one away is done here, once,
+  // rather than eight times in eight subclasses. A panel that grows a second
+  // section or loses its heading simply does not get a toggle.
+  //
+  // Why any of it: a view holds up to four panels now, and the Run view is a
+  // session, a recording, a trace and a serial monitor stacked on a laptop
+  // screen in a booth. The panel a person is actually watching is below the
+  // fold. Folding the others is how they get it back -- and the panels keep
+  // polling either way, because a folded trace is still the trace.
+  //
+  // The state is remembered per tag, because the shell *replaces* the panels on
+  // every view switch (a panel left connected keeps polling a daemon that holds
+  // one serial port). Without that, coming back to a view would unfold
+  // everything the person had just put away.
+
+  /// Fold this panel's body under its heading, the way it was left last time.
+  installDisclosure() {
+    // Walked rather than queried: this runs against a DOM small enough to hold
+    // a panel in the tests, and children and tag names are all it needs.
+    const section = this.childrenOf(this.root).find((child) => tagNameOf(child) === "section");
+    if (section === undefined) return;
+    const heading = this.childrenOf(section).find((child) => tagNameOf(child) === "h2");
+    if (heading === undefined) return;
+
+    const rest = this.childrenOf(section).filter((child) => child !== heading);
+    const contents = this.make("div", { class: "panel-contents" }, rest);
+    section.replaceChildren(heading, contents);
+
+    this.disclosureToggle = this.make("button", { class: "disclosure", type: "button" });
+    heading.replaceChildren(this.disclosureToggle, ...this.childrenOf(heading));
+    this.disclosureSection = section;
+    this.disclosureContents = contents;
+
+    // Delegated from the whole heading rather than bound to the toggle alone,
+    // so the strip is a target the width of the panel -- but not the controls
+    // some panels keep up there beside the title, where a click means
+    // "connect", not "collapse".
+    heading.addEventListener("click", (event) => {
+      if (this.clickLandedOnAControl(event.target, heading)) return;
+      this.setCollapsed(!this.collapsed);
+    });
+
+    this.setCollapsed(this.readRememberedCollapse(), { announce: false });
+  }
+
+  get collapsed() {
+    return this.disclosureCollapsed === true;
+  }
+
+  setCollapsed(collapsed, { announce = true } = {}) {
+    if (this.disclosureSection === undefined) return;
+    this.disclosureCollapsed = collapsed;
+    this.disclosureSection.className = collapsed ? "collapsed" : "";
+    this.disclosureContents.hidden = collapsed;
+    this.disclosureToggle.textContent = collapsed ? "\u25b8" : "\u25be";
+    this.disclosureToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    this.disclosureToggle.title = collapsed ? "unfold this panel" : "fold this panel away";
+    this.rememberCollapse(collapsed);
+    if (announce) return this.theDisclosureWasToggled();
+    return undefined;
+  }
+
+  /// Did this click land on something that already means something else?
+  clickLandedOnAControl(target, heading) {
+    let node = target;
+    while (node !== null && node !== undefined && node !== heading) {
+      if (node === this.disclosureToggle) return false;
+      if (HEADING_CONTROL_TAGS.has(tagNameOf(node))) return true;
+      node = node.parentNode;
+    }
+    return false;
+  }
+
+  childrenOf(node) {
+    return Array.prototype.slice.call(node.children);
+  }
+
+  /// Where this panel's folded-or-not is written down. Per tag name, because
+  /// that is what a person recognises: "the serial monitor stays shut".
+  get collapseMemoryKey() {
+    return `statemachined.collapsed.${(this.tagName || "panel").toLowerCase()}`;
+  }
+
+  readRememberedCollapse() {
+    try {
+      const remembered = globalThis.localStorage.getItem(this.collapseMemoryKey);
+      if (remembered !== null) return remembered === "yes";
+    } catch {
+      /* no storage: a private window, or the fake DOM in the tests */
+    }
+    return this.collapsedByDefault;
+  }
+
+  rememberCollapse(collapsed) {
+    try {
+      globalThis.localStorage.setItem(this.collapseMemoryKey, collapsed ? "yes" : "no");
+    } catch {
+      /* nothing to remember it with; it still folds for this visit */
+    }
+  }
 
   stop() {
     for (const timer of this.pollTimers) clearInterval(timer);

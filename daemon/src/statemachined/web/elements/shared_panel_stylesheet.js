@@ -54,13 +54,38 @@ const STYLE_TEXT = `
     display: flex;
     align-items: baseline;
     gap: 0.5rem;
+    /* The whole strip folds the panel, so say so -- except over the controls
+       some panels keep up here, which carry their own cursor and meaning. */
+    cursor: pointer;
+    user-select: none;
   }
 
+  /* A panel folded away is one line: heading, and nothing under it. The margin
+     under the heading goes with the body it was separating. */
+  section.collapsed { padding-bottom: 0.85rem; }
+  section.collapsed h2 { margin-bottom: 0; }
+
+  h2 button.disclosure {
+    font: inherit;
+    line-height: 1;
+    width: 1rem;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--muted);
+  }
+  h2 button.disclosure:hover:not(:disabled) { border-color: transparent; }
+
+  [hidden] { display: none !important; }
+
   h3 {
-    margin: 0.9rem 0 0.4rem;
+    /* Enough that a reader sees where one part of a panel ends and the next
+       begins, without a rule drawn across it. */
+    margin: 1.4rem 0 0.5rem;
     font-size: 0.85rem;
     color: var(--panel-heading);
   }
+  h3:first-child { margin-top: 0; }
 
   dl.fields {
     display: grid;
