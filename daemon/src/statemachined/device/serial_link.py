@@ -136,9 +136,10 @@ class SerialLink:
     def reset_input(self) -> None:
         """Drop whatever is already buffered.
 
-        A board in demo mode has been talking to nobody, and a serial monitor
-        left open earlier may have left a partial line in the driver; starting a
-        session on top of that produces one spurious framing complaint.
+        A board that has been running on its own has been talking to nobody, and
+        a serial monitor left open earlier may have left a partial line in the
+        driver; starting a session on top of that produces one spurious framing
+        complaint.
         """
         self._receive_buffer.clear()
         try:

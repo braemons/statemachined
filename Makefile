@@ -45,14 +45,8 @@ golden:                     ## the tests at -O0 and -O3, for reproducibility
 BOARD ?= uno_r4_minima
 
 .PHONY: firmware
-firmware:                   ## build for the reference board (demo mode on)
+firmware:                   ## build for the reference board
 	pio run -e $(BOARD)
-
-# Demo mode is 4.6 KB of SRAM on a 32 KB part, so a rig build drops it. Built
-# here as well as by CI, or the #else half of that switch rots unnoticed.
-.PHONY: firmware-rig
-firmware-rig:               ## the same, with demo mode compiled out
-	PLATFORMIO_BUILD_FLAGS=-DSTATEMACHINED_DEMO=0 pio run -e $(BOARD)
 
 # Emulation. Covers what the host build cannot compile -- the pin map, the port
 # registers, the timer ISR, the protocol over a real UART -- and says nothing
@@ -94,7 +88,8 @@ integration-device:         ## build build/statemachined_native_device on its ow
 #
 # TARGET is the same variable `make bringup` uses, so the same two paths work:
 # a board on a cable, or `make bench-device` in another terminal and
-# TARGET=socket://127.0.0.1:5300. Greeting a board ends demo mode until reset.
+# TARGET=socket://127.0.0.1:5300. Greeting a board takes the rig: one that was
+# arming its own trials stops doing so until it is told to again.
 #
 # The stores are seeded from graphs/ and configs/ rather than pointed at them:
 # deleting a graph or a state-machine config in the web UI must not delete an
@@ -136,8 +131,8 @@ bench-device: integration-device  ## the native device on socket://127.0.0.1:530
 # Deliberately NOT part of `make ci`. A target that fails on every machine
 # without a board attached is a target people learn to ignore.
 #
-# Greeting the board ends demo mode until the next reset, which this cannot
-# avoid: the greeting is what hands over.
+# Greeting the board takes the rig, which this cannot avoid: the greeting is
+# what hands over. A board that was running on its own stops.
 .PHONY: test-hardware
 test-hardware:              ## the suite that needs a board: make test-hardware TARGET=...
 	uv run --project daemon --group test \
@@ -242,11 +237,12 @@ install-renode:             ## the pinned Renode, portable, into /opt/renode
 # A flashable image
 # --------------------------------------------------------------------------
 #
-# Two images, because they are for two different people: the bench image runs
-# the demo graph with no host attached, the rig image drops it and gets the
-# SRAM back. Flashing the wrong one is a thing somebody will do, so they are
-# named rather than numbered, and what they are travels with them -- a board in
-# a rack cannot be asked which commit it is running.
+# One image, since the demo paradigm left: there used to be a bench build that
+# ran a graph compiled into the firmware and a rig build that compiled it out,
+# and flashing the wrong one was a thing somebody was going to do. A bench board
+# now runs a real uploaded graph out of its own storage like any other, so there
+# is one binary and one thing to flash. What it is still travels with it -- a
+# board in a rack cannot be asked which commit it is running.
 IMAGE_DIR ?= image
 IMAGE_SHA ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 
@@ -255,11 +251,8 @@ image:                      ## build both flashable images, with a manifest
 	rm -rf $(IMAGE_DIR)
 	mkdir -p $(IMAGE_DIR)
 	$(MAKE) firmware
-	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/statemachined-$(BOARD)-bench.bin
-	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/statemachined-$(BOARD)-bench.elf
-	$(MAKE) firmware-rig
-	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/statemachined-$(BOARD)-rig.bin
-	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/statemachined-$(BOARD)-rig.elf
+	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/statemachined-$(BOARD).bin
+	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/statemachined-$(BOARD).elf
 	@{ \
 	  echo "statemachined firmware for the $(BOARD)"; \
 	  echo; \
@@ -267,9 +260,9 @@ image:                      ## build both flashable images, with a manifest
 	  echo "built:  $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
 	  echo "pio:    $$(pio --version)"; \
 	  echo; \
-	  echo "statemachined-$(BOARD)-bench.bin  demo mode ON: runs a built-in graph until a"; \
-	  echo "                          host says hello. Wiring in dev/HARDWARE.md"; \
-	  echo "statemachined-$(BOARD)-rig.bin    demo mode OFF (-DSTATEMACHINED_DEMO=0)"; \
+	  echo "statemachined-$(BOARD).bin"; \
+	  echo "  Holds no graph until one is uploaded, and comes back up running"; \
+	  echo "  whatever it was last saved with. Wiring in dev/HARDWARE.md"; \
 	  echo; \
 	  echo "flash with:  make upload   or   bossac -i -e -w -R <file>.bin"; \
 	  echo; \
@@ -286,7 +279,7 @@ image:                      ## build both flashable images, with a manifest
 # Everything CI runs, in the order it runs it, minus the toolchain installs.
 # The point is that a red build can be reproduced with one command.
 .PHONY: ci
-ci: check-core test sanitize golden format-check test-daemon firmware firmware-rig  ## everything CI runs, except emulation
+ci: check-core test sanitize golden format-check test-daemon firmware  ## everything CI runs, except emulation
 
 .PHONY: clean
 clean:

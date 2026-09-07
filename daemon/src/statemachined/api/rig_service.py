@@ -29,6 +29,7 @@ from ..device.device_line_monitor import DeviceLineMonitor
 from ..device.device_supervisor import DeviceSupervisor, ObservedStateVisit
 from ..device.state_visit_trace import (
     KIND_ACTIVE_GRAPH_SELECTED,
+    KIND_AUTORUN_CHANGED,
     KIND_CONFIG_LOADED,
     KIND_GRAPH_SET_UPLOADED,
     KIND_LINK_CONNECTED,
@@ -41,6 +42,7 @@ from ..device.state_visit_trace import (
     KIND_SEQUENCE_GAP,
     KIND_SESSION_CLOSED,
     KIND_SESSION_OPENED,
+    KIND_SETTINGS_SAVED,
     KIND_STATE_VISIT,
     KIND_TRIAL_CANCELLED,
     KIND_TRIAL_CONFIGURED,
@@ -623,6 +625,55 @@ class RigService:
             outcome_code=cancel_ack.get("outcome"),
         )
         return cancel_ack
+
+    # --------------------------------------------------- the board on its own ---
+
+    def set_autorun(self, enabled: bool, **arguments) -> dict:
+        """Hand the board the job of arming its own trials, or take it back.
+
+        The daemon becomes optional at this point, which is the whole intent:
+        see dev/PROTOCOL.md 3.7. It is written to the trace because "who armed
+        trial 412" is a question the record has to be able to answer, and a run
+        the device armed itself looks otherwise identical to one this daemon did.
+        """
+        graph_name = arguments.get("graph_name")
+        if enabled and graph_name is None:
+            arguments["graph_name"] = self.graph_for_a_trial(None)
+        with self.device_lock:
+            reply = self.supervisor.set_autorun(enabled, **arguments)
+        self.trace.append(
+            KIND_AUTORUN_CHANGED,
+            enabled=bool(reply.get("enabled")),
+            active=bool(reply.get("active")),
+            graph=arguments.get("graph_name"),
+            next_trial_id=reply.get("next_trial_id"),
+        )
+        return reply
+
+    def read_autorun(self) -> dict:
+        """What the board would do on its own -- asked, not remembered.
+
+        The settings outlive this daemon's session and survive a greeting that
+        took the rig, so this is a question rather than a field.
+        """
+        if not self.supervisor.is_connected:
+            return {}
+        with self.device_lock:
+            return self.supervisor.read_autorun()
+
+    def save_device_settings(self) -> dict:
+        """Write the board's wiring, graph set and autorun settings to its own
+        storage, so that all three survive a power cut. dev/PROTOCOL.md 3.8."""
+        with self.device_lock:
+            saved = self.supervisor.save_settings()
+        self.trace.append(
+            KIND_SETTINGS_SAVED,
+            has_set=bool(saved.get("has_set")),
+            set_version=saved.get("set_version"),
+            autorun=bool(saved.get("autorun")),
+            write_count=saved.get("write_count"),
+        )
+        return saved
 
     # ------------------------------------------------------------ the state ---
 

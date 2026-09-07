@@ -164,6 +164,11 @@ class DeviceSupervisor:
         self.clock = DeviceClockCorrelation()
         self.armed_trial_id: int | None = None
         self.armed_graph_name: str | None = None
+        #: The graph a self-driving board was pointed at, which is what names
+        #: the results of runs this daemon did not arm. Kept apart from
+        #: `armed_graph_name` because the two answer different questions: one is
+        #: "what did I arm", the other "what is the board doing on its own".
+        self.autorun_graph_name: str | None = None
 
         #: Every reconnection, counted. A link that flaps should be visible to
         #: whoever is debugging the rig rather than inferred from trials that
@@ -176,12 +181,45 @@ class DeviceSupervisor:
     def is_connected(self) -> bool:
         return self._session is not None
 
+    def connect_and_watch(self) -> None:
+        """Open the port and say nothing.
+
+        For a board that is running on its own (dev/PROTOCOL.md 3.7): greeting
+        it would *take the rig* -- cancelling the run in flight and stopping it
+        driving itself -- and there are times when what is wanted is to watch,
+        not to take over. The results and visits it emits are routed exactly as
+        they are in a greeted session, so a daemon can record an unattended
+        session it is not running.
+
+        Nothing else works on this connection. Every command but `hello` is
+        refused by a device nobody has greeted, which is the rule that makes
+        this safe rather than a way to half-connect: call `connect_and_greet`
+        when the point is to take the rig.
+        """
+        self.disconnect()
+        link = SerialLink(
+            self.target,
+            baud=self.baud,
+            timeout=self.timeout,
+            on_line_observed=self.on_line_observed,
+        )
+        link.reset_input()
+        self._link = link
+        self._session = RequestResponseSession(
+            link,
+            on_unsolicited=self._handle_unsolicited_message,
+            on_junk=lambda line, why: None,
+        )
+        self.clock.forget_everything_observed()
+        self.connection_count += 1
+
     def connect_and_greet(self) -> dict:
         """Open the port, say hello, and push this rig's wiring.
 
-        In that order and not another. The greeting is what hands a bench board
-        over from demo mode, and the wiring is what makes `fail_safe()` correct
-        for *this* box -- so it goes before any graph and long before any trial.
+        In that order and not another. The greeting is what takes the rig from a
+        board that was arming its own trials, and the wiring is what makes
+        `fail_safe()` correct for *this* box -- so it goes before any graph and
+        long before any trial.
         """
         self.disconnect()
         link = SerialLink(
@@ -437,6 +475,79 @@ class DeviceSupervisor:
             MsgType.CANCEL, timeout=self.timeout, trial_id=trial_id, reason="host"
         )
 
+    # ------------------------------------------------- the board on its own ---
+
+    def set_autorun(
+        self,
+        enabled: bool,
+        *,
+        graph_name: str | None = None,
+        cap_milliseconds: int = 0,
+        seed: int | None = None,
+        first_trial_id: int | None = None,
+        start_now: bool = True,
+    ) -> dict:
+        """Hand the board the job of arming its own trials, or take it back.
+
+        The one thing this daemon does that makes itself optional. See
+        dev/PROTOCOL.md 3.7: the device starts each run itself and takes the
+        interval between them from the dwell the terminal state it reached
+        declared, which is why the timing lives in the graph and only the
+        authority lives here.
+
+        `graph_name`, not an index, for the same reason `configure_trial` takes
+        one. Autorun cannot switch paradigms afterwards -- switching is a
+        decision, and the premise is that nothing is making decisions.
+
+        `start_now` false records that this board should drive itself without
+        starting it -- which is how a rig is set up, because `save_settings` is
+        refused on a board that is running and a board arming its own trials is
+        never idle. Enable, save, power cycle.
+        """
+        session = self._require_session()
+        fields: dict[str, object] = {"enabled": enabled}
+        if graph_name is not None:
+            compiled = self._require_committed_graph_set()
+            fields["graph_index"] = compiled.slot_for_graph_name(graph_name)
+        if cap_milliseconds:
+            fields["cap_ms"] = cap_milliseconds
+        if seed is not None:
+            fields["seed"] = f"{seed:016X}"
+        if first_trial_id is not None:
+            fields["first_trial_id"] = first_trial_id
+        if not start_now:
+            fields["start_now"] = False
+        reply = session.request(MsgType.AUTORUN, timeout=self.timeout, **fields)
+        # Remembered so that the results of runs this daemon did not arm can
+        # still be read: the device reports state indices, and only the graph
+        # gives them names.
+        if enabled:
+            if graph_name is not None:
+                self.autorun_graph_name = graph_name
+        else:
+            self.autorun_graph_name = None
+        return reply
+
+    def read_autorun(self) -> dict:
+        """What the board would do on its own, asked rather than remembered.
+
+        The settings outlive the session that set them and survive a daemon that
+        greets and thereby takes the rig, so this is a question a freshly
+        connected daemon genuinely has.
+        """
+        return self._require_session().request(MsgType.AUTORUN, timeout=self.timeout)
+
+    def save_settings(self) -> dict:
+        """Write the board's wiring, graph set and autorun settings to its own
+        storage, so that all three survive a power cut. dev/PROTOCOL.md 3.8.
+
+        Slow by the standards of everything else here -- it erases and programs
+        data flash -- and refused by the device while a trial is running rather
+        than stalling the scan. The reply carries `write_count`, which is flash
+        wear made visible.
+        """
+        return self._require_session().request(MsgType.SAVE, timeout=max(self.timeout, 5.0))
+
     def wait_for_trial_result(self, timeout: float = 15.0) -> TrialResultRecord:
         """Collect the chunked result and read it back into names.
 
@@ -447,7 +558,10 @@ class DeviceSupervisor:
         """
         session = self._require_session()
         compiled = self._require_committed_graph_set()
-        graph_name = self.armed_graph_name
+        # The trial this daemon armed, or the graph a self-driving board was
+        # pointed at: under autorun the device arms its own trials, and its
+        # results are still this daemon's to read.
+        graph_name = self._graph_name_for_reporting()
         if graph_name is None:
             raise NoGraphSetCommitted("no trial has been configured on this connection")
         compiled_graph = compiled.graph_named(graph_name)
@@ -455,12 +569,17 @@ class DeviceSupervisor:
         assert compiled_graph is not None  # named above, for the reader
         return self._name_a_reassembled_result(read_trial_result(session, timeout=timeout))
 
+    def _graph_name_for_reporting(self) -> str | None:
+        """Whose graph the run that just ended was: the trial this daemon armed,
+        or -- for a board arming its own -- the graph autorun was pointed at."""
+        return self.armed_graph_name or self.autorun_graph_name
+
     def _name_a_reassembled_result(
         self, reassembled: ReassembledTrialResult
     ) -> TrialResultRecord:
         """Turn a result's indices into the names of the graph that ran it."""
         compiled = self._require_committed_graph_set()
-        graph_name = self.armed_graph_name
+        graph_name = self._graph_name_for_reporting()
         if graph_name is None:
             raise NoGraphSetCommitted("no trial has been configured on this connection")
         compiled_graph = compiled.graph_named(graph_name)
@@ -570,8 +689,19 @@ class DeviceSupervisor:
         except ValueError as exc:
             self.on_unsolicited_message({"msg_type": "error", "message": str(exc)})
             return
-        if reassembled is not None:
-            self.on_trial_result(self._name_a_reassembled_result(reassembled))
+        if reassembled is None:
+            return
+        try:
+            named = self._name_a_reassembled_result(reassembled)
+        except NoGraphSetCommitted:
+            # A result from a run this daemon did not configure -- a board that
+            # was already driving itself when this connection opened, or one
+            # this daemon is only watching. Real, and unreadable without the
+            # graph, so it goes on as an unsolicited message rather than being
+            # decoded into a guess. Same rule as the visit stream below.
+            self.on_unsolicited_message(reassembled.begin)
+            return
+        self.on_trial_result(named)
 
     # ------------------------------------------------------ the visit stream ---
 
@@ -597,9 +727,10 @@ class DeviceSupervisor:
 
     def _decode_visit_message(self, message: dict) -> ObservedStateVisit | None:
         compiled = self.committed_graph_set
-        graph_name = self.armed_graph_name
+        graph_name = self._graph_name_for_reporting()
         if compiled is None or graph_name is None:
-            # A visit from a run this daemon did not configure -- demo mode, or
+            # A visit from a run this daemon did not configure -- a board that
+            # was already arming its own trials when this connection opened, or
             # a line-started trial before anything named a graph. It is real and
             # it is unreadable without a graph, so it goes on as an unsolicited
             # message rather than being decoded into a guess.

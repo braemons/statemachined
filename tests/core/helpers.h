@@ -56,6 +56,9 @@ struct Builder {
     return s;
   }
   uint8_t terminal(TrialOutcome o) { return terminal_code(terminal_code_of(o)); }
+  /// How long a terminal state is dwelt in before another run may start. Only
+  /// legal on a terminal state, which validate() enforces.
+  void relight(uint8_t s, uint8_t dist) { g.states[s].relight_duration = dist; }
   void timeout(uint8_t s, uint8_t dist, uint8_t target) {
     g.states[s].timeout_duration = dist;
     g.states[s].timeout_target = target;

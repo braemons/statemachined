@@ -406,6 +406,10 @@ export class GraphStorePanelElement extends BasePanelElement {
             // refusing a graph whose editor let it be written.
             state.timeout = null;
             state.transitions = [];
+          } else {
+            // A dwell is drawn on arriving at the end of a trial, so a state
+            // that is no longer the end cannot carry one. Same reason.
+            state.relight_after = null;
           }
           this.edited();
         }),
@@ -431,6 +435,7 @@ export class GraphStorePanelElement extends BasePanelElement {
           class: "muted",
           text: "Terminal. Nothing leaves it -- the trial ends here, as this outcome.",
         }),
+        this.relightEditor(state, distributionNames),
       );
     }
     return this.make("div", { style: "border-top:1px solid var(--panel-border);padding:0.5rem 0" }, children);
@@ -503,6 +508,49 @@ export class GraphStorePanelElement extends BasePanelElement {
           : null,
       ]),
       ...rows,
+    ]);
+  }
+
+  /// How long this terminal state is dwelt in before another trial may begin --
+  /// the inter-trial interval, for a board arming its own trials.
+  ///
+  /// It does not give the state an exit, and the wording here says so: the
+  /// trial ends at this state either way. What the dwell decides is what
+  /// happens *after* the record is closed, and only for a board running without
+  /// the daemon (dev/PROTOCOL.md 3.7). A terminal state with none is where such
+  /// a board stops, which is how a paradigm says "this outcome ends the
+  /// session".
+  relightEditor(state, distributionNames) {
+    if (!state.relight_after) {
+      return this.make("div", { class: "row" }, [
+        this.make("button", {
+          text: "+ dwell before the next trial",
+          disabled: distributionNames.length === 0,
+          title:
+            distributionNames.length === 0
+              ? "A dwell is a drawn duration, so it needs a distribution first."
+              : "Only a board arming its own trials waits it out. Under triald it is ignored.",
+          onClick: () => {
+            state.relight_after = distributionNames[0];
+            this.edited();
+          },
+        }),
+      ]);
+    }
+    return this.make("div", { class: "row" }, [
+      this.make("span", { class: "muted", text: "then wait" }),
+      this.selectField(distributionNames, state.relight_after, (name) => {
+        state.relight_after = name;
+        this.edited();
+      }),
+      this.make("span", { class: "muted", text: "before the next trial may start" }),
+      this.make("button", {
+        text: "remove",
+        onClick: () => {
+          state.relight_after = null;
+          this.edited();
+        },
+      }),
     ]);
   }
 

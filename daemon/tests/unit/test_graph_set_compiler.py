@@ -18,7 +18,7 @@ from statemachined.graph_set_compiler import (
     compile_graph_set_for_device,
 )
 from statemachined.device.message_vocabulary import MsgType
-from statemachined.model.graph_definition import GraphDefinition
+from statemachined.model.graph_definition import GraphDefinition, UniformDuration
 from statemachined.model.line_map import LineMap
 
 
@@ -145,6 +145,24 @@ def test_a_state_carries_terminal_and_timeout_as_null_rather_than_omitting_them(
     states = [m for m in compiled.upload_messages if m.msg_type == MsgType.GRAPH_STATE]
     assert states[0].fields == {"i": 0, "terminal": None, "timeout": {"dist": 0, "target": 1}}
     assert states[3].fields == {"i": 3, "terminal": 10, "timeout": None}  # CANCELLED
+
+
+def test_a_dwell_after_a_terminal_state_becomes_a_distribution_index():
+    # The inter-trial interval, as an index into the shared pool like every
+    # other duration. Only terminal states carry one, and it is the whole of
+    # what a graph says about running unattended -- who acts on it is a device
+    # setting (dev/PROTOCOL.md 3.7), not a field here.
+    graph = graph_named("go-nogo")
+    graph.distributions["iti"] = UniformDuration(minimum_ms=1000, maximum_ms=2000)
+    graph.state_named("Hit").relight_after = "iti"
+    compiled = compile_one(GraphDefinition.model_validate(graph.model_dump()))
+    states = [m for m in compiled.upload_messages if m.msg_type == MsgType.GRAPH_STATE]
+    assert states[2].fields["relight"] == 1  # foreperiod is 0, iti is 1
+    # And a state with no dwell says nothing at all rather than sending null:
+    # absent is unambiguous here, and it is what every graph written before this
+    # field existed sends.
+    assert "relight" not in states[3].fields
+    assert "relight" not in states[0].fields
 
 
 def test_a_predicate_becomes_masks_and_a_target_becomes_an_index():

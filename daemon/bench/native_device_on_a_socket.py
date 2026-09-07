@@ -56,15 +56,23 @@ class NativeDeviceOnASocket:
     device wrote a result while the caller was still sending an upload.
     """
 
-    def __init__(self, port: int = 0) -> None:
+    def __init__(self, port: int = 0, store_path: str | None = None) -> None:
         """`port` 0 asks the kernel for a free one, which is what a test wants;
-        a fixed one is what a bench wants, so the URL can be written down."""
+        a fixed one is what a bench wants, so the URL can be written down.
+
+        `store_path` is where this device keeps the settings it remembers across
+        a restart -- its data flash, in effect. Given one, two devices started
+        with the same path are the same board before and after a power cut,
+        which is how the stored-settings behaviour is tested at all. Left out,
+        the device uses its own default in the working directory.
+        """
         self._listening_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listening_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._listening_socket.bind(("127.0.0.1", port))
         self._listening_socket.listen(1)
         self.port = self._listening_socket.getsockname()[1]
 
+        self._store_path = store_path
         self._process: subprocess.Popen | None = None
         self._connection: socket.socket | None = None
         self._stop = threading.Event()
@@ -75,12 +83,16 @@ class NativeDeviceOnASocket:
         return f"socket://127.0.0.1:{self.port}"
 
     def start(self) -> None:
+        environment = None
+        if self._store_path is not None:
+            environment = {**os.environ, "STATEMACHINED_STORE": self._store_path}
         self._process = subprocess.Popen(
             [str(NATIVE_DEVICE_BINARY)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             bufsize=0,
+            env=environment,
         )
         # One permanent reader of the device's output, and one accept loop. The
         # reader cannot be per-connection: it would be parked in a blocking

@@ -269,11 +269,19 @@ def _state_wire_fields(
             "target": graph.state_names_in_declaration_order.index(state.timeout.goto),
         }
 
-    return {
+    fields: dict[str, object] = {
         "i": graph.state_names_in_declaration_order.index(state.name),
         "terminal": terminal_code,
         "timeout": timeout_fields,
     }
+    # Omitted rather than sent as null when there is none, unlike the two above:
+    # `relight` is optional on the wire precisely so that a graph_state written
+    # before it existed still says, unambiguously, that this state does not
+    # relight. Sending it always would cost a field on every state of every
+    # upload for a thing almost no state uses.
+    if state.relight_after is not None:
+        fields["relight"] = distribution_pool_index_by_name[state.relight_after]
+    return fields
 
 
 # ---------------------------------------------------------------- public ---

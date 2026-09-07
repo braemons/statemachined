@@ -58,6 +58,14 @@ KIND_SESSION_CLOSED = "session_closed"
 #: act on the device -- nothing is pushed -- but it changes what the next
 #: `POST /api/trial/configure` means, so it is written down.
 KIND_ACTIVE_GRAPH_SELECTED = "active_graph_selected"
+#: The board was handed the job of arming its own trials, or had it taken back.
+#: In the trace because it is the answer to "who started trial 412": a run under
+#: autorun was armed by the device, and nothing else in this record would say so.
+KIND_AUTORUN_CHANGED = "autorun_changed"
+#: The board's wiring, graph set and autorun settings were written to its own
+#: storage. Written down because it is a change to what the board will be after
+#: the next power cut, which is otherwise invisible until there is one.
+KIND_SETTINGS_SAVED = "settings_saved"
 #: The recording's own lifecycle, in the trace it is a selection over. Circular
 #: on purpose: a recording that did not contain the moment it was paused would
 #: leave the gap in it unexplained.

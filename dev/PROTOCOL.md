@@ -275,6 +275,21 @@ a dropped message from a silently mis-indexed graph into a refusal.
 | `i` | `u8` | State index. Must equal the number of states already accepted |
 | `terminal` | `i8` or `null` | The outcome code this state reports, or `null` for a non-terminal state. The device treats it as opaque — see §6 |
 | `timeout` | object or `null` | `dist` indexes the distribution pool; `target` is the state entered when it expires |
+| `relight` | `u8` or `null` | **Terminal states only.** The distribution the dwell in this state is drawn from — how long before another run may begin. Absent or `null` means none, which is what every graph written before this field existed says. A `relight` on a state that is not terminal is refused |
+
+**`relight` does not give a terminal state an exit.** Nothing exits a terminal
+state: the run ends there, its record is closed, and the dwell is drawn on
+arrival and reported in that state's visit as `drawn_ms`. What it decides is
+when the *next* run may start, and whether anything acts on it is a property of
+the device rather than of the graph — see §3.7. The same graph therefore runs
+unchanged under a host that arms every trial itself, which is the point of
+putting the timing here and the authority there: an inter-trial interval is a
+paradigm decision that has to replay with the trial it followed, and who arms
+trials is a fact about the deployment.
+
+A terminal state that declares **no** dwell is where a self-driving board stops.
+That is how a paradigm says "this outcome ends the session" — per outcome, which
+a single device-wide setting could not express.
 
 #### `graph_transition`
 
@@ -469,12 +484,14 @@ The wiring is read into a copy and installed whole, so a message that turns out
 to be malformed halfway through leaves the board wired the way it was. A typo in
 a debounce must not take the safe levels with it.
 
-> **It does not survive a power cycle yet.** Until the data flash lands
-> (dev/DAEMON.md §3.4, M7) a reset returns the board to its compile-time
-> defaults — `STATEMACHINED_SAFE_LEVELS`, which `make firmware-rig` is where a
-> real rig's belongs. That constant is what makes the `fail_safe()` before the
-> first scan correct on a board nobody has greeted, and `hello_ack`'s
-> `has_wiring` is how a host tells the two apart.
+> **It survives a power cycle only if it is saved.** §3.8's `save` writes the
+> wiring to the board's own storage, and the next boot reads it back before it
+> drives a single line — which is what makes a rig with an active-low valve
+> driver fail safe to *its* levels rather than to all-low. A board that has
+> never been saved to, or whose store is blank or damaged, comes up on the
+> compile-time `STATEMACHINED_SAFE_LEVELS` instead, which is why that constant
+> has to stay correct on its own. `hello_ack`'s `has_wiring` is how a host tells
+> a configured board from one running defaults.
 
 ### 3.6 `pins`
 
@@ -509,6 +526,116 @@ thing. One direction always fits. A device whose labels somehow do not answers
 asked at any time — including during a trial, though a host with any sense asks
 once per connection.
 
+### 3.7 `autorun`
+
+```json
+{"msg_type":"autorun","message_id":10,"enabled":true,"graph_index":0,
+ "cap_ms":30000,"seed":"0123456789ABCDEF","first_trial_id":1,"crc":"...."}
+```
+
+Who starts the trials. Everywhere else in this protocol the answer is the host:
+triald is the decision authority, it chooses the trial type and arms each trial,
+and the device is the timing authority that runs the one it was given. This is
+the case where there is no decision authority at all — a board on a bench, an
+unsupervised shaping session, a box with nothing plugged into its USB port — and
+the device starts each run itself, taking the interval between them from the
+dwell the terminal state it just reached declared (§3.2, `relight`).
+
+| Field | Type | |
+|---|---|---|
+| `enabled` | bool | Whether the device may start runs on its own. **Absent means this message is a question**: nothing changes and the current settings are reported |
+| `graph_index` | `u8` | Which graph of the committed set it runs. Autorun cannot switch paradigms: switching is a decision, and the premise here is that nothing is making decisions |
+| `cap_ms` | `i32` | Wall-clock cap per run, as `configure`'s. It matters more here — nobody is watching for a graph that has hung |
+| `seed` | hex `u64` | The stream every autorun trial's randomness is derived from. Carried here rather than taken from the session, because a self-driving board may never receive a `hello` and so may never be given one |
+| `first_trial_id` | `u32` | Where the ids it assigns start, so a host can tell runs the board made on its own from its own |
+| `start_now` | bool | Default `true`. `false` records that this board should drive itself **without starting it** — which is how a rig is set up, because §3.8's `save` is refused on a board that is running and a board arming its own trials is never idle. Enable, save, power cycle |
+
+Answered with `autorun_ok`, carrying `enabled`, `active`, `graph_index`,
+`cap_ms` and `next_trial_id`. **`enabled` and `active` are not the same fact:**
+the setting is stored and survives, while `active` is whether the board is
+driving trials right now.
+
+Refused with `not_ready` if no set is committed, `bad_index` if the graph does
+not exist, and `busy` if a *host-driven* trial is running — a message that hands
+the board a new job must not land while it is doing one. `configure` is refused
+the same way while autorun is active: one authority at a time, and disabling
+autorun first is one message that says which of the two is in charge.
+
+**Turning autorun off is never refused as busy.** "Stop" is the thing somebody
+most wants while it is running, and it is the one command that must not be
+refused for the reason that it is running. The run in flight ends through the
+ordinary exit path, exactly as a `cancel` does: its lines come down and its
+result is reported. A cancelled run reached no terminal state, so it drew no
+dwell, so nothing follows it — the board stops without that being a separate
+rule.
+
+**A host that greets takes the rig.** `hello` stops a self-driving board — the
+run in flight is cancelled through the ordinary exit path, so its lines come
+down and its result is still reported — while leaving the stored setting alone,
+so the next boot still comes up self-driving. Starting again takes another
+`autorun`. That asymmetry is deliberate: a daemon that crashed must not be able
+to leave a board delivering rewards to an animal nobody is watching, and the one
+path into unattended running that no host asked for is a boot from settings
+somebody deliberately saved.
+
+**Losing the link does not stop it.** For a board that was explicitly told to
+drive itself, the port closing is the expected end of "upload a paradigm, then
+detach" rather than a fault: nothing is cancelled and nothing fails safe. A
+board that was *not* told to drive itself behaves exactly as it always has — the
+trial is cancelled as `link_lost` and every line goes to its safe level.
+
+### 3.8 `save`
+
+```json
+{"msg_type":"save","message_id":11,"crc":"...."}
+```
+
+Write what the device currently holds — its wiring, its committed graph set and
+its autorun settings — to the board's own storage, so that all three survive a
+power cut. It takes no fields: what is saved is what is there, because a save
+that took its own copy of the settings would be a second place for them to
+disagree.
+
+Answered with `saved`:
+
+```json
+{"msg_type":"saved","message_id":12,"in_reply_to":11,"has_set":true,"set_version":7,
+ "autorun":true,"write_count":3,"written":true,"crc":"...."}
+```
+
+`write_count` is how many times this board's store has been written. It is
+reported because data flash wears out — about 100,000 erase cycles on the
+reference board — and a rig a third of the way through that budget should be
+able to say so rather than failing one day without warning.
+
+**A save that would store what is already stored writes nothing**, answers
+`"written": false`, and leaves `write_count` where it was. The device compares
+before it writes — the record is encoded again and matched against the stored
+bytes as it goes, a few bytes at a time, with no second copy of the graph set —
+because an erase cycle spent to change nothing is an erase cycle spent, and
+pressing a save button twice must not cost one. It is answered rather than
+refused: "it is already saved" is a success, and a caller should not have to
+tell the two apart to know its settings are safe.
+
+Refused with `not_ready` on a board with nowhere to keep settings, `busy` while
+a trial is running (erasing and programming data flash blocks for tens of
+milliseconds against a 100 µs scan, and refusing is better than quietly costing
+somebody's response window its timing), and `storage` if the write did not land
+— in which case the store holds **no** valid record, which the next boot reads
+as "this board has forgotten" rather than as something wrong.
+
+**At boot** the device reads the record back before it drives a single line. A
+stored wiring's output safe levels are therefore the ones the first fail-safe
+uses, which is what stops a rig with an active-low valve driver from opening it
+on every power cycle. A stored set is *validated*, not merely trusted: the CRC
+says the bytes are the ones that were written, not that they were a graph worth
+running. And if the stored autorun says so, the board comes up running trials
+with no host in the picture at all.
+
+A blank store, a damaged one and a board with no store are all ordinary: the
+compiled-in defaults stand, because a mitigation that depends on somebody having
+saved settings is not one.
+
 ---
 
 ## 4. Device → host
@@ -531,10 +658,11 @@ resolution it is actually getting rather than the one the design hoped for.
 against them before uploading, which turns "refused at `graph_end`" into
 "refused before the first byte" — a better error at no cost.
 
-They are **read, never assumed**, and `max_path` is the one where that already
-matters: the reference board ships two images, and the bench one — which carries
-demo mode, and therefore a second path buffer — has 64 where the rig image has
-255.
+They are **read, never assumed**, and `max_path` is the one where that has
+already mattered: the reference board briefly shipped two images, one of which
+carried a demo paradigm and therefore a second path buffer, and reported 64
+where the other reported 255. There is one image now and it reports 255 — which
+is exactly why a host reads the number rather than knowing it.
 
 They are **nested rather than flat**, and that is a memory decision rather than a
 stylistic one: a receiver's per-message member limit is what bounds how much
@@ -639,7 +767,7 @@ host; two shapes for one fact is how the two drift apart.
 
 | Field | Type | |
 |---|---|---|
-| `trial_id` | `u32` | The id from `configure`. **`0` when there was no host-configured trial** — demo mode, the bench, a line-started run before anything assigned an id. The trace is still worth having; it simply joins to nothing |
+| `trial_id` | `u32` | The id from `configure`. **`0` when there was no host-configured trial** — a line-started run before anything assigned an id. A board arming its own trials assigns them itself (§3.7), so those carry a real id. The trace is still worth having either way |
 | `seq` | `u32` | The visit's ordinal within the run, from `0`. A gap is what makes a dropped visit **detectable** rather than a hole nobody notices |
 
 **Emitted when the state is left, not when it is entered**, because a visit's
@@ -684,8 +812,12 @@ may parse it.
 
 `state_report` answers `state` with the current state index, uptime, the
 nested `graph` object (`has_set`, `set_version`, `n_graphs`, `index`),
-`has_wiring` as in §4.1, the counts of dropped and unusable lines, and a nested
-`scan` object. Nested because a message is capped at sixteen top-level members
+`has_wiring` as in §4.1, `autorun` — whether the board is arming its own trials
+(§3.7) — the counts of dropped and unusable lines, and a nested `scan` object.
+
+`link_state` is what the session is doing: `0` greeting (nothing but `hello` is
+answered), `1` idle, `2` armed, `3` running, `4` relighting — the dwell between
+two self-driven runs, which only a board driving itself is ever in. Nested because a message is capped at sixteen top-level members
 and that cap is what bounds the reader's stack footprint. Diagnosis, not
 control.
 

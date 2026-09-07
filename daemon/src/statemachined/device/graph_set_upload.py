@@ -167,7 +167,7 @@ class GraphSetUploader:
 class SingleGraphSetUploader:
     """A set of exactly one graph.
 
-    What a bench session, a demo and most of the hardware suite want: they have
+    What a bench session and most of the hardware suite want: they have
     a single paradigm and no interest in slots. It is a wrapper rather than a
     separate path, so the bytes it puts on the wire are the same ones a
     multi-graph session's uploader produces.

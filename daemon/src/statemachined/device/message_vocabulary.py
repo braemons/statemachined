@@ -53,6 +53,8 @@ class MsgType(StrEnum):
     STATE = "state"
     WIRING = "wiring"
     PINS = "pins"
+    AUTORUN = "autorun"
+    SAVE = "save"
 
     # Device -> host.
     HELLO_ACK = "hello_ack"
@@ -71,6 +73,8 @@ class MsgType(StrEnum):
     STATE_REPORT = "state_report"
     VISIT = "visit"
     PIN_MAP = "pin_map"
+    AUTORUN_OK = "autorun_ok"
+    SAVED = "saved"
 
 
 #: Device messages that answer nothing and may arrive at any time, so a reader
@@ -111,3 +115,8 @@ class ErrorCode(StrEnum):
     NO_PIN_MAP = "no_pin_map"
     BAD_FIELD = "bad_field"
     INTERNAL = "internal"
+    #: A `save` that did not land. The board's store then holds no valid record,
+    #: which the next boot reads as "this board has forgotten" rather than as
+    #: something wrong -- but the settings did not persist, and the daemon must
+    #: not let somebody find that out after the power cut.
+    STORAGE = "storage"

@@ -180,6 +180,68 @@ void upload_minimal(Host& h) {
   REQUIRE(type_of(r[0]) == "set_ok");
 }
 
+/// The same graph, with the terminal state declaring a 200 ms dwell -- the
+/// inter-trial interval a self-driving board waits out before starting another
+/// run.
+void upload_relighting(Host& h) {
+  auto r = h.open_set(7);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_begin","message_id":)" + h.next_message_id() +
+                 R"(,"slot":0,"n_states":2,"entry":0)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_dist","message_id":)" + h.next_message_id() +
+                 R"(,"i":0,"kind":"fixed","a":500)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_dist","message_id":)" + h.next_message_id() +
+                 R"(,"i":1,"kind":"fixed","a":200)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
+                 R"(,"i":0,"terminal":null,"timeout":{"dist":0,"target":1})",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
+                 R"(,"i":1,"terminal":1,"timeout":null,"relight":1)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_end","message_id":)" + h.next_message_id() +
+                 R"(,"n_transitions":0,"n_output_actions":0)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.close_set(2, 0, 0);
+  REQUIRE(type_of(r[0]) == "set_ok");
+}
+
+constexpr Microseconds ms(uint32_t n) { return n * 1000u; }
+
+/// A boolean member, which `field` cannot report: it renders numbers and
+/// strings, and `true` is neither.
+bool flag(const std::string& line, const char* key) {
+  const std::string body = line.substr(0, line.size() - 1);
+  JsonObject m(body.data(), body.size());
+  bool v = false;
+  return m.boolean(key, &v) && v;
+}
+
+/// Scan for `us` of device time, in 1 ms steps, the way the timer would.
+void scan_for(Host& h, Microseconds us) {
+  const Microseconds until = h.now + us;
+  while (h.now < until) {
+    h.now += 1000;
+    h.device.advance_trial(0, h.now);
+  }
+}
+
+/// The trial ids of every result the device has emitted.
+std::vector<int> results(const RecordingSink& sink) {
+  std::vector<int> ids;
+  for (const auto& l : sink.lines)
+    if (type_of(l) == "result_begin") ids.push_back(std::stoi(field(l, "trial_id")));
+  return ids;
+}
+
 }  // namespace
 
 TEST_CASE("nothing is answered before a hello") {
@@ -1363,4 +1425,497 @@ TEST_CASE("a host may not send pin_map at us") {
   REQUIRE(r.size() == 1);
   REQUIRE(type_of(r[0]) == "error");
   CHECK(r[0].find("unknown_type") != std::string::npos);
+}
+
+// ---------------------------------------------------------------- autorun ---
+
+TEST_CASE("a board told to drive itself runs trial after trial") {
+  // No `configure`, no `start`, and one trial id after another: the device is
+  // the authority here because there is nobody else to be one.
+  Host h;
+  greet(h);
+  upload_relighting(h);
+
+  const auto r = h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() +
+                        R"(,"enabled":true,"seed":"0123456789ABCDEF")");
+  REQUIRE(r.size() == 1);
+  REQUIRE(type_of(r[0]) == "autorun_ok");
+  CHECK(flag(r[0], "enabled"));
+  CHECK(flag(r[0], "active"));
+  CHECK(h.device.autorun_active());
+
+  // Three runs of 500 ms with a 200 ms dwell between them fit inside 2.5 s.
+  scan_for(h, ms(2500));
+  const std::vector<int> ids = results(h.sink);
+  REQUIRE(ids.size() >= 3);
+  CHECK(ids[0] == 1);
+  CHECK(ids[1] == 2);
+  CHECK(ids[2] == 3);
+  for (const auto& l : h.sink.lines) check_wire_valid(l);
+}
+
+TEST_CASE("the dwell between two self-driven runs is the one the graph declared") {
+  Host h;
+  greet(h);
+  upload_relighting(h);
+  h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() + R"(,"enabled":true)");
+
+  // The first run ends at 500 ms. Nothing may start before the 200 ms dwell is
+  // out, and the second run must be going once it is.
+  scan_for(h, ms(650));
+  REQUIRE(results(h.sink).size() == 1);
+  CHECK(h.device.state() == LinkState::Relighting);
+  scan_for(h, ms(100));
+  CHECK(h.device.state() == LinkState::Running);
+}
+
+TEST_CASE("a terminal state with no dwell stops a self-driving board") {
+  // Which is how a paradigm says "this outcome ends the session" -- the graph
+  // decides, and it decides per outcome.
+  Host h;
+  greet(h);
+  upload_minimal(h);  // its terminal state declares no dwell
+  h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() + R"(,"enabled":true)");
+
+  scan_for(h, ms(2000));
+  CHECK(results(h.sink).size() == 1);
+  CHECK_FALSE(h.device.autorun_active());
+  CHECK(h.device.state() == LinkState::Idle);
+}
+
+TEST_CASE("a host cannot arm trials on a board that is arming its own") {
+  // One authority at a time. Two of them would give two runs the same board and
+  // one of them the wrong id.
+  Host h;
+  greet(h);
+  upload_relighting(h);
+  h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() + R"(,"enabled":true)");
+  scan_for(h, ms(600));  // mid-dwell, so the refusal is not merely "busy running"
+  REQUIRE(h.device.state() == LinkState::Relighting);
+
+  const auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+                        R"(,"trial_id":9,"set_version":7)");
+  REQUIRE(r.size() == 1);
+  CHECK(type_of(r[0]) == "error");
+  CHECK(field(r[0], "code") == "busy");
+}
+
+TEST_CASE("a host that greets takes the rig") {
+  // The setting survives, so the next boot still comes up self-driving. The
+  // driving stops, because somebody is there to do it -- and the run in flight
+  // ends through the ordinary exit path rather than being abandoned.
+  Host h;
+  greet(h);
+  upload_relighting(h);
+  h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() + R"(,"enabled":true)");
+  scan_for(h, ms(100));
+  REQUIRE(h.device.state() == LinkState::Running);
+
+  // Not greet(): a hello that lands mid-run cancels it, and a cancelled state
+  // is a completed visit, which goes out unsolicited alongside the reply.
+  const auto took_over =
+      without_visits(h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
+                            R"(,"proto":1,"seed":"0123456789ABCDEF")"));
+  REQUIRE(took_over.size() == 1);
+  REQUIRE(type_of(took_over[0]) == "hello_ack");
+  CHECK_FALSE(h.device.autorun_active());
+  CHECK(h.device.autorun().enabled);
+  // The cancelled run ends the way every run ends: on the next scan, with a
+  // result, rather than being abandoned where it stood.
+  scan_for(h, ms(1));
+  CHECK(h.device.state() == LinkState::Idle);
+  CHECK(results(h.sink).size() == 1);
+
+  const auto r = h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id());
+  REQUIRE(r.size() == 1);
+  CHECK(flag(r[0], "enabled"));
+  CHECK_FALSE(flag(r[0], "active"));
+
+  scan_for(h, ms(2000));
+  CHECK(results(h.sink).size() == 1);  // the cancelled one, and nothing after it
+}
+
+TEST_CASE("a self-driving board keeps going when the link goes away") {
+  // The expected end of "upload a paradigm, then detach", not a fault. Nothing
+  // is cancelled, which is why enabling autorun takes a command of its own
+  // rather than being somewhere a dropped cable can arrive by accident.
+  Host h;
+  greet(h);
+  upload_relighting(h);
+  h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() + R"(,"enabled":true)");
+  scan_for(h, ms(100));
+  REQUIRE(h.device.state() == LinkState::Running);
+
+  h.device.link_lost(h.now);
+  CHECK(h.device.autorun_active());
+  scan_for(h, ms(1500));
+  CHECK(results(h.sink).size() >= 2);
+
+  // And the handshake is still required of whoever comes back.
+  const auto r = h.send(R"({"msg_type":"ping","message_id":)" + h.next_message_id());
+  REQUIRE(r.size() == 1);
+  CHECK(field(r[0], "code") == "not_ready");
+}
+
+TEST_CASE("a link that drops while nobody asked for autorun still fails safe") {
+  Host h;
+  greet(h);
+  upload_relighting(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":4,"set_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":4)");
+  scan_for(h, ms(100));
+  REQUIRE(h.device.state() == LinkState::Running);
+
+  h.device.link_lost(h.now);
+  CHECK(h.device.state() == LinkState::Idle);
+  CHECK_FALSE(h.device.autorun_active());
+}
+
+TEST_CASE("autorun is refused against a set the board does not have") {
+  Host h;
+  greet(h);
+  auto r = h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() +
+                  R"(,"enabled":true)");
+  REQUIRE(r.size() == 1);
+  CHECK(field(r[0], "code") == "not_ready");
+
+  upload_relighting(h);
+  r = h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() +
+             R"(,"enabled":true,"graph_index":3)");
+  REQUIRE(r.size() == 1);
+  CHECK(field(r[0], "code") == "bad_index");
+  CHECK_FALSE(h.device.autorun_active());
+}
+
+// --------------------------------------------------------------- settings ---
+
+namespace {
+
+/// A store, near enough: one record, held in a buffer, shared between the
+/// session that saved it and the session that comes up afterwards -- which is
+/// the whole point of it and exactly what a power cycle looks like.
+struct FakeStore : SettingsPort, SettingsWriter, SettingsReader {
+  std::vector<uint8_t> bytes;
+  size_t read_at = 0;
+  bool works = true;
+
+  bool has_storage() const override { return true; }
+  bool save(const StoredSettings& s, uint32_t write_count) override {
+    if (!works) return false;
+    bytes.clear();
+    return save_settings(s, write_count, *this);
+  }
+  SettingsError load(StoredSettings& s) override {
+    read_at = 0;
+    return load_settings(s, *this);
+  }
+  bool holds(const StoredSettings& s, uint32_t write_count) override {
+    read_at = 0;
+    return settings_already_stored(s, write_count, *this);
+  }
+  bool write(const void* src, size_t n) override {
+    const uint8_t* b = static_cast<const uint8_t*>(src);
+    bytes.insert(bytes.end(), b, b + n);
+    return true;
+  }
+  bool read(void* dst, size_t n) override {
+    if (read_at + n > bytes.size()) return false;
+    for (size_t i = 0; i < n; ++i) static_cast<uint8_t*>(dst)[i] = bytes[read_at + i];
+    read_at += n;
+    return true;
+  }
+};
+
+}  // namespace
+
+TEST_CASE("a board comes back from a power cut running what it was told to run") {
+  // The whole of standalone operation, in one test: upload, arm autorun, save,
+  // lose the board, and have a fresh session come up driving trials with no
+  // host, no hello and nothing plugged into it.
+  FakeStore store;
+
+  {
+    Host h;
+    h.device.set_settings_port(&store);
+    greet(h);
+    upload_relighting(h);
+    h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() +
+           R"(,"enabled":true,"seed":"0123456789ABCDEF","first_trial_id":100)");
+    const auto r = h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id());
+    REQUIRE(r.size() == 1);
+    REQUIRE(type_of(r[0]) == "saved");
+    CHECK(flag(r[0], "has_set"));
+    CHECK(flag(r[0], "autorun"));
+    CHECK(field(r[0], "write_count") == "1");
+  }
+
+  // The power cycle. A different session object, with nothing but the store.
+  Host after;
+  after.device.set_settings_port(&store);
+  REQUIRE(after.device.restore_settings(0) == SettingsError::None);
+  CHECK(after.device.has_set());
+  CHECK(after.device.set_version() == 7);
+  CHECK(after.device.autorun_active());
+  CHECK(after.device.settings_write_count() == 1);
+
+  scan_for(after, ms(2000));
+  const std::vector<int> ids = results(after.sink);
+  REQUIRE(ids.size() >= 2);
+  CHECK(ids[0] == 100);  // where the stored settings said to start counting
+  CHECK(ids[1] == 101);
+
+  // And nothing it emitted is answerable without a handshake: a board running
+  // on its own is still a board that has not been greeted.
+  const auto r = after.send(R"({"msg_type":"ping","message_id":1)");
+  REQUIRE(r.size() == 1);
+  CHECK(field(r[0], "code") == "not_ready");
+}
+
+TEST_CASE("the write counter counts, so flash wear is visible") {
+  FakeStore store;
+  Host h;
+  h.device.set_settings_port(&store);
+  greet(h);
+  upload_relighting(h);
+
+  for (int expected = 1; expected <= 3; ++expected) {
+    // Something different each time, or the save would rightly write nothing.
+    h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() +
+           R"(,"enabled":true,"start_now":false,"first_trial_id":)" +
+           std::to_string(expected * 10));
+    const auto r = h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id());
+    REQUIRE(type_of(r[0]) == "saved");
+    CHECK(flag(r[0], "written"));
+    CHECK(field(r[0], "write_count") == std::to_string(expected));
+  }
+  CHECK(h.device.settings_write_count() == 3);
+
+  // And it survives the board: the count is a property of the store, not of
+  // whoever happens to be talking to it.
+  Host after;
+  after.device.set_settings_port(&store);
+  REQUIRE(after.device.restore_settings(0) == SettingsError::None);
+  CHECK(after.device.settings_write_count() == 3);
+}
+
+TEST_CASE("a save is refused mid-trial rather than stalling the scan") {
+  // Erasing and programming data flash blocks for tens of milliseconds against
+  // a 100 us scan. Refusing is the honest answer; doing it quietly would cost
+  // the response window somebody is measuring.
+  FakeStore store;
+  Host h;
+  h.device.set_settings_port(&store);
+  greet(h);
+  upload_relighting(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":4,"set_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":4)");
+  scan_for(h, ms(50));
+  REQUIRE(h.device.state() == LinkState::Running);
+
+  const auto r =
+      without_visits(h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id()));
+  REQUIRE(r.size() == 1);
+  CHECK(type_of(r[0]) == "error");
+  CHECK(field(r[0], "code") == "busy");
+}
+
+TEST_CASE("a save that did not land is reported rather than assumed") {
+  FakeStore store;
+  store.works = false;
+  Host h;
+  h.device.set_settings_port(&store);
+  greet(h);
+  upload_relighting(h);
+
+  const auto r = h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id());
+  REQUIRE(r.size() == 1);
+  CHECK(type_of(r[0]) == "error");
+  CHECK(field(r[0], "code") == "storage");
+  // The counter did not move: nothing was written.
+  CHECK(h.device.settings_write_count() == 0);
+}
+
+TEST_CASE("a board with nowhere to keep settings says so") {
+  Host h;
+  greet(h);
+  upload_relighting(h);
+  const auto r = h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id());
+  REQUIRE(r.size() == 1);
+  CHECK(type_of(r[0]) == "error");
+  CHECK(field(r[0], "code") == "not_ready");
+}
+
+TEST_CASE("a stored graph set is validated, not merely trusted") {
+  // The CRC says the bytes are the ones that were written. It says nothing
+  // about whether they were a graph worth running, and a set with an index out
+  // of range would fault at the first trial that reached it.
+  FakeStore store;
+  {
+    Host h;
+    h.device.set_settings_port(&store);
+    greet(h);
+    upload_relighting(h);
+    h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id());
+  }
+  // Rot a byte in the middle and fix the CRC, so the record reads back intact
+  // and only validate() can catch it: the entry state of graph 0, pointed
+  // somewhere that does not exist.
+  StoredSettings damaged;
+  GraphSet g;
+  damaged.set = &g;
+  REQUIRE(store.load(damaged) == SettingsError::None);
+  g.graphs[0].entry = 200;
+  damaged.has_set = true;
+  REQUIRE(store.save(damaged, 9));
+
+  Host after;
+  after.device.set_settings_port(&store);
+  CHECK(after.device.restore_settings(0) != SettingsError::None);
+  CHECK_FALSE(after.device.has_set());
+  CHECK_FALSE(after.device.autorun_active());
+}
+
+TEST_CASE("a board can be told to run itself later without starting now") {
+  // The sequence a rig is actually set up with. A board already arming its own
+  // trials is never idle, and a save is refused on a board that is running --
+  // so "enable it, then write it down" has to be performable while nothing is
+  // running, or it could not be performed at all.
+  FakeStore store;
+  Host h;
+  h.device.set_settings_port(&store);
+  greet(h);
+  upload_relighting(h);
+
+  const auto r = h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() +
+                        R"(,"enabled":true,"start_now":false)");
+  REQUIRE(r.size() == 1);
+  CHECK(flag(r[0], "enabled"));
+  CHECK_FALSE(flag(r[0], "active"));
+  CHECK_FALSE(h.device.autorun_active());
+
+  // Nothing is running, so the settings can be written down.
+  const auto saved = h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id());
+  REQUIRE(type_of(saved[0]) == "saved");
+  CHECK(flag(saved[0], "autorun"));
+
+  scan_for(h, ms(2000));
+  CHECK(results(h.sink).empty());  // and it did not quietly start anyway
+
+  // The power cycle is what turns the stored intent into a running board.
+  Host after;
+  after.device.set_settings_port(&store);
+  REQUIRE(after.device.restore_settings(0) == SettingsError::None);
+  CHECK(after.device.autorun_active());
+}
+
+TEST_CASE("stopping a self-driving board is never refused as busy") {
+  // "Stop" is the thing somebody most wants while it is running, and it is the
+  // one command that must not be refused for the reason that it is running. It
+  // ends the run through the ordinary exit path, exactly as a `cancel` does.
+  Host h;
+  greet(h);
+  upload_relighting(h);
+  h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() + R"(,"enabled":true)");
+  scan_for(h, ms(100));
+  REQUIRE(h.device.state() == LinkState::Running);
+
+  const auto r = without_visits(h.send(R"({"msg_type":"autorun","message_id":)" +
+                                       h.next_message_id() + R"(,"enabled":false)"));
+  REQUIRE(r.size() == 1);
+  REQUIRE(type_of(r[0]) == "autorun_ok");
+  CHECK_FALSE(flag(r[0], "active"));
+
+  scan_for(h, ms(2000));
+  CHECK(results(h.sink).size() == 1);  // the cancelled one, and nothing after it
+}
+
+TEST_CASE("a host cannot hand a busy board a new job") {
+  Host h;
+  greet(h);
+  upload_relighting(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":4,"set_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":4)");
+  scan_for(h, ms(50));
+  REQUIRE(h.device.state() == LinkState::Running);
+
+  const auto r = without_visits(h.send(R"({"msg_type":"autorun","message_id":)" +
+                                       h.next_message_id() + R"(,"enabled":true)"));
+  REQUIRE(r.size() == 1);
+  CHECK(type_of(r[0]) == "error");
+  CHECK(field(r[0], "code") == "busy");
+}
+
+TEST_CASE("state_report says who is arming the trials, and still parses") {
+  // It carries kJsonMaxMembers top-level members exactly. One more would be a
+  // message this device's own reader refuses, so this checks the reply is
+  // parsable as well as correct -- an unparsable state_report would strand a
+  // bridge that polls it.
+  Host h;
+  greet(h);
+  upload_relighting(h);
+
+  auto r = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
+  REQUIRE(type_of(r[0]) == "state_report");
+  CHECK_FALSE(flag(r[0], "autorun"));
+
+  h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() + R"(,"enabled":true)");
+  r = without_visits(h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id()));
+  REQUIRE(type_of(r[0]) == "state_report");
+  CHECK(flag(r[0], "autorun"));
+  // Parsable, which `field` returning a number rather than "" is the proof of.
+  CHECK(field(r[0], "link_state") != "");
+}
+
+TEST_CASE("a save that would change nothing writes nothing") {
+  // Data flash is good for about 100,000 erase cycles, and there is a button in
+  // the web UI that invites being pressed twice. Spending one of those to store
+  // the bytes that are already there is the kind of waste that presents years
+  // later as a board that stops accepting settings.
+  FakeStore store;
+  Host h;
+  h.device.set_settings_port(&store);
+  greet(h);
+  upload_relighting(h);
+
+  auto r = h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id());
+  REQUIRE(type_of(r[0]) == "saved");
+  CHECK(flag(r[0], "written"));
+  CHECK(field(r[0], "write_count") == "1");
+  const size_t stored_bytes = store.bytes.size();
+
+  // Again, unchanged. Answered, not refused -- "it is already saved" is a
+  // success, and a caller should not have to tell the two apart to know its
+  // settings are safe.
+  r = h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id());
+  REQUIRE(type_of(r[0]) == "saved");
+  CHECK_FALSE(flag(r[0], "written"));
+  CHECK(field(r[0], "write_count") == "1");  // and the counter did not move
+  CHECK(store.bytes.size() == stored_bytes);
+  CHECK(h.device.settings_write_count() == 1);
+
+  // Change one thing and it writes again.
+  h.send(R"({"msg_type":"autorun","message_id":)" + h.next_message_id() +
+         R"(,"enabled":true,"start_now":false)");
+  r = h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id());
+  REQUIRE(type_of(r[0]) == "saved");
+  CHECK(flag(r[0], "written"));
+  CHECK(field(r[0], "write_count") == "2");
+}
+
+TEST_CASE("a board whose store is blank writes, whatever the counter says") {
+  // The comparison must not mistake erased flash for "already stored" -- a
+  // board that never saved would then never save.
+  FakeStore store;
+  store.bytes.assign(64, 0xFF);
+  Host h;
+  h.device.set_settings_port(&store);
+  greet(h);
+  upload_relighting(h);
+
+  const auto r = h.send(R"({"msg_type":"save","message_id":)" + h.next_message_id());
+  REQUIRE(type_of(r[0]) == "saved");
+  CHECK(flag(r[0], "written"));
 }

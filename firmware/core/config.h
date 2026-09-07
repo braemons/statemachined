@@ -39,35 +39,27 @@
 #endif                              // single message is one state's worth of graph
 // The levels a rig's outputs are safe at, as a bitmask, compiled in. Zero --
 // every line low -- is right for a bench and wrong for any rig with an
-// active-low driver on it, which is why `make firmware-rig` is where a real one
-// belongs: -DSTATEMACHINED_SAFE_LEVELS=0x...
+// active-low driver on it, so a rig's image is built with
+// -DSTATEMACHINED_SAFE_LEVELS=0x...
 //
-// It is the *default*, not the truth: a `wiring` command replaces it, and
-// dev/DAEMON.md M7 will persist that to data flash. Until then this is the only
-// thing that makes the fail_safe() before the first scan correct on a board
-// nobody has greeted yet, and it must stay so -- a mitigation that depends on
-// the daemon being up is not one.
+// It is the *default*, not the truth: a `wiring` command replaces it, and a
+// `save` writes that to the board's own storage, which the next boot reads
+// before it drives a single line (io/settings_store.h). This is what a board
+// with a blank, damaged or absent store falls back to -- and it must stay
+// correct on its own for exactly that reason. A mitigation that depends on
+// somebody having saved settings, or on the daemon being up, is not one.
 #ifndef STATEMACHINED_SAFE_LEVELS
 #define STATEMACHINED_SAFE_LEVELS 0
 #endif
-// Demo mode: the graph a board runs before anybody greets it, so that a bench
-// board with a switch and a few LEDs does something you can watch. On by
-// default; `make firmware-rig` builds it out and gets its ~4.6 KB back. It is
-// here rather than in main.cpp because it is a capacity decision -- it costs a
-// second StateGraph and a second TrialRunner -- and the path length below now
-// depends on it.
-#ifndef STATEMACHINED_DEMO
-#define STATEMACHINED_DEMO 1
-#endif
-
 // The visit ring: a graph may loop, and a long trial must degrade to a
 // truncated path, never a corrupt one.
 //
-// It was briefly 64 on the bench image, because demo mode carries a second
-// TrialRunner and 2 x 4080 B would not link. The graph set paid that back: a
-// set is single-buffered, so the staged copy a single graph needed is gone, and
-// both images fit 255 again. Both boards therefore report the same capacities,
-// which is the state worth being in.
+// It was briefly 64, when this firmware also carried a demo paradigm and its
+// second TrialRunner: 2 x 4080 B would not link. Both of those are gone -- the
+// graph set is single-buffered, so the staged copy a single graph needed went
+// with it, and a bench board now runs a real uploaded graph out of its own
+// storage rather than one compiled in -- so there is one image, with one set of
+// capacities, which is the state worth being in.
 // How many distributions one trial may override with `configure`'s `patch`.
 // Small on purpose: a patch is "this trial's foreperiod is 250-900 ms", not a
 // second way to author a graph, and every entry costs the twelve bytes of the

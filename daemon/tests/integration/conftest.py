@@ -44,11 +44,17 @@ from native_device_on_a_socket import (  # noqa: E402
 
 
 @pytest.fixture
-def native_device():
-    """A freshly booted device, listening. One per test, so state cannot leak."""
+def native_device(tmp_path):
+    """A freshly booted device, listening. One per test, so state cannot leak.
+
+    Its settings store is a file under the test's own directory, for the same
+    reason: a device now remembers its wiring, its graph set and whether it
+    should be running trials on its own, and a shared store would make one
+    test's saved settings the next test's boot.
+    """
     if not the_native_device_is_built():
         pytest.skip(REASON_WHEN_NOT_BUILT)
-    device = NativeDeviceOnASocket()
+    device = NativeDeviceOnASocket(store_path=str(tmp_path / "store.bin"))
     device.start()
     try:
         yield device

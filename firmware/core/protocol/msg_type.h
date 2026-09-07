@@ -44,6 +44,8 @@ enum class MsgType : uint8_t {
   State,
   Wiring,
   Pins,
+  Autorun,
+  Save,
 
   // Device -> host.
   HelloAck,
@@ -62,6 +64,8 @@ enum class MsgType : uint8_t {
   StateReport,
   Visit,
   PinMap,
+  AutorunOk,
+  Saved,
 
   /// A `msg_type` this firmware does not know. Never written to the wire: it is
   /// what a name that matched nothing parses to, and it is answered with

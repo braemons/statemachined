@@ -38,6 +38,9 @@ class LinkState(IntEnum):
     IDLE = 1  # greeted; a graph may or may not be committed
     ARMED = 2  # configured for a trial that has not started
     RUNNING = 3  # a trial is in flight
+    # The dwell between two runs a board is driving itself, which only a board
+    # under autorun is ever in. See dev/PROTOCOL.md 3.7.
+    RELIGHTING = 4
 
 
 class Outcome(IntEnum):

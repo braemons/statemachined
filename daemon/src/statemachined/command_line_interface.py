@@ -2,10 +2,10 @@
 """The command line, one subcommand per step of dev/BRINGUP.md.
 
 Nothing here sends a command the operator did not ask for. In particular no
-subcommand says `hello` behind somebody's back: on a bench board the greeting
-ends demo mode for good until reset (BRINGUP.md §4), and a tool that did that
-as a side effect of "just checking the state" would blank the very lamps
-somebody was watching.
+subcommand says `hello` behind somebody's back: greeting a board **takes the
+rig** (PROTOCOL.md §3.7), so a board that was arming its own trials stops -- and
+a tool that did that as a side effect of "just checking the state" would end the
+session somebody was watching.
 """
 
 from __future__ import annotations
@@ -145,7 +145,7 @@ def open_session(args) -> tuple[SerialLink, RequestResponseSession]:
 
 def cmd_hello(args, session: RequestResponseSession) -> int:
     seed = args.seed or random_seed()
-    note("hello ends demo mode for good until the next reset.")
+    note("hello takes the rig: a board arming its own trials stops doing so.")
     ack = session.hello(seed=seed)
     print("hello_ack")
     field("seed", seed)
@@ -261,7 +261,7 @@ def cmd_report(args, session: RequestResponseSession) -> int:
     are not here because no amount of serial traffic can produce them.
     """
     seed = args.seed or random_seed()
-    note("hello ends demo mode for good until the next reset.")
+    note("hello takes the rig: a board arming its own trials stops doing so.")
     ack = session.hello(seed=seed)
     before = session.state()
     for _ in range(args.count):
@@ -321,7 +321,7 @@ def cmd_monitor(args, session: RequestResponseSession) -> int:
     """Read and check whatever the device says, sending nothing.
 
     Deliberately silent on the wire: on a bench board this is the one way to
-    look at the link without ending demo mode.
+    look at the link without taking the rig.
     """
     note("reading, sending nothing. Ctrl-C to stop.")
     try:
@@ -426,19 +426,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--lines", type=int, default=8, help="lines to render when no hello_ack says")
     # The device refuses everything but `hello` before a session exists ("no
     # hello yet"), so `state` on a fresh board needs one -- but greeting it is
-    # what ends demo mode, and that has to stay something somebody asked for
+    # what takes the rig, and that has to stay something somebody asked for
     # rather than something a diagnostic did on its way past.
     p.add_argument(
         "--hello",
         action="store_true",
         help="greet the device first, for commands the device refuses without a session. "
-        "Ends demo mode",
+        "Takes the rig",
     )
     p.add_argument("--version", action="version", version=__version__)
 
     sub = p.add_subparsers(dest="command", required=True)
 
-    s = sub.add_parser("hello", help="open a session; prints scan_hz. Ends demo mode")
+    s = sub.add_parser("hello", help="open a session; prints scan_hz. Takes the rig")
     s.set_defaults(func=cmd_hello)
 
     s = sub.add_parser("state", help="one state_report: io, scan health, link counters")
@@ -516,20 +516,20 @@ def main(argv: list[str] | None = None) -> int:
     try:
         with link:
             if args.hello and args.func not in (cmd_hello, cmd_report, cmd_monitor):
-                note("hello ends demo mode for good until the next reset.")
+                note("hello takes the rig: a board arming its own trials stops doing so.")
                 session.hello(seed=args.seed or random_seed())
             return args.func(args, session)
     except DeviceRefusedTheCommand as exc:
         note(f"device refused it: {exc}")
         if exc.code == ErrorCode.NOT_READY and exc.context == "hello":
             note("       The device answers nothing but `hello` before a session exists.")
-            note("       Add --hello to greet it first -- which ends demo mode until reset.")
+            note("       Add --hello to greet it first -- which takes the rig.")
         return 1
     except NoReplyInTime as exc:
         note(f"timeout: {exc}")
         note("       Nothing was retried on purpose -- a silent retry would hide exactly")
-        note("       the stall this is here to find. If the board is in demo mode it is")
-        note("       still listening; if D13 is dark, the fault is before the link.")
+        note("       the stall this is here to find. If D13 is blinking the board is")
+        note("       booted and scanning; if it is dark, the fault is before the link.")
         return 1
     except KeyboardInterrupt:
         return 130

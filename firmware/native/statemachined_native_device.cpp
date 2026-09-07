@@ -27,6 +27,7 @@
 #include "hal.h"
 #include "io/input_conditioner.h"
 #include "io/reply_queue.h"
+#include "io/settings_store.h"
 #include "protocol/host_link_session.h"
 
 using namespace statemachined;
@@ -82,6 +83,51 @@ void apply_output_update(const OutputUpdate& update) {
     hal::write_outputs(update.set_high, update.set_low);
 }
 
+/// The store, over the HAL's file-backed one -- the same class main.cpp has,
+/// for the same reason: the session touches no port, and this is a port.
+///
+/// It means the daemon's integration tests exercise saving and restoring
+/// against a device that really does forget when the file is removed, rather
+/// than against a mock that agrees with them.
+class FileSettingsPort : public SettingsPort {
+ public:
+  bool has_storage() const override { return hal::storage_capacity() > 0; }
+
+  bool save(const StoredSettings& s, uint32_t write_count) override {
+    if (!hal::storage_write_begin()) return false;
+    Sink sink;
+    if (!save_settings(s, write_count, sink)) return false;
+    return hal::storage_write_commit();
+  }
+
+  SettingsError load(StoredSettings& s) override {
+    Source source;
+    return load_settings(s, source);
+  }
+
+  bool holds(const StoredSettings& s, uint32_t write_count) override {
+    Source source;
+    return settings_already_stored(s, write_count, source);
+  }
+
+ private:
+  class Sink : public SettingsWriter {
+   public:
+    bool write(const void* src, size_t n) override { return hal::storage_write(src, n); }
+  };
+  class Source : public SettingsReader {
+   public:
+    bool read(void* dst, size_t n) override {
+      if (!hal::storage_read(at_, dst, n)) return false;
+      at_ += n;
+      return true;
+    }
+
+   private:
+    size_t at_ = 0;
+  };
+};
+
 }  // namespace
 
 int main() {
@@ -89,6 +135,11 @@ int main() {
 
   QueueingReplySink reply_sink;
   static HostLinkSession session(reply_sink, native_device_identity());
+  static FileSettingsPort settings;
+  session.set_settings_port(&settings);
+  // What this device remembers about itself, before anything is driven -- the
+  // same order, and for the same reasons, as firmware/src/main.cpp.
+  session.restore_settings(hal::micros_now());
 
   ScanHealth scan_health;
   scan_health.hz = kScanHz;

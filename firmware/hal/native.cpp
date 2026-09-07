@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 
 #include "hal.h"
@@ -103,6 +104,82 @@ size_t link_write_some(const char* src, size_t n) {
 }
 
 bool link_up() { return true; }
+
+// -------------------------------------------------------------- the store ---
+//
+// A file, so that the host behaves like a board in the one way that matters
+// here: settings written by one run are there for the next. Named by
+// STATEMACHINED_STORE if the environment says so, which is what lets two native
+// devices in one test run not share a store; otherwise a file in the working
+// directory.
+//
+// The whole store is held in memory, which would be indefensible on the board
+// and is nothing on a host: 8 KB, the size of the RA4M1's data flash, so that a
+// record that would not fit there does not fit here either.
+
+namespace {
+
+constexpr size_t kStoreBytes = 8192;
+uint8_t store_[kStoreBytes];
+bool store_loaded_ = false;
+size_t write_at_ = 0;
+bool write_failed_ = false;
+
+const char* store_path() {
+  const char* p = std::getenv("STATEMACHINED_STORE");
+  return (p != nullptr && p[0] != '\0') ? p : "statemachined-store.bin";
+}
+
+/// Erased flash reads as 0xFF, and so does an absent file. That is what makes a
+/// board nobody has saved to report BadMagic rather than something worse.
+void load_store() {
+  if (store_loaded_) return;
+  store_loaded_ = true;
+  for (size_t i = 0; i < kStoreBytes; ++i) store_[i] = 0xFF;
+  std::FILE* f = std::fopen(store_path(), "rb");
+  if (f == nullptr) return;
+  std::fread(store_, 1, kStoreBytes, f);
+  std::fclose(f);
+}
+
+}  // namespace
+
+size_t storage_capacity() { return kStoreBytes; }
+
+bool storage_read(size_t offset, void* dst, size_t n) {
+  load_store();
+  if (offset + n > kStoreBytes) return false;
+  for (size_t i = 0; i < n; ++i) static_cast<uint8_t*>(dst)[i] = store_[offset + i];
+  return true;
+}
+
+bool storage_write_begin() {
+  load_store();
+  for (size_t i = 0; i < kStoreBytes; ++i) store_[i] = 0xFF;  // the erase
+  write_at_ = 0;
+  write_failed_ = false;
+  return true;
+}
+
+bool storage_write(const void* src, size_t n) {
+  if (write_failed_) return false;
+  if (write_at_ + n > kStoreBytes) {
+    write_failed_ = true;
+    return false;
+  }
+  for (size_t i = 0; i < n; ++i) store_[write_at_ + i] = static_cast<const uint8_t*>(src)[i];
+  write_at_ += n;
+  return true;
+}
+
+bool storage_write_commit() {
+  if (write_failed_) return false;
+  std::FILE* f = std::fopen(store_path(), "wb");
+  if (f == nullptr) return false;
+  const size_t wrote = std::fwrite(store_, 1, kStoreBytes, f);
+  std::fclose(f);
+  return wrote == kStoreBytes;
+}
 
 // ------------------------------------------------------ the rig, simulated ---
 

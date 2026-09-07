@@ -68,6 +68,11 @@
         "outcome_lamp_hold": {
           "kind": "fixed",
           "duration_ms": 400
+        },
+        "inter_trial_interval": {
+          "kind": "uniform",
+          "minimum_ms": 1500,
+          "maximum_ms": 3000
         }
       },
       "states": [
@@ -152,6 +157,7 @@
         {
           "name": "Hit",
           "outcome": "HIT",
+          "relight_after": "inter_trial_interval",
           "on_entry": [
             {
               "line": "reward_valve",
@@ -166,11 +172,13 @@
         },
         {
           "name": "Early",
-          "outcome": "EARLY"
+          "outcome": "EARLY",
+          "relight_after": "inter_trial_interval"
         },
         {
           "name": "Late",
-          "outcome": "LATE"
+          "outcome": "LATE",
+          "relight_after": "inter_trial_interval"
         },
         {
           "name": "Aborted",
@@ -342,6 +350,10 @@
         "step": {
           "kind": "fixed",
           "duration_ms": 500
+        },
+        "pause": {
+          "kind": "fixed",
+          "duration_ms": 1500
         }
       },
       "states": [
@@ -487,6 +499,7 @@
         {
           "name": "Done",
           "outcome": "HIT",
+          "relight_after": "pause",
           "on_entry": [
             {
               "line": "ready_lamp",

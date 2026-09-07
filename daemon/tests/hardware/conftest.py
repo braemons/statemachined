@@ -12,7 +12,7 @@ Three consequences of "one real device" are worth stating, because they shape
 every file here:
 
 * **RequestResponseSession scope, not function scope.** A `hello` costs a round trip and, on a
-  bench board, ends demo mode for good; doing it per test would say nothing new
+  bench board, takes the rig from it; doing it per test would say nothing new
   twenty times. The greeting happens once and the tests share it.
 * **Tests must not leave a trial running.** The device refuses a graph upload
   while one is (`busy`), so one careless test would fail the next four with an

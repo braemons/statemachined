@@ -62,22 +62,23 @@ unknown board prints bare line numbers rather than somebody else's pinout.
 
 | | |
 |---|---|
-| `hello` | opens a session and prints `scan_hz`, the number §4 is for. **Ends demo mode until the next reset** |
+| `hello` | opens a session and prints `scan_hz`, the number §4 is for. **Takes the rig**: a board arming its own trials stops |
 | `state` | one `state_report`: `io.in` / `io.out` as bit rows, scan health, link counters |
 | `watch` | polls `state` and prints `io` as it changes — hold a switch, watch `in` |
 | `ping` | round trip and uptime |
 | `load` | hammers the link, then reports whether `overruns` moved. Exits non-zero if it did |
 | `report` | `hello` + link load + `state`, printed as markdown for HARDWARE.md |
 | `raw` | a hand-written body without its closing brace; the CRC is appended here |
-| `monitor` | reads and CRC-checks lines, **sending nothing** — the one way to watch the link without ending demo mode |
+| `monitor` | reads and CRC-checks lines, **sending nothing** — the one way to watch the link without taking the rig |
 
-Only `hello` and `report` greet the device. Nothing else does, on purpose: a
-tool that ended demo mode as a side effect of "just checking the state" would
-blank the lamps somebody was watching.
+Only `hello` and `report` greet the device. Nothing else does, on purpose:
+greeting a board takes the rig from it, and a tool that ended somebody's
+unattended session as a side effect of "just checking the state" would be a tool
+nobody could safely point at a running box.
 
 The device, however, refuses everything but `hello` before a session exists
 (`not_ready`, context `hello`), so `state`, `watch`, `ping` and `load` need
-`--hello` on a board that has not been greeted yet — which ends demo mode. That
+`--hello` on a board that has not been greeted yet — which takes the rig. That
 is the trade, and it is the operator's to make, not this tool's:
 
 ```sh
@@ -154,7 +155,7 @@ make test-hardware ARGS="-k trial -v"     # ARGS goes straight to pytest
 ```
 
 Connect a board and run it; there is no other setup. It greets the device once
-— **which ends demo mode** — and takes about 40 seconds. It is deliberately not
+— **which takes the rig** — and takes about 40 seconds. It is deliberately not
 part of `make ci`, because a target that fails on every machine without a board
 is a target people learn to ignore.
 
@@ -188,9 +189,9 @@ its own inputs through a graph's entry actions:
 | **D11** → **D7** | output 1 → input 5 | `all` over two lines, `any`, `none` |
 | **D12** → **D8** | output 2 → input 6 | the rising-edge rule, and `level` |
 
-Inputs 4–6 rather than 0–2 because BRINGUP.md §2 wires the demo's switches as a
+Inputs 4–6 rather than 0–2 because BRINGUP.md §2 wires the bench switches as a
 contact to **5 V**, and a jumper driving one of those pins would fight the switch
-when it closed. As it stands the demo wiring and this harness share a board.
+when it closed. As it stands the bench wiring and this harness share a board.
 
 The wires are probed, not declared — a flag saying "the harness is attached"
 would one day be passed against a board with a wire hanging loose, and the tests

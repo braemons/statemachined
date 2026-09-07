@@ -5,7 +5,8 @@
   "distributions": {
     "foreperiod": { "kind": "exponential", "minimum_ms": 500, "maximum_ms": 2500, "mean_ms": 900 },
     "response_window": { "kind": "fixed", "duration_ms": 1000 },
-    "outcome_lamp_hold": { "kind": "fixed", "duration_ms": 400 }
+    "outcome_lamp_hold": { "kind": "fixed", "duration_ms": 400 },
+    "inter_trial_interval": { "kind": "uniform", "minimum_ms": 1500, "maximum_ms": 3000 }
   },
 
   "states": [
@@ -42,13 +43,14 @@
     {
       "name": "Hit",
       "outcome": "HIT",
+      "relight_after": "inter_trial_interval",
       "on_entry": [
         { "line": "reward_valve", "kind": "pulse", "pulse_ms": 40 },
         { "line": "ready_lamp", "kind": "high" }
       ]
     },
-    { "name": "Early", "outcome": "EARLY" },
-    { "name": "Late", "outcome": "LATE" },
+    { "name": "Early", "outcome": "EARLY", "relight_after": "inter_trial_interval" },
+    { "name": "Late", "outcome": "LATE", "relight_after": "inter_trial_interval" },
     { "name": "Aborted", "outcome": "CANCELLED" }
   ]
 }

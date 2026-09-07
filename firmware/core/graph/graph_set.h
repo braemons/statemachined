@@ -115,11 +115,13 @@ enum class GraphError : uint8_t {
   BadTarget,  ///< a transition to a state that does not exist, or to one
               ///< belonging to a different graph in the set
   TooManyGraphs,
-  EmptyGraph,       ///< a slot in the set that no graph_begin filled
-  BadOutputLine,    ///< an action on a line the board cannot represent
-  BadDistribution,  ///< a Choice with no options to choose from
-  BadPulse,         ///< a Pulse with no width, which would never come down
-  NoTerminal,       ///< no terminal state reachable from the entry state
+  EmptyGraph,          ///< a slot in the set that no graph_begin filled
+  RelightOnLiveState,  ///< a dwell on a state that is not terminal, which is
+                       ///< drawn on the end of a run and so could never be read
+  BadOutputLine,       ///< an action on a line the board cannot represent
+  BadDistribution,     ///< a Choice with no options to choose from
+  BadPulse,            ///< a Pulse with no width, which would never come down
+  NoTerminal,          ///< no terminal state reachable from the entry state
   UnreachableState,
 };
 

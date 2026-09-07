@@ -270,6 +270,22 @@ UploadError GraphBuilder::add_state(const JsonObject& m, JsonSpan covered) {
     s.timeout_target = static_cast<StateIndex>(first_state_ + target);
   }
 
+  // Optional, unlike `terminal` and `timeout`, and absent means none. Those two
+  // are required because a graph_state that forgot to mention them would be a
+  // dropped field silently deciding whether a trial can end; a state that says
+  // nothing about relighting is saying the thing every graph written before
+  // this existed says, and it says it unambiguously.
+  if (m.type_of("relight") != JsonType::Missing && !m.is_null("relight")) {
+    uint8_t dist = 0;
+    if (!m.u8("relight", &dist)) return fail(UploadError::BadField, "relight");
+    if (dist >= g_.n_distributions) return fail(UploadError::BadIndex, "relight");
+    // Refused here as well as in validate(), because this one can say which
+    // message was wrong while the upload is still open.
+    if (s.terminal_code == kNotTerminal)
+      return fail(UploadError::BadField, "relight on a state that is not terminal");
+    s.relight_duration = dist;
+  }
+
   g_.states[g_.n_states++] = s;
   ++g_.graphs[g_.n_graphs].n_states;
   current_state_ = static_cast<StateIndex>(first_state_ + i);

@@ -120,6 +120,22 @@ export class DaemonApiClient {
     return this.get("/api/device/firmware");
   }
 
+  // The board on its own. `enabled` is the stored setting and `active` is
+  // whether it is driving trials right now -- a board that was greeted has the
+  // first without the second, which is the rig being taken back.
+
+  readAutorun() {
+    return this.get("/api/device/autorun");
+  }
+
+  setAutorun(wanted) {
+    return this.put("/api/device/autorun", wanted);
+  }
+
+  saveDeviceSettings() {
+    return this.post("/api/device/save");
+  }
+
   readState() {
     return this.get("/api/state");
   }

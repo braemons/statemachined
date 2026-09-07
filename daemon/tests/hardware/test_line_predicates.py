@@ -24,10 +24,10 @@ Three jumper wires, no components. dev/HARDWARE.md has the full line map. The
 tests skip themselves with these instructions when the wires are not there, so
 the suite stays something you can run against a bare board.
 
-**Inputs 4-6, not 0-2.** BRINGUP.md §2 wires the demo's switches as a contact to
+**Inputs 4-6, not 0-2.** BRINGUP.md §2 wires the bench switches as a contact to
 5 V, so a jumper driving input 0 or 1 would be fighting a closed switch -- an
 output pulling low against 5 V. Inputs 4-6 are untouched by §2, so a board can
-carry the demo wiring and this harness at once. Sharing the output pins is
+carry the bench wiring and this harness at once. Sharing the output pins is
 harmless the other way round: a pin drives an LED and a jumper equally well.
 
 One consequence of using outputs as the stimulus is that a line driving an input

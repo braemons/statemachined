@@ -313,6 +313,20 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
     record_.terminal_code = target.terminal_code;
     record_.total_us = since(started_us_, now_us);
     current_ = next;
+    // Drawn here, from the run's own stream, so an inter-trial interval replays
+    // with the trial it followed rather than depending on when somebody next
+    // asked for one. The machine only draws and reports it; what starts another
+    // run is a layer up.
+    record_.relight_ms = (target.relight_duration == kNoRandomDistribution)
+                             ? kNoRelight
+                             : set_->distributions[target.relight_duration].draw(rng_);
+    // The terminal visit is a visit like any other and reports its own entry,
+    // not the entry of whichever state led here: entered_us is now, its
+    // duration is zero because nothing exits it, and the duration it drew is
+    // the dwell -- which is the field that has always meant "what this state
+    // drew on entry".
+    entered_us_ = now_us;
+    timeout_ms_ = record_.relight_ms;
     record_visit(StateExitCause::Terminal, kNoTransition, now_us);
     running_ = false;
 

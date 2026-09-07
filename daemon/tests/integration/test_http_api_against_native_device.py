@@ -1036,3 +1036,79 @@ def test_the_walk_marches_through_its_states_at_500_ms_each(api):
         assert visit["drawn_duration_ms"] == 500
         measured_ms = visit["measured_duration_microseconds"] / 1000
         assert 495 <= measured_ms <= 520, f"{visit['state_name']} dwelt {measured_ms} ms"
+
+
+# --------------------------------------------------- the board on its own ---
+
+
+def self_driving_graph(name: str, milliseconds: int, dwell_ms: int) -> dict:
+    graph = timed_graph(name, milliseconds)
+    graph["distributions"]["iti"] = {"kind": "fixed", "duration_ms": dwell_ms}
+    graph["states"][1]["relight_after"] = "iti"
+    return graph
+
+
+def test_a_board_can_be_handed_the_job_of_arming_its_own_trials(api):
+    api.put("/api/graphs/shaping", json=self_driving_graph("shaping", 40, 20))
+    api.post("/api/session/graphs", json={"graph_names": ["shaping"]})
+
+    handed_over = api.put("/api/device/autorun", json={"enabled": True, "graph_name": "shaping"}).json()
+    assert handed_over["enabled"] is True
+    assert handed_over["active"] is True
+
+    # It runs trials nobody armed, and the daemon reads their results as trials
+    # like any other -- which is what makes an unattended session recordable.
+    assert wait_until(lambda: api.get("/api/trial/result").status_code == 200)
+    first = api.get("/api/trial/result").json()
+    assert first["outcome"] == "HIT"
+    assert wait_until(lambda: api.get("/api/trial/result").json()["trial_id"] > first["trial_id"])
+
+    taken_back = api.put("/api/device/autorun", json={"enabled": False}).json()
+    assert taken_back["active"] is False
+    assert api.get("/api/device/autorun").json()["active"] is False
+
+
+def test_autorun_and_the_settings_it_is_saved_with_are_written_to_the_board(api):
+    # `start_now` false is how a rig is set up: a save is refused on a board
+    # that is running, and a board arming its own trials is never idle, so the
+    # intent is recorded first and the power cycle is what acts on it.
+    api.put("/api/graphs/shaping", json=self_driving_graph("shaping", 40, 20))
+    api.post("/api/session/graphs", json={"graph_names": ["shaping"]})
+    handed_over = api.put(
+        "/api/device/autorun",
+        json={"enabled": True, "graph_name": "shaping", "start_now": False},
+    ).json()
+    assert handed_over["enabled"] is True
+    assert handed_over["active"] is False
+
+    saved = api.post("/api/device/save").json()
+    assert saved["has_set"] is True
+    assert saved["autorun"] is True
+    # Flash wear, made visible rather than left to be discovered.
+    assert saved["written"] is True
+    assert saved["write_count"] == 1
+
+    # And saving again, unchanged, spends no erase cycle: the device compares
+    # before it writes, so a button pressed twice costs the board nothing.
+    again = api.post("/api/device/save").json()
+    assert again["written"] is False
+    assert again["write_count"] == 1
+
+    api.put("/api/device/autorun", json={"enabled": False})
+
+
+def test_handing_the_rig_over_is_written_down_beside_the_trials(api):
+    # "Who armed trial 412" is a question the record has to answer: a run the
+    # device armed itself looks otherwise identical to one the daemon armed.
+    api.put("/api/graphs/shaping", json=self_driving_graph("shaping", 40, 20))
+    api.post("/api/session/graphs", json={"graph_names": ["shaping"]})
+    api.put(
+        "/api/device/autorun",
+        json={"enabled": True, "graph_name": "shaping", "start_now": False},
+    )
+    api.post("/api/device/save")
+    api.put("/api/device/autorun", json={"enabled": False})
+
+    kinds = [entry["kind"] for entry in api.get("/api/trace").json()["entries"]]
+    assert "autorun_changed" in kinds
+    assert "settings_saved" in kinds

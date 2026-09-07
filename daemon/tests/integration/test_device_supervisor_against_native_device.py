@@ -29,6 +29,11 @@ from statemachined.model.graph_definition import GraphDefinition
 from statemachined.model.line_map import LineMap
 from statemachined.model.trial_outcome import TrialCancelReason, TrialOutcome
 
+# conftest.py puts daemon/bench on sys.path: the socket bridge is shared with
+# the bench so there is only one of it. The power-cut test needs to start a
+# second device on the same store, which the one-per-test fixture cannot do.
+from native_device_on_a_socket import NativeDeviceOnASocket  # noqa: E402
+
 
 def bench_line_map() -> LineMap:
     """A rig with nothing plugged into it, which is what a native device is."""
@@ -279,3 +284,114 @@ def test_a_fixed_seed_survives_a_reconnect_when_one_was_configured(native_device
         assert supervisor.session_seed == "0123456789ABCDEF"
     finally:
         supervisor.disconnect()
+
+
+# ------------------------------------------------- the board on its own ---
+
+
+def self_driving_graph(name: str, milliseconds: int, dwell_ms: int) -> GraphDefinition:
+    """The same trial, with the terminal state declaring how long to hold before
+    another may start."""
+    definition = timed_graph(name, milliseconds).model_dump()
+    definition["distributions"]["iti"] = {"kind": "fixed", "duration_ms": dwell_ms}
+    for state in definition["states"]:
+        if state["name"] == "Hit":
+            state["relight_after"] = "iti"
+    return GraphDefinition.model_validate(definition)
+
+
+def test_a_board_told_to_drive_itself_runs_trial_after_trial(supervisor):
+    """No configure, no start: the device is the authority because nothing else
+    is there to be one. dev/PROTOCOL.md 3.7."""
+    supervisor.upload_graph_set([self_driving_graph("shaping", 40, 20)], set_version=1)
+    reply = supervisor.set_autorun(True, graph_name="shaping", first_trial_id=500)
+    assert reply["enabled"] is True
+    assert reply["active"] is True
+
+    results = []
+    for _ in range(3):
+        results.append(supervisor.wait_for_trial_result(timeout=5.0))
+    assert [r.trial_id for r in results] == [500, 501, 502]
+    assert all(r.outcome is TrialOutcome.HIT for r in results)
+
+    supervisor.set_autorun(False)
+    assert supervisor.read_autorun()["active"] is False
+
+
+def test_a_host_that_greets_takes_the_rig(supervisor, native_device):
+    """The stored setting survives; the driving stops. A daemon that crashed must
+    not leave a board rewarding an animal nobody is watching."""
+    supervisor.upload_graph_set([self_driving_graph("shaping", 40, 20)], set_version=1)
+    supervisor.set_autorun(True, graph_name="shaping")
+    supervisor.wait_for_trial_result(timeout=5.0)
+
+    supervisor.disconnect()
+    supervisor.connect_and_greet()
+    autorun = supervisor.read_autorun()
+    assert autorun["enabled"] is True  # the setting is still there
+    assert autorun["active"] is False  # and it is not driving any more
+    assert supervisor.read_state_report()["autorun"] is False
+
+
+def started_trial_ids(messages: list[dict]) -> list[int]:
+    """The trials a watching daemon saw end, in order."""
+    return [
+        int(m["trial_id"])
+        for m in messages
+        if m.get("msg_type") == "result_begin" and "trial_id" in m
+    ]
+
+
+def test_a_board_comes_back_from_a_power_cut_running_what_it_was_told_to_run(
+    native_device, tmp_path
+):
+    """The whole of standalone operation, against the firmware's own binary:
+    upload, arm autorun, save, kill the device, start it again on the same store
+    -- and it comes up running trials with nobody having said hello."""
+    store = str(tmp_path / "restored-store.bin")
+    first = NativeDeviceOnASocket(store_path=store)
+    first.start()
+    try:
+        supervisor = DeviceSupervisor(first.target_url, bench_line_map(), timeout=5.0)
+        supervisor.connect_and_greet()
+        supervisor.push_wiring()
+        supervisor.upload_graph_set([self_driving_graph("shaping", 40, 20)], set_version=3)
+        supervisor.set_autorun(True, graph_name="shaping", first_trial_id=900)
+        saved = supervisor.save_settings()
+        assert saved["has_set"] is True
+        assert saved["autorun"] is True
+        assert saved["write_count"] == 1
+        supervisor.disconnect()
+    finally:
+        first.stop()
+
+    # The power cut. Same store, new process, and nothing greets it until after
+    # it has already been running.
+    second = NativeDeviceOnASocket(store_path=store)
+    second.start()
+    try:
+        # Connect without greeting, so the board keeps driving itself while the
+        # daemon merely listens -- which is what a bystander sees. It cannot
+        # *name* what it sees: naming a result needs the graph, and this daemon
+        # has not been given one on this connection. The trial ids are enough to
+        # prove the board is running on its own.
+        seen: list[dict] = []
+        after = DeviceSupervisor(
+            second.target_url,
+            bench_line_map(),
+            timeout=5.0,
+            on_unsolicited_message=seen.append,
+        )
+        after.connect_and_watch()
+        deadline = time.time() + 5.0
+        while len(started_trial_ids(seen)) < 2 and time.time() < deadline:
+            after.pump_incoming_lines(budget_seconds=0.05)
+        assert started_trial_ids(seen)[:2] == [900, 901]
+
+        # Only now does anybody greet, and that takes the rig.
+        after.connect_and_greet()
+        assert after.read_state_report()["autorun"] is False
+        assert after.read_autorun()["enabled"] is True
+        after.disconnect()
+    finally:
+        second.stop()

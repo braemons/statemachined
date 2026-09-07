@@ -50,6 +50,13 @@ the trial type.**
 - **Cancellation is a forced transition** through the ordinary exit path, so
   every output a state raised is lowered by the same code that lowers it on any
   other transition. A valve cannot be left open by a graph that forgot something.
+- **It can run with nothing attached.** A board remembers its wiring, its graph
+  set and whether it should be arming its own trials, and comes up doing it after
+  a power cut. The interval between trials is the dwell each terminal state
+  declares — in the graph, because it is a paradigm decision that has to replay
+  with the trial it followed; acted on only by a board driving itself, because
+  who arms trials is a fact about the deployment. A terminal state declaring no
+  dwell is where such a session stops. Greeting a board takes the rig back.
 - **Portable core.** The engine, codec and protocol are plain C++17 with no
   `Arduino.h`; hardware is seven functions behind a HAL. The same code runs on the
   host, which is what makes the tests real.
@@ -90,8 +97,8 @@ and a devcontainer that pins the same versions CI uses.
 
 ## Try it on a board
 
-You do not need the host bridge, or a host at all, to see this run. Flash it and
-the board runs a built-in demo graph until something greets it:
+Flash it, hand it a graph once, and it will run that graph with nothing plugged
+into it — including after a power cut.
 
 ```sh
 make upload
@@ -101,26 +108,41 @@ make upload
 that makes each stage fail on its own before the next one depends on it.
 
 With **nothing wired**, the on-board LED on D13 blinks once a second — the board
-booted, the timer ISR fires, the scan loop turns. With two switches and six LEDs
-(wiring, including the pull-downs you do need, in
-[`dev/HARDWARE.md`](dev/HARDWARE.md)) the ready lamp lights, a press on the start
-switch walks one LED across five outputs at 500 ms a step, and the trial ends as
-a `Hit` — or as `Cancelled` if you press abort on the way past.
+booted, the timer ISR fires, the scan loop turns. That is the whole of what a
+board nobody has spoken to does: it holds no graph until one is uploaded,
+because a device that runs a paradigm nobody uploaded is a hazard.
 
-Every CI run publishes a flashable image as an artifact
-(`statemachined-uno_r4_minima-<sha>`), so a board can be brought up without a toolchain:
-a **bench** image with demo mode on, a **rig** image with it compiled out, and a
-`MANIFEST.txt` recording the commit, sizes and checksums — a board in a rack
-cannot be asked which commit it is running. `make image` builds the same thing
-locally.
+To make it visible, give it one. With two switches and three LEDs (wiring,
+including the pull-downs you do need, in
+[`dev/HARDWARE.md`](dev/HARDWARE.md)), upload `graphs/state-walk.json`, tell the
+board to arm its own trials and save:
 
-It is the real engine on a real graph: the same `TrialRunner`, the same
-`validate()`, the same conditioned input word, built by
-`firmware/core/demo/demo_graph.cpp` and run on the host by its own test. It is
-**not** a fallback paradigm — the first `hello` ends it for good and hands every
-line back, so a rig cannot quietly run the demo while somebody believes it is
-running an experiment. A deployed build can drop it entirely with
-`-DSTATEMACHINED_DEMO=0`, which is worth 4.6 KB of SRAM.
+```sh
+make bringup TARGET=/dev/ttyACM0     # greet it, and see what it says
+# then, from the web UI or the API: upload state-walk, "let the board run
+# itself", "save to the board"
+```
+
+The ready lamp lights, a press on the start switch walks one lamp across three
+outputs at 500 ms a step, the trial ends as a `Hit`, and 1.5 s later it goes
+again. Unplug the USB cable and it keeps going; power-cycle it and it comes back
+doing the same thing, because the graph, the wiring and the instruction to run
+it are in the board's own data flash.
+
+**There is no demo mode any more, and that is the point.** This firmware used to
+carry a paradigm compiled into it, so that a bench board did something watchable
+before anything greeted it — which cost 4.6 KB of SRAM and meant two kinds of
+image, one of which had the demo compiled out so that a rig could not quietly
+run it while somebody believed it was running an experiment. A board that runs
+a real uploaded graph out of its own storage is strictly better: what you watch
+is evidence about the whole path rather than about a parallel one, the paradigm
+is a file you can edit, and there is one binary to flash.
+
+Every CI run publishes that binary as an artifact
+(`statemachined-uno_r4_minima-<sha>`), so a board can be brought up without a
+toolchain, with a `MANIFEST.txt` recording the commit, sizes and checksums — a
+board in a rack cannot be asked which commit it is running. `make image` builds
+the same thing locally.
 
 ## Target hardware
 

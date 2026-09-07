@@ -212,6 +212,64 @@ agree. See DAEMON.md §6.3. Flashing is not here and is deferred: it means
 dropping the port mid-session, which is a different risk from anything else the
 daemon does.
 
+### `GET·PUT /api/device/autorun`
+
+Who arms the trials. The switch that makes this daemon optional: with it on, the
+board starts each run itself and takes the interval between them from the dwell
+the terminal state it reached declared. See dev/PROTOCOL.md §3.7 — the timing is
+in the graph, the authority is here, and a graph that declares a dwell runs
+unchanged under a triald that arms every trial itself.
+
+```json
+PUT {"enabled": true, "graph_name": "shaping", "cap_milliseconds": 30000,
+     "seed": 81985529216486895, "first_trial_id": 1, "start_now": true}
+```
+
+`graph_name`, never a slot, like everything else here. Left out when enabling,
+the session's active graph is used. `start_now` false records that this board
+should drive itself **without starting it**, which is how a rig is set up: a
+save is refused on a board that is running, and a board arming its own trials is
+never idle.
+
+The reply's `enabled` and `active` are not the same fact. `enabled` is the
+stored setting and survives; `active` is whether the board is driving trials
+right now. A daemon that greeted a self-driving board sees `enabled` true and
+`active` false — greeting a board takes the rig back, deliberately, so that a
+daemon which crashed cannot leave a board rewarding an animal nobody is
+watching.
+
+Refused 409 `no_graph_named` if enabling with no graph named and none active,
+and with the device's own `busy`, `not_ready` or `bad_index` otherwise. Turning
+it **off** is never refused as busy: the run in flight ends through the ordinary
+exit path, with its result reported, exactly as a cancel does.
+
+### `POST /api/device/save`
+
+Write the board's wiring, graph set and autorun settings to its own storage, so
+that all three survive a power cut. dev/PROTOCOL.md §3.8. No body: what is saved
+is what is there, because a save that took its own copy of the settings would be
+a second place for them to disagree.
+
+```json
+{"has_set": true, "set_version": 7, "autorun": true, "write_count": 3, "written": true}
+```
+
+`write_count` is flash wear made visible — the reference board's data flash is
+good for about 100,000 erase cycles, and this is a rig saying where it is in
+that budget rather than failing one day. A save that would store what is already
+stored answers `"written": false`, writes nothing and leaves the counter alone:
+the device compares before it writes, so pressing the button twice costs no
+erase cycle. Refused 409 `busy` while a trial is
+running (erasing data flash blocks for tens of milliseconds against a 100 µs
+scan), `not_ready` on a board with nowhere to keep settings, and `storage` if
+the write did not land — in which case the store holds no valid record and the
+board will come up on its compiled-in defaults.
+
+Both of these are written to the trace, as `autorun_changed` and
+`settings_saved`: "who armed trial 412" is a question the record has to be able
+to answer, and a run the device armed itself looks otherwise identical to one
+this daemon armed.
+
 ---
 
 ## 4. Graphs

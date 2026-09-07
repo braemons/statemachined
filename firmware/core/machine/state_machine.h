@@ -94,8 +94,21 @@ struct StateMachineRunRecord {
   uint32_t first_seq() const { return total_visits - path_len; }
   Microseconds total_us = 0;
   TerminalCode terminal_code = kNotTerminal;  ///< set if a terminal state was reached
-  bool force_ended = false;                   ///< ended by force_end() rather than by the graph
-  bool hit_run_cap = false;                   ///< ...and specifically by the cap
+
+  /// The dwell the terminal state reached declared, drawn on arrival -- how
+  /// long before another run may start. kNoRelight when the terminal state
+  /// declares none, and on a run that ended any other way: a cancelled run
+  /// reached no terminal state and so was told nothing about what comes after
+  /// it.
+  ///
+  /// The machine draws it and reports it, and does nothing else with it.
+  /// Restarting is a decision about the device, not about the run, and it is
+  /// taken a layer up (see HostLinkSession's autorun) -- which is what keeps
+  /// this record what it has always been: an account of one run, with no
+  /// interpretation attached.
+  Milliseconds relight_ms = kNoRelight;
+  bool force_ended = false;  ///< ended by force_end() rather than by the graph
+  bool hit_run_cap = false;  ///< ...and specifically by the cap
 };
 
 class StateMachine {

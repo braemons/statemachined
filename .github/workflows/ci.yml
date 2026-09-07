@@ -92,9 +92,6 @@ jobs:
           key: pio-${{ matrix.env }}-${{ hashFiles('platformio.ini') }}
       - run: make install-pio
       - run: make firmware BOARD=${{ matrix.env }}
-      # Demo mode is 4.6 KB of SRAM on a 32 KB board, so a rig build drops it.
-      # Compiled here too, or the #else half of that switch rots unnoticed.
-      - run: make firmware-rig BOARD=${{ matrix.env }}
 
   image:
     name: a flashable image
@@ -113,7 +110,7 @@ jobs:
             ~/.cache/uv
           key: pio-uno_r4_minima-${{ hashFiles('platformio.ini') }}
       - run: make install-pio
-      # Builds the bench and rig images and writes image/MANIFEST.txt, which
+      # Builds the flashable image and writes image/MANIFEST.txt, which
       # records the commit, the sizes and the checksums next to the binaries --
       # a board in a rack cannot be asked which commit it is running.
       - run: make image

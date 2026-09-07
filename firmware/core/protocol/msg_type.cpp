@@ -27,6 +27,8 @@ const char* const kNames[] = {
     "state",
     "wiring",
     "pins",
+    "autorun",
+    "save",
 
     "hello_ack",
     "ack",
@@ -44,6 +46,8 @@ const char* const kNames[] = {
     "state_report",
     "visit",
     "pin_map",
+    "autorun_ok",
+    "saved",
 };
 
 constexpr uint8_t kKnown = static_cast<uint8_t>(MsgType::Unknown);

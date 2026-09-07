@@ -13,6 +13,13 @@ constexpr uint16_t kProtocolVersion = 1;
 /// minute wrap because unsigned subtraction is.
 Microseconds since(Microseconds from, Microseconds to) { return to - from; }
 
+/// Has `deadline` passed? The signed difference, so it stays right across that
+/// same wrap -- correct while the deadline is within ~35 minutes of now, which
+/// an inter-trial interval is.
+bool reached(Microseconds deadline, Microseconds now) {
+  return static_cast<int32_t>(now - deadline) >= 0;
+}
+
 const char* cause_name(StateExitCause c) {
   switch (c) {
     case StateExitCause::Timeout:
@@ -141,7 +148,10 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
   // hello is the only thing accepted before a hello: everything else needs a
   // session seed, and a device answering commands without one would be running
   // trials nobody could replay.
-  if (state_ == LinkState::Greeting && t != MsgType::Hello) {
+  // Not `state_ == Greeting`: a board driving itself from stored settings is
+  // Running with nobody having greeted it, and it must still refuse every
+  // command from a host that skipped the handshake.
+  if (!greeted_ && t != MsgType::Hello) {
     send_error(message_id, "not_ready", "no hello yet", "hello");
     return;
   }
@@ -151,7 +161,7 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
   // of a command refused as unknown_type on somebody's bench.
   switch (t) {
     case MsgType::Hello:
-      return on_hello(m, message_id);
+      return on_hello(m, message_id, now_us);
     case MsgType::Ping:
       return on_ping(message_id, now_us);
     case MsgType::State:
@@ -160,6 +170,10 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
       return on_wiring(m, message_id);
     case MsgType::Pins:
       return on_pins_request(m, message_id);
+    case MsgType::Autorun:
+      return on_autorun(m, message_id, now_us);
+    case MsgType::Save:
+      return on_save(message_id);
     case MsgType::Configure:
       return on_configure(m, message_id);
     case MsgType::Start:
@@ -196,6 +210,8 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
     case MsgType::StateReport:
     case MsgType::Visit:
     case MsgType::PinMap:
+    case MsgType::AutorunOk:
+    case MsgType::Saved:
     case MsgType::Unknown:
       break;
   }
@@ -205,7 +221,7 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
 
 // -------------------------------------------------------------- handlers ---
 
-void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id) {
+void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id, Microseconds now_us) {
   uint16_t proto = 0;
   if (!m.u16("proto", &proto)) {
     send_error(message_id, "bad_json", "no proto", "proto");
@@ -225,10 +241,30 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id) {
   // NOT clear the committed graph: reconnecting the bridge must not cost a
   // re-upload.
   session_seed_ = seed;
+  // A host that greets takes the rig. A board driving itself has to stop --
+  // through the ordinary exit path, so whatever the current state raised comes
+  // down -- because two authorities arming trials on one box is a rig running
+  // trials nobody ordered. The stored setting survives, so the next boot still
+  // comes up self-driving; what ends is this board doing it while somebody is
+  // watching. It has to be an explicit `autorun` to start again, and that is
+  // the point: a daemon that crashed must not be able to leave an animal being
+  // rewarded by a box nobody is attending.
+  autorun_active_ = false;
+  greeted_ = true;
   revert_distribution_patches();
   builder_.abandon();
   reader_.reset();
-  state_ = LinkState::Idle;
+  // A hello ends whatever was running, and ends it through the ordinary exit
+  // path: the run is cancelled here and the next scan emits its result and
+  // lowers its lines, exactly as a `cancel` from the host does. Resetting
+  // straight to Idle instead -- which is what this did while only a host could
+  // start a trial -- abandoned the run silently, leaving no result and its
+  // lines up until something else happened to move them.
+  if (state_ == LinkState::Running) {
+    runner_.cancel(TrialCancelReason::Host, now_us);
+  } else {
+    state_ = LinkState::Idle;
+  }
   armed_trial_id_ = 0;
 
   JsonWriter w(tx_, sizeof(tx_));
@@ -457,6 +493,244 @@ void HostLinkSession::on_upload_message(const JsonObject& m, JsonSpan covered,
   send(w, message_id);
 }
 
+// ---------------------------------------------------------------- autorun ---
+
+bool HostLinkSession::begin_autorun(const AutorunConfig& c, Microseconds now_us) {
+  // A board that armed itself against a set it does not have would be a rig
+  // running nothing while reporting that it is running something.
+  if (!have_set_ || c.graph_index >= live_set_.n_graphs) return false;
+
+  end_autorun(now_us);
+  autorun_ = c;
+  autorun_.enabled = true;
+  autorun_active_ = true;
+  autorun_next_trial_id_ = c.first_trial_id;
+
+  runner_ = TrialRunner(live_set_, autorun_.graph_index);
+  rebind_runner();
+  runner_.set_trial_cap_ms(autorun_.cap_ms);
+
+  // Due immediately, and started by the next scan rather than here: this is not
+  // the scan's thread of control, and nothing else in this class drives a pin
+  // from anywhere else either.
+  state_ = LinkState::Relighting;
+  relight_at_us_ = now_us;
+  return true;
+}
+
+void HostLinkSession::end_autorun(Microseconds now_us) {
+  if (!autorun_active_) return;
+  autorun_active_ = false;
+  if (state_ == LinkState::Running) {
+    // Through the ordinary exit path, like every other cancel: whatever the
+    // current state raised comes down by the code that always lowers it, the
+    // outputs are owed to the next advance_trial(), and that same scan emits
+    // the result. Forcing Idle here instead would end the run with no account
+    // of it, which is the one thing this device is for.
+    runner_.cancel(TrialCancelReason::Host, now_us);
+    return;
+  }
+  state_ = LinkState::Idle;
+}
+
+void HostLinkSession::on_autorun(const JsonObject& m, uint16_t message_id,
+                                 Microseconds now_us) {
+  // No `enabled` is a question rather than an instruction: report what the
+  // board would do, change nothing. Worth having as its own shape because the
+  // settings outlive the session that set them, so "what are you configured to
+  // do on your own?" is a question a freshly connected daemon has.
+  const bool asking = m.type_of("enabled") == JsonType::Missing;
+
+  if (!asking) {
+    bool enabled = false;
+    if (!m.boolean("enabled", &enabled)) {
+      send_error(message_id, "bad_json", "enabled", "enabled");
+      return;
+    }
+    AutorunConfig c = autorun_;
+    if (m.type_of("graph_index") != JsonType::Missing && !m.u8("graph_index", &c.graph_index)) {
+      send_error(message_id, "bad_json", "graph_index", "graph_index");
+      return;
+    }
+    if (m.type_of("cap_ms") != JsonType::Missing && !m.i32("cap_ms", &c.cap_ms)) {
+      send_error(message_id, "bad_json", "cap_ms", "cap_ms");
+      return;
+    }
+    if (m.type_of("seed") != JsonType::Missing && !m.hex64("seed", &c.seed)) {
+      send_error(message_id, "bad_json", "seed must be a hex string", "seed");
+      return;
+    }
+    if (m.type_of("first_trial_id") != JsonType::Missing &&
+        !m.u32("first_trial_id", &c.first_trial_id)) {
+      send_error(message_id, "bad_json", "first_trial_id", "first_trial_id");
+      return;
+    }
+
+    // Whether to start driving *now*, as opposed to merely recording that this
+    // board should. The two are separate because saving requires an idle board:
+    // a board already arming its own trials is never idle, so "enable it, then
+    // write it down" would be a sequence that could not be performed. With
+    // this, a rig is set up while nothing is running -- enable, save, power
+    // cycle -- and comes up self-driving from its own storage.
+    bool start_now = true;
+    if (m.type_of("start_now") != JsonType::Missing && !m.boolean("start_now", &start_now)) {
+      send_error(message_id, "bad_json", "start_now", "start_now");
+      return;
+    }
+
+    if (enabled) {
+      if (!have_set_) {
+        send_error(message_id, "not_ready", "no graph set has been committed", "graph");
+        return;
+      }
+      if (c.graph_index >= live_set_.n_graphs) {
+        send_error(message_id, "bad_index", "no graph in that slot", "graph_index");
+        return;
+      }
+      // Refused rather than silently taking effect at the end of the trial: a
+      // command that hands the board a *new* job must not land while it is
+      // doing one. Turning autorun OFF is deliberately not refused -- "stop" is
+      // the thing somebody most wants while it is running, and it ends the run
+      // through the ordinary exit path exactly as `cancel` does.
+      if (state_ == LinkState::Running && !autorun_active_) {
+        send_error(message_id, "busy", "a trial is running", "trial");
+        return;
+      }
+      if (start_now) {
+        begin_autorun(c, now_us);
+      } else {
+        end_autorun(now_us);
+        autorun_ = c;
+        autorun_.enabled = true;
+        autorun_next_trial_id_ = c.first_trial_id;
+      }
+    } else {
+      end_autorun(now_us);
+      autorun_ = c;
+      autorun_.enabled = false;
+    }
+  }
+
+  JsonWriter w(tx_, sizeof(tx_));
+  w.begin(msg_type_name(MsgType::AutorunOk), tx_message_id_);
+  w.in_reply_to(message_id);
+  w.key_bool("enabled", autorun_.enabled);
+  // Not the same fact: the setting is stored and survives a takeover, while
+  // `active` is whether this board is driving trials right now. A daemon that
+  // greeted a self-driving board sees enabled true and active false, which is
+  // exactly what happened.
+  w.key_bool("active", autorun_active_);
+  w.key_u32("graph_index", autorun_.graph_index);
+  w.key_i32("cap_ms", autorun_.cap_ms);
+  w.key_u32("next_trial_id", autorun_next_trial_id_);
+  send(w, message_id);
+}
+
+// --------------------------------------------------------------- settings ---
+
+SettingsError HostLinkSession::restore_settings(Microseconds now_us) {
+  if (settings_ == nullptr || !settings_->has_storage()) return SettingsError::Io;
+
+  StoredSettings stored;
+  stored.set = &live_set_;
+  const SettingsError e = settings_->load(stored);
+  if (e != SettingsError::None) return e;
+
+  settings_write_count_ = stored.write_count;
+  // `from_host` is false: hello_ack's has_wiring says whether a *host* has
+  // configured this board, and a wiring this board remembered about itself is
+  // not that. The daemon still needs to know it should push one.
+  set_wiring(stored.wiring, false);
+
+  if (stored.has_set) {
+    // Validated, not trusted. The record's CRC says the bytes are the ones that
+    // were written; it says nothing about whether they were a graph worth
+    // running, and a set that came back with an index out of range would fault
+    // the first time a trial reached it.
+    if (validate(live_set_) != GraphError::None) {
+      live_set_ = GraphSet{};
+      have_set_ = false;
+      return SettingsError::TooBig;
+    }
+    have_set_ = true;
+    runner_ = TrialRunner(live_set_, 0);
+    rebind_runner();
+  }
+
+  autorun_ = stored.autorun;
+  // The one path into self-driving that no host asked for. It is deliberate:
+  // this is the board that comes up on its own with nothing plugged into it,
+  // which is the whole point of having a store. A record that says nothing
+  // about autorun leaves the board exactly as it was -- waiting for a host.
+  if (autorun_.enabled && have_set_) begin_autorun(autorun_, now_us);
+  return SettingsError::None;
+}
+
+void HostLinkSession::on_save(uint16_t message_id) {
+  if (settings_ == nullptr || !settings_->has_storage()) {
+    send_error(message_id, "not_ready", "this board has nowhere to keep settings", "storage");
+    return;
+  }
+  // A save erases and programs data flash, which on this part blocks for long
+  // enough to cost scan periods -- tens of milliseconds against a 100 us scan.
+  // Refused while a trial is running rather than quietly stalling the timing
+  // authority in the middle of a response window.
+  if (state_ == LinkState::Running) {
+    send_error(message_id, "busy", "a trial is running", "trial");
+    return;
+  }
+
+  StoredSettings stored;
+  stored.wiring = wiring_;
+  stored.autorun = autorun_;
+  stored.set = &live_set_;
+  stored.has_set = have_set_;
+
+  // An erase cycle spent to change nothing is an erase cycle spent, and there is
+  // a button in the web UI that invites being pressed twice. So the store is
+  // compared against first -- streamed, a few bytes at a time, no second copy --
+  // and a save that would write the same record writes nothing and says so.
+  //
+  // The counter does not move either: it counts writes to the part, which is
+  // the number the endurance budget is about, and a "save" that wrote nothing
+  // is not one of them.
+  if (settings_->holds(stored, settings_write_count_)) {
+    JsonWriter unchanged(tx_, sizeof(tx_));
+    unchanged.begin(msg_type_name(MsgType::Saved), tx_message_id_);
+    unchanged.in_reply_to(message_id);
+    unchanged.key_bool("has_set", have_set_);
+    unchanged.key_u32("set_version", have_set_ ? live_set_.version : 0);
+    unchanged.key_bool("autorun", autorun_.enabled);
+    unchanged.key_u32("write_count", settings_write_count_);
+    unchanged.key_bool("written", false);
+    send(unchanged, message_id);
+    return;
+  }
+
+  const uint32_t next = settings_write_count_ + 1;
+  if (!settings_->save(stored, next)) {
+    // The store now holds no valid record, which the CRC turns into "this board
+    // has forgotten" at the next boot rather than into something wrong. Saying
+    // so is the point: a rig whose settings did not persist must not find out
+    // after the power cut.
+    send_error(message_id, "storage", "the settings were not written", "storage");
+    return;
+  }
+  settings_write_count_ = next;
+
+  JsonWriter w(tx_, sizeof(tx_));
+  w.begin(msg_type_name(MsgType::Saved), tx_message_id_);
+  w.in_reply_to(message_id);
+  w.key_bool("has_set", have_set_);
+  w.key_u32("set_version", have_set_ ? live_set_.version : 0);
+  w.key_bool("autorun", autorun_.enabled);
+  // Flash wear, as a number somebody can see. About 100,000 erase cycles is the
+  // budget on the reference board.
+  w.key_u32("write_count", settings_write_count_);
+  w.key_bool("written", true);
+  send(w, message_id);
+}
+
 void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
   if (!have_set_) {
     send_error(message_id, "not_ready", "no graph set has been committed", "graph");
@@ -464,6 +738,14 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
   }
   if (state_ == LinkState::Running) {
     send_error(message_id, "busy", "a trial is already running", "trial");
+    return;
+  }
+  // One authority at a time. A host arming trials on a board that is also
+  // arming its own would give two runs the same board and one of them the
+  // wrong id; disabling autorun first is one message and says which of the two
+  // is in charge.
+  if (autorun_active_) {
+    send_error(message_id, "busy", "the device is driving itself", "autorun");
     return;
   }
 
@@ -749,6 +1031,13 @@ void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us)
   w.key_u32("index", runner_.graph_index());
   w.end_object();
   w.key_bool("has_wiring", have_wiring_);
+  // Whether this board is arming its own trials. `link_state` already says
+  // Relighting during the dwell between two of them, but not while one is in
+  // flight -- and "who started this trial" is exactly what a daemon that has
+  // just connected to a rig needs to know. This takes state_report to
+  // kJsonMaxMembers exactly: another top-level member here is a message the
+  // device's own parser would refuse, so anything further nests.
+  w.key_bool("autorun", autorun_active_);
   w.key_u32("trial_id", armed_trial_id_);
   w.key_bool("running", runner_.running());
   w.key_u32("current_state", runner_.current_state());
@@ -799,6 +1088,14 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
 
   if (state_ != LinkState::Running) {
     OutputUpdate idle = runner_.service_outputs(now_us);
+    // The dwell a terminal state declared has run out, so another run begins.
+    // Here rather than in the link's thread of control for the reason every
+    // other output on this device is: the scan drives the pins.
+    if (state_ == LinkState::Relighting && reached(relight_at_us_, now_us)) {
+      const OutputUpdate entry_ops = start_autorun_trial(word, now_us);
+      idle.set_high = (idle.set_high | entry_ops.set_high) & ~entry_ops.set_low;
+      idle.set_low = (idle.set_low | entry_ops.set_low) & ~entry_ops.set_high;
+    }
     idle.set_high = (owed.set_high | idle.set_high) & ~idle.set_low;
     idle.set_low = (owed.set_low | idle.set_low) & ~idle.set_high;
     return idle;
@@ -809,18 +1106,59 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
   ops.set_low = (owed.set_low | ops.set_low) & ~ops.set_high;
   if (!runner_.running()) {
     // The host learns of an outcome without having to ask for it. A trial that
-    // ended silently would be indistinguishable from a hung one.
+    // ended silently would be indistinguishable from a hung one. Under autorun
+    // there may be nobody to hear it, which changes nothing: the result is the
+    // device's account of what it did, and a board that stopped writing them
+    // down when the port closed would be a board whose record depended on who
+    // was watching.
     emit_result();
     // After the result, not before: the record reports the durations that were
     // drawn, and the patch is what they were drawn from.
     revert_distribution_patches();
-    state_ = LinkState::Idle;
+
+    // The graph says when another run may begin; whether anything acts on it is
+    // this. A dwell of kNoRelight -- a terminal state that declares none, or a
+    // run that was cancelled and so reached no terminal state at all -- stops
+    // the board, which is how a paradigm says "this outcome ends the session".
+    const Milliseconds dwell = runner_.run_record().relight_ms;
+    if (autorun_active_ && dwell >= 0) {
+      state_ = LinkState::Relighting;
+      relight_at_us_ = now_us + static_cast<Microseconds>(dwell) * 1000u;
+    } else {
+      autorun_active_ = false;
+      state_ = LinkState::Idle;
+    }
   }
   return ops;
 }
 
+OutputUpdate HostLinkSession::start_autorun_trial(LineBitmask word, Microseconds now_us) {
+  // Its own id, counted on the device, because there is no host to assign one.
+  // The per-trial stream is derived from it exactly as a host-driven trial's
+  // is, so an unattended session replays from the stored seed alone.
+  armed_trial_id_ = autorun_next_trial_id_++;
+  state_ = LinkState::Running;
+  return runner_.start(armed_trial_id_, autorun_.seed, now_us, word);
+}
+
 OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
   OutputUpdate ops;
+  // A board that was explicitly told to drive itself is doing what it was asked
+  // to do, and the port closing is not news to it: an unplugged cable is the
+  // expected end of the "upload a paradigm, then detach" workflow, not a
+  // failure. Nothing is cancelled and nothing fails safe -- which is why
+  // enabling autorun takes a command of its own rather than being something a
+  // dropped link can arrive at by accident.
+  //
+  // The reader and the duplicate guard still reset, because those belong to the
+  // session that has just ended rather than to the run that is still going.
+  if (autorun_active_) {
+    reader_.reset();
+    guard_.forget();
+    builder_.abandon();
+    greeted_ = false;
+    return ops;
+  }
   pending_ops_ = OutputUpdate{};
   if (state_ == LinkState::Running) {
     runner_.cancel(TrialCancelReason::LinkLost, now_us);
@@ -833,6 +1171,7 @@ OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
   // bridge that comes back does not have to re-upload one. It sends hello
   // anyway, which is what brings a fresh session seed.
   if (state_ != LinkState::Greeting) state_ = LinkState::Idle;
+  greeted_ = false;
   revert_distribution_patches();
   armed_trial_id_ = 0;
   builder_.abandon();

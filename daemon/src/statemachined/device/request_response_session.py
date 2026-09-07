@@ -145,7 +145,8 @@ class RequestResponseSession:
         return msg
 
     def hello(self, seed: str | None = None, timeout: float = 5.0) -> dict:
-        """Open a session -- and, on a bench board, end demo mode for good.
+        """Open a session -- and take the rig from a board that was running on
+        its own (dev/PROTOCOL.md 3.7).
 
         Opening the port does not do that; the greeting does. It is the whole
         point of the handover that a serial monitor cannot trigger it.

@@ -292,3 +292,67 @@ def test_an_ordinary_predicate_warns_about_nothing():
         a_graph_whose_only_transition_is({"all": ["lever"], "none": ["abort"]})
     )
     assert graph.warnings() == []
+
+
+# ------------------------------------------------- the dwell after a trial ---
+
+
+def test_a_terminal_state_may_declare_the_dwell_before_the_next_trial():
+    """The inter-trial interval, written where every other duration is.
+
+    It does not give the terminal state an exit -- nothing exits one -- and the
+    graph is still a graph that ends. What it says is how long to hold the last
+    state before another trial may begin, for a board that arms its own.
+    """
+    graph = GraphDefinition.model_validate(
+        minimal_graph_dictionary(
+            distributions={
+                "dwell": {"kind": "fixed", "duration_ms": 500},
+                "iti": {"kind": "uniform", "minimum_ms": 1000, "maximum_ms": 3000},
+            },
+            states=[
+                {"name": "Wait", "timeout": {"after": "dwell", "goto": "Hit"}},
+                {"name": "Hit", "outcome": "HIT", "relight_after": "iti"},
+            ],
+        )
+    )
+    assert graph.state_named("Hit").relight_after == "iti"
+    assert graph.state_named("Hit").is_terminal
+
+
+def test_a_dwell_on_a_state_that_is_not_terminal_is_refused():
+    """Nothing would ever read it: a dwell is drawn on arriving at the end of a
+    trial. Dropping it silently would leave somebody believing they had set an
+    inter-trial interval."""
+    with pytest.raises(ValidationError, match="is not terminal"):
+        GraphDefinition.model_validate(
+            minimal_graph_dictionary(
+                states=[
+                    {
+                        "name": "Wait",
+                        "timeout": {"after": "dwell", "goto": "Hit"},
+                        "relight_after": "dwell",
+                    },
+                    {"name": "Hit", "outcome": "HIT"},
+                ],
+            )
+        )
+
+
+def test_a_dwell_drawn_from_a_distribution_that_does_not_exist_names_it():
+    with pytest.raises(ValidationError, match="relight_after"):
+        GraphDefinition.model_validate(
+            minimal_graph_dictionary(
+                states=[
+                    {"name": "Wait", "timeout": {"after": "dwell", "goto": "Hit"}},
+                    {"name": "Hit", "outcome": "HIT", "relight_after": "pause"},
+                ],
+            )
+        )
+
+
+def test_a_terminal_state_with_no_dwell_is_where_a_self_driving_board_stops():
+    """Which is how a paradigm says "this outcome ends the session" -- per
+    outcome, which one device-wide setting could not express."""
+    graph = GraphDefinition.model_validate(minimal_graph_dictionary())
+    assert graph.state_named("Hit").relight_after is None

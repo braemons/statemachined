@@ -102,7 +102,7 @@ TEST_CASE("a fired transition is reported by its position within the state") {
 
 TEST_CASE("a machine with no sink records exactly as it did before") {
   // The sink is null by default and must stay optional: the native tests, the
-  // demo runner and anything else that only wants the record must not have to
+  // a bench runner and anything else that only wants the record must not have to
   // supply one.
   Builder b;
   const uint8_t wait = b.state();

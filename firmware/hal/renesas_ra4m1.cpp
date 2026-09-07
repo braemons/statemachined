@@ -13,6 +13,7 @@
 #if defined(ARDUINO_ARCH_RENESAS) || defined(ARDUINO_UNOR4_MINIMA)
 
 #include <Arduino.h>
+#include <DataFlashBlockDevice.h>
 #include <FspTimer.h>
 
 #include "hal.h"
@@ -264,6 +265,125 @@ bool link_up() {
   // should fail-safe on -- it is immediate, where a heartbeat timeout is not.
   return static_cast<bool>(STATEMACHINED_LINK);
 #endif
+}
+
+// -------------------------------------------------------------- the store ---
+//
+// The RA4M1's 8 KB of data flash, reached through the Arduino core's
+// DataFlashBlockDevice rather than through its EEPROM library.
+//
+// EEPROM would have been fewer lines and is the wrong tool twice over. It
+// allocates a RAM page per block with `new[]`, on a part with 32 KB and a scan
+// running out of a 10 kHz timer, and it reads-modifies-erases-writes a whole
+// block per byte -- which for a 2.8 KB settings record is thousands of erase
+// cycles per save on flash rated for about 100,000 of them. The block device
+// underneath it is what this actually wants: erase once, program in order,
+// nothing allocated.
+//
+// Wear is why the record carries a write counter. See core/io/settings_store.h.
+
+namespace {
+
+DataFlashBlockDevice& data_flash() { return DataFlashBlockDevice::getInstance(); }
+
+bool store_open_ = false;
+
+/// Whatever the part programs in -- four bytes on this one, but read rather
+/// than assumed, since it is the one number that decides whether a write lands
+/// at all. The buffer is sized well past any plausible unit and the flush
+/// checks, so a part with a larger one fails loudly instead of silently
+/// programming a fraction of each block.
+constexpr size_t kMaxProgramUnit = 64;
+uint8_t program_buffer_[kMaxProgramUnit];
+size_t buffered_ = 0;
+size_t write_at_ = 0;
+bool write_failed_ = false;
+
+/// Opened once, on the first use rather than in init(): a board that never
+/// saves anything should not pay for the flash driver at boot, and nothing in
+/// the scan path touches this.
+bool open_store() {
+  if (store_open_) return true;
+  if (data_flash().init() != 0) return false;
+  store_open_ = true;
+  return true;
+}
+
+/// Program the buffer, which must hold a whole number of program units.
+bool flush_buffer() {
+  if (buffered_ == 0) return true;
+  const size_t unit = static_cast<size_t>(data_flash().get_program_size());
+  if (unit == 0 || unit > kMaxProgramUnit) return false;
+  // Pad to the unit with the erased value, so the tail of a record programs
+  // like every other part of it.
+  while (buffered_ % unit != 0) program_buffer_[buffered_++] = 0xFF;
+  if (data_flash().program(program_buffer_, write_at_, buffered_) != 0) return false;
+  write_at_ += buffered_;
+  buffered_ = 0;
+  return true;
+}
+
+}  // namespace
+
+size_t storage_capacity() {
+  if (!open_store()) return 0;
+  return static_cast<size_t>(data_flash().size());
+}
+
+bool storage_read(size_t offset, void* dst, size_t n) {
+  if (!open_store()) return false;
+  if (offset + n > static_cast<size_t>(data_flash().size())) return false;
+  return data_flash().read(dst, offset, n) == 0;
+}
+
+bool storage_write_begin() {
+  if (!open_store()) return false;
+  buffered_ = 0;
+  write_at_ = 0;
+  write_failed_ = false;
+  // The whole store, in one erase. An interrupted save then reads back as blank
+  // flash rather than as one record wearing the tail of another -- which is
+  // what makes settings_store's CRC check mean "this board has forgotten"
+  // rather than "this board believes something wrong".
+  if (data_flash().erase(0, data_flash().size()) != 0) {
+    write_failed_ = true;
+    return false;
+  }
+  return true;
+}
+
+bool storage_write(const void* src, size_t n) {
+  if (write_failed_ || !store_open_) return false;
+  const uint8_t* b = static_cast<const uint8_t*>(src);
+  const size_t unit = static_cast<size_t>(data_flash().get_program_size());
+  if (unit == 0 || unit > kMaxProgramUnit) {
+    write_failed_ = true;
+    return false;
+  }
+  // The largest multiple of the program unit that fits the buffer, so a long
+  // record programs in whole blocks and only the tail is ever padded.
+  const size_t chunk = (kMaxProgramUnit / unit) * unit;
+  for (size_t i = 0; i < n; ++i) {
+    if (write_at_ + buffered_ >= static_cast<size_t>(data_flash().size())) {
+      write_failed_ = true;
+      return false;
+    }
+    program_buffer_[buffered_++] = b[i];
+    if (buffered_ == chunk && !flush_buffer()) {
+      write_failed_ = true;
+      return false;
+    }
+  }
+  return true;
+}
+
+bool storage_write_commit() {
+  if (write_failed_ || !store_open_) return false;
+  if (!flush_buffer()) {
+    write_failed_ = true;
+    return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------- the scan timer ---

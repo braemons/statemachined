@@ -4,7 +4,8 @@
   "entry": "Ready",
 
   "distributions": {
-    "step": { "kind": "fixed", "duration_ms": 500 }
+    "step": { "kind": "fixed", "duration_ms": 500 },
+    "pause": { "kind": "fixed", "duration_ms": 1500 }
   },
 
   "states": [
@@ -57,6 +58,7 @@
     {
       "name": "Done",
       "outcome": "HIT",
+      "relight_after": "pause",
       "on_entry": [{ "line": "ready_lamp", "kind": "high" }]
     }
   ]

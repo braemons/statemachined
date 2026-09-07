@@ -8,9 +8,9 @@ set(STATEMACHINED_TESTS
   random/rng
   io/input_conditioner
   io/reply_queue
+  io/settings_store
   machine/state_machine
   trial/trial_runner
-  demo/demo_graph
   protocol/framing
   protocol/graph_builder
   protocol/host_link_session

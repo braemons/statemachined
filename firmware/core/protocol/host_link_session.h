@@ -21,11 +21,13 @@
 
 #include "config.h"
 #include "graph/graph_set.h"
+#include "io/settings_store.h"
 #include "io/wiring.h"
 #include "protocol/framing.h"
 #include "protocol/graph_builder.h"
 #include "protocol/json.h"
 #include "protocol/msg_type.h"
+#include "trial/autorun.h"
 #include "trial/trial_runner.h"
 
 namespace statemachined {
@@ -134,6 +136,10 @@ enum class LinkState : uint8_t {
   Idle,          ///< greeted. A graph may or may not be committed
   Armed,         ///< configured for a trial that has not started
   Running,       ///< a trial is in flight
+  /// A run has ended and the device is counting down the dwell its terminal
+  /// state declared before starting another on its own. Only reachable under
+  /// autorun; a host-driven session goes back to Idle instead.
+  Relighting,
 };
 
 class HostLinkSession {
@@ -183,13 +189,63 @@ class HostLinkSession {
   uint16_t wiring_revision() const { return wiring_revision_; }
 
   /// Install a wiring from inside the firmware rather than from the host --
-  /// what main.cpp's demo uses to get its debounce, and what M7's boot-time
-  /// data-flash read will use. Counts as "has_wiring" only if `from_host`,
-  /// since hello_ack's job is to tell the daemon whether the board was
-  /// configured, not whether a default was applied.
+  /// what restore_settings() uses for a wiring read back from storage. Counts
+  /// as "has_wiring" only if `from_host`, since hello_ack's job is to tell the
+  /// daemon whether the board was configured, not whether a default was
+  /// applied, and a wiring the board remembered about itself is not the daemon
+  /// having configured it.
   void set_wiring(const DeviceWiring& w, bool from_host = false);
 
   LinkState state() const { return state_; }
+
+  /// The stored autorun settings, and whether the device is acting on them.
+  ///
+  /// The two are separate because a host that greets takes the rig: the setting
+  /// survives a takeover so that the next boot still comes up self-driving,
+  /// while the driving itself stops the moment somebody is there to do it. See
+  /// trial/autorun.h.
+  const AutorunConfig& autorun() const { return autorun_; }
+  bool autorun_active() const { return autorun_active_; }
+
+  /// Start driving trials, with no host and no `hello` -- what a board that
+  /// restored its settings from storage does at boot, and the one path into
+  /// this that does not come off the wire.
+  ///
+  /// Refused, and returns false, if no graph set is committed or the graph
+  /// index names no graph: a board that armed itself against a set it does not
+  /// have would be a rig running nothing while claiming to run something.
+  ///
+  /// The first run begins on the next advance_trial() rather than here, because
+  /// this is not the scan's thread of control and nothing else in this class
+  /// drives a pin from anywhere else.
+  bool begin_autorun(const AutorunConfig& c, Microseconds now_us);
+
+  /// Stop driving trials, cancelling one in flight through the ordinary exit
+  /// path. The stored settings are untouched -- this says "not now", not "not
+  /// ever". Outputs are owed to the next advance_trial(), as with any cancel.
+  void end_autorun(Microseconds now_us);
+
+  /// Where this board's settings are kept, or null on a board with nowhere to
+  /// keep them. Null is the default and everything works without it: a board
+  /// with no store is one whose settings do not survive a power cut, which is
+  /// what every board did before there was a store at all.
+  void set_settings_port(SettingsPort* p) { settings_ = p; }
+
+  /// Read the stored settings and adopt them: the wiring, the graph set, and
+  /// the autorun configuration -- which, if it says so, starts this board
+  /// driving trials with no host in the picture at all.
+  ///
+  /// Called once at boot, before anything has greeted. Returns what the store
+  /// said, and on anything but None nothing is adopted and the compiled-in
+  /// defaults stand -- which is why those defaults have to be correct on their
+  /// own. See STATEMACHINED_SAFE_LEVELS.
+  SettingsError restore_settings(Microseconds now_us);
+
+  /// How many times this board's store has been written. Reported so that flash
+  /// wear is a number somebody can see: the RA4M1's data flash is good for
+  /// about 100,000 erase cycles, and a rig that is a third of the way through
+  /// that should be able to say so rather than failing one day.
+  uint32_t settings_write_count() const { return settings_write_count_; }
   bool has_set() const { return have_set_; }
   uint16_t set_version() const { return live_set_.version; }
   uint8_t graph_count() const { return have_set_ ? live_set_.n_graphs : 0; }
@@ -219,7 +275,7 @@ class HostLinkSession {
 
   // One handler per host command. Each is responsible for sending exactly one
   // reply, which is what makes a retry decidable for the bridge.
-  void on_hello(const JsonObject& m, uint16_t message_id);
+  void on_hello(const JsonObject& m, uint16_t message_id, Microseconds now_us);
   void on_upload_message(const JsonObject& m, JsonSpan covered, uint16_t message_id,
                          MsgType type);
   void on_configure(const JsonObject& m, uint16_t message_id);
@@ -228,6 +284,8 @@ class HostLinkSession {
   void on_ping(uint16_t message_id, Microseconds now_us);
   void on_wiring(const JsonObject& m, uint16_t message_id);
   void on_pins_request(const JsonObject& m, uint16_t message_id);
+  void on_autorun(const JsonObject& m, uint16_t message_id, Microseconds now_us);
+  void on_save(uint16_t message_id);
 
   /// Apply `configure`'s `patch`, remembering what to put back. False and a
   /// refusal already sent if any entry is unusable -- and nothing is applied in
@@ -268,6 +326,11 @@ class HostLinkSession {
   /// TrialRunner is replaced rather than reset -- so that a stream cannot go
   /// quiet because a graph was uploaded.
   void rebind_runner();
+
+  /// Begin a run the device decided on for itself: its own trial id, the stored
+  /// autorun seed, and the graph autorun was pointed at. Returns the entry
+  /// state's output actions, which the scan applies.
+  OutputUpdate start_autorun_trial(LineBitmask word, Microseconds now_us);
 
   /// The machine reports a visit; the session says whose trial it was. A
   /// separate object rather than making the session a VisitSink, so that
@@ -313,6 +376,26 @@ class HostLinkSession {
   uint64_t session_seed_ = 0;
   uint32_t armed_trial_id_ = 0;
   bool start_from_serial_ = true;
+
+  /// Has anybody said hello? The gate on every other command, and emphatically
+  /// not the same question as `state_`: a board driving itself from storage is
+  /// Running with nobody having greeted it, and it must still refuse a
+  /// `configure` from a host that skipped the handshake.
+  bool greeted_ = false;
+
+  AutorunConfig autorun_;
+  bool autorun_active_ = false;
+  /// When the next self-driven run is due, meaningful in LinkState::Relighting.
+  /// Compared with the signed difference every deadline on this device uses, so
+  /// it survives the microsecond counter wrapping.
+  Microseconds relight_at_us_ = 0;
+  /// The id the next self-driven run gets. Counts on from the last one, so a
+  /// board left running overnight does not report a thousand trials all called
+  /// 1.
+  uint32_t autorun_next_trial_id_ = 1;
+
+  SettingsPort* settings_ = nullptr;
+  uint32_t settings_write_count_ = 0;
 
   DuplicateCommandGuard guard_;
   uint16_t tx_message_id_ = 0;

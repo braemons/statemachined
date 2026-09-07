@@ -38,6 +38,11 @@ export class SessionPanelElement extends BasePanelElement {
     //: on a rig triald owns trial ids and on a bench nobody does -- and two
     //: trials sharing an id is how a trace stops being joinable.
     this.nextTrialId = 1;
+    //: What the board would do with nobody attached. Read from the device
+    //: rather than remembered here: it is stored on the board, it outlives this
+    //: page, and it survives the greeting that took the rig back.
+    this.autorun = null;
+    this.saveNote = "";
   }
 
   renderShell() {
@@ -45,6 +50,7 @@ export class SessionPanelElement extends BasePanelElement {
     // Three slots, filled independently. See the note at the top of this file.
     this.chooserSlot = this.make("div", { text: "reading the store..." });
     this.manualSlot = this.make("div");
+    this.standaloneSlot = this.make("div");
     this.liveSlot = this.make("div");
     this.lastTrialSlot = this.make("div");
     this.root.replaceChildren(
@@ -67,6 +73,8 @@ export class SessionPanelElement extends BasePanelElement {
         this.chooserSlot,
         this.make("h3", { text: "Run a trial by hand" }),
         this.manualSlot,
+        this.make("h3", { text: "Run without the daemon" }),
+        this.standaloneSlot,
         this.make("h3", { text: "Now" }),
         this.liveSlot,
         this.make("h3", { text: "The last trial" }),
@@ -86,6 +94,7 @@ export class SessionPanelElement extends BasePanelElement {
     this.paintLiveState();
     this.paintLastTrial();
     this.paintManualControls();
+    this.paintStandaloneControls();
     this.openStateStream();
     // The result is polled rather than streamed: it changes once per trial, and
     // a second socket per panel is a cost the rig pays for nothing.
@@ -105,6 +114,14 @@ export class SessionPanelElement extends BasePanelElement {
     this.pollEvery(2, async () => {
       this.session = await this.api.readSession();
       this.paintManualControls();
+      try {
+        this.autorun = await this.api.readAutorun();
+      } catch (error) {
+        // No board, or one that does not know the command. Neither is a
+        // failure worth a red box across the panel: the section says so itself.
+        this.autorun = null;
+      }
+      this.paintStandaloneControls();
     });
   }
 
@@ -238,6 +255,96 @@ export class SessionPanelElement extends BasePanelElement {
   async cancelTheTrial() {
     const trialId = this.state && this.state.trial_id != null ? this.state.trial_id : this.nextTrialId;
     await this.attempt(() => this.api.cancelTrial(trialId));
+  }
+
+  /// The board on its own: dev/PROTOCOL.md 3.7 and 3.8, as two controls.
+  ///
+  /// Deliberately below the manual controls and deliberately wordy. Everything
+  /// else on this page is a rig this daemon is driving; this is the switch that
+  /// makes the daemon optional, and somebody turning it on should know that the
+  /// board will keep going when they close the laptop -- and that saving is
+  /// what makes it survive the power cut as well.
+  paintStandaloneControls() {
+    this.repaintPreservingFocus(() =>
+      this.standaloneSlot.replaceChildren(this.standaloneControls()),
+    );
+  }
+
+  standaloneControls() {
+    const autorun = this.autorun;
+    if (autorun === null) {
+      return this.make("p", {
+        class: "muted",
+        text: "No board is attached, so there is nothing to hand the job to.",
+      });
+    }
+    const active = Boolean(autorun.active);
+    const session = this.session;
+    const committed = session && session.committed_set;
+    return this.make("div", {}, [
+      this.make("p", {
+        class: "muted",
+        text:
+          "The board can arm its own trials, taking the interval between them from the dwell " +
+          "each terminal state declares. It keeps going when this daemon disconnects, which " +
+          "is the point -- so a rig can run a shaping session with nothing plugged into it. " +
+          "A terminal state that declares no dwell is where it stops.",
+      }),
+      this.make("div", { class: "row" }, [
+        this.make("button", {
+          class: active ? "" : "primary",
+          text: active ? "take the rig back" : "let the board run itself",
+          disabled: !committed || (!active && !(session && session.active_graph)),
+          onClick: () => this.setAutorun(!active),
+        }),
+        this.make("span", {
+          class: active ? "good" : "muted",
+          text: active
+            ? `running ${autorun.graph_index != null ? `graph ${autorun.graph_index}` : ""} on its own; next trial ${autorun.next_trial_id}`
+            : autorun.enabled
+              ? "stored as on, but this daemon has the rig: greeting a board takes it back"
+              : "off; this daemon arms every trial",
+        }),
+      ]),
+      this.make("div", { class: "row" }, [
+        this.make("button", {
+          text: "save to the board",
+          onClick: () => this.saveSettingsToTheBoard(),
+        }),
+        this.make("span", {
+          class: "muted",
+          text:
+            "Writes the wiring, the graph set and this setting to the board's own storage, so " +
+            "it comes back from a power cut still doing it. Refused while a trial is running.",
+        }),
+      ]),
+      this.saveNote ? this.make("p", { class: "good", text: this.saveNote }) : this.make("div"),
+    ]);
+  }
+
+  async setAutorun(enabled) {
+    const reply = await this.attempt(() =>
+      this.api.setAutorun({
+        enabled,
+        graph_name: enabled && this.session ? this.session.active_graph : null,
+      }),
+    );
+    if (reply === null) return;
+    this.autorun = reply;
+    this.paintStandaloneControls();
+  }
+
+  async saveSettingsToTheBoard() {
+    this.saveNote = "";
+    const saved = await this.attempt(() => this.api.saveDeviceSettings());
+    if (saved === null) return;
+    // The write count is flash wear made visible: about 100,000 erase cycles is
+    // the budget on the reference board, and a rig should be able to say where
+    // it is in it rather than failing one day.
+    this.saveNote =
+      `saved -- set v${saved.set_version}, autorun ${saved.autorun ? "on" : "off"}, ` +
+      `write ${saved.write_count} of this board's storage`;
+    this.paintStandaloneControls();
   }
 
   /// The rig's half. Several times a second, and nothing here is editable.

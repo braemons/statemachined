@@ -195,10 +195,21 @@ The compiler between them is the daemon's main reason to exist.
         { "when": { "any": ["lever_left", "lever_right"] },
           "goto": "Early" } ] },
     { "name": "Hit", "outcome": "HIT",
+      "relight_after": "inter_trial_interval",
       "on_entry": [ { "line": "reward_valve", "kind": "pulse", "pulse_ms": 40 } ] }
   ]
 }
 ```
+
+**`relight_after` is the one field that is about what happens *after* the
+trial.** Terminal states only, and it does not give one an exit -- the trial
+ends there and its record is closed before the dwell is drawn. It says how long
+that last state is held before another trial may begin, and only a board arming
+its own trials waits it out (`PROTOCOL.md` §3.7); under triald it is ignored,
+which is why it can live in the paradigm without changing what a driven rig
+does. A terminal state that declares none is where a self-driving board stops --
+per outcome, so a graph can say "reward, wait two seconds, go again" and "an
+abort ends the session" in the same file.
 
 **The parameters are named, where the wire's are positional.** A distribution on
 the wire carries `a`, `b` and `c`, whose meaning depends on `kind` — terse
@@ -380,8 +391,8 @@ Teensy 4.1 and ESP32 have none of these problems. The R4 sets the design, as
 A session whose graphs will not fit the pools is not stuck. A **set of one**,
 re-uploaded on `configure`, is the same mechanism and the same messages, and it
 costs exactly the ITI padding described above — so the per-trial design survives
-as a mode rather than as dead reasoning. It is also what a bench session and a
-demo already do, which is reason enough to keep it working.
+as a mode rather than as dead reasoning. It is also what a bench session
+already does, which is reason enough to keep it working.
 
 It is an explicit choice and not a silent fallback: `graph_mode = "set"` (the
 default) or `"per_trial"` in §4.4's config. Falling back automatically would
@@ -457,10 +468,9 @@ takes the half that needs no flash driver:
 
 ### 3.4 Data flash: what a board should know before anybody greets it
 
-**A rig image boots into nothing, and drives every output low doing it.** Demo
-mode is compile-time — `STATEMACHINED_DEMO`, 1 by default, and `make
-firmware-rig` builds it out, which is why CI publishes a bench image and a rig
-image. The rig image has no graph at reset, so `main.cpp`:
+**A board boots into nothing, and drove every output low doing it.** It holds no
+graph at reset — there is one image now, and no demo paradigm compiled into it —
+so `main.cpp`:
 
 ```c
 // Every line to its safe level before the first scan. With no graph yet that
@@ -477,9 +487,9 @@ the concrete reason to make the move §3.3 already argues for on tidiness ground
 
 The RA4M1 has **8 KB of data flash**, separate from the 256 KB of code flash and
 rated far higher — order 100 000 erase cycles against code flash's ~1 000
-(confirm against the datasheet before it is load-bearing). Nothing in the tree
-touches it today: there is no EEPROM, NVM or persistence of any kind. Two things
-go in it.
+(confirm against the datasheet before it is load-bearing). Three things go in
+it, and every record carries a **write counter** so that budget is a number
+somebody can read rather than one they discover.
 
 **The wiring config, written when a rig is wired.** Invert, enable, debounce and
 the safe levels — ~80 B, changed when somebody re-wires the box and essentially
@@ -487,9 +497,14 @@ never otherwise. This is what closes the hole above: the board reads it before
 the first scan and drives the pins the rig actually needs, with no host in the
 picture. Endurance is a non-question at this write rate.
 
-**The committed graph, on explicit request.** ~2.6 KB, so it fits with room to
-spare, and it means a board survives a power blip still running its paradigm
-rather than waiting on a reconnect.
+**The committed graph set, on explicit request.** 2 856 B at full capacity, so
+it fits with room to spare, and it means a board survives a power blip still
+holding its paradigm rather than waiting on a reconnect.
+
+**Whether the board should be arming its own trials** (`PROTOCOL.md` §3.7), which
+is what turns "still holding its paradigm" into "still running it". This was not
+in the original argument for data flash and is now the main reason to want it:
+it is what lets a rig run unattended with nothing plugged into it.
 
 > **It must never be automatic on `set_end`.** Under §3.2 a set is uploaded once
 > per session, which sounds harmless — but it is also uploaded on every graph
@@ -506,29 +521,46 @@ and it is the same class on the RA4M1: a data-flash write blocks the flash
 controller and can cost scans. Refused with `busy`, like the graph upload at
 `host_link_session.cpp:251`, and for the same reason.
 
-What this adds below the daemon: a `persist` message in `PROTOCOL.md` §3, a
-`hal::` entry point for the data flash (the HAL is *"seven functions"* and this
-makes it eight, on a boundary that already exists), a boot-time read in
-`main.cpp` before `fail_safe()`, and `hello_ack` reporting what was restored so
-the daemon never has to guess whether the board came up configured.
+#### What was actually built
 
-#### Deferred, and what holds the hole shut meanwhile
+All of the above, under the name **`save`** rather than `persist`
+(`PROTOCOL.md` §3.8): five `hal::storage_*` entry points, an RA4M1
+implementation over `DataFlashBlockDevice`, a file-backed `native.cpp`
+stand-in, a portable encoder in `core/io/settings_store.h` that streams rather
+than staging a copy of the graph set, a boot-time read in `main.cpp` before
+`fail_safe()`, and `saved` reporting `write_count` back.
 
-**The data flash itself is later work.** The `hal.h` addition, the RA4M1
-implementation, the file-backed `native.cpp` stand-in, the boot-time read and the
-`persist` command are a milestone of their own, after the daemon exists and can
-exercise them; nothing above M6 needs them. Open questions 8 and 12 defer with
-them.
+Three things the original argument did not have:
+
+* **A format version and a CRC, and a refusal rather than an interpretation.** A
+  record from another format is not read; a damaged one is a board that has
+  forgotten rather than one that believes something wrong.
+* **Validation of what comes back.** The CRC says the bytes are the ones that
+  were written, not that they were a graph worth running.
+* **The autorun setting**, which is what makes the whole thing more than a
+  convenience.
+
+`hello_ack` reports `has_wiring` as before, and deliberately does not count a
+wiring the board remembered about itself as the daemon having configured it.
+
+Open questions 8 and 12 are answered: the write counter is in the record, and
+`save` is a command the daemon issues deliberately, refused while a trial is in
+flight.
 
 That leaves the fail-safe hole open, so it should be shut cheaply rather than
 left. Two things do it:
 
-**A compile-time safe-level word in the rig image.** `make firmware-rig` already
-builds a distinct binary; `-DSTATEMACHINED_SAFE_LEVELS=0x…` makes the first
-`fail_safe()` correct for a rig whose wiring is fixed, which is every rig, and
-costs one constant. It is worse than data flash in exactly one way — changing the
-wiring means rebuilding rather than a `wiring` command — and that is the argument
-for doing the flash later, not for leaving the outputs wrong now.
+**A compile-time safe-level word.** `-DSTATEMACHINED_SAFE_LEVELS=0x…` makes the
+first `fail_safe()` correct for a rig whose wiring is fixed, which is every rig,
+and costs one constant. It is worse than data flash in exactly one way — changing
+the wiring means rebuilding rather than a `wiring` command — and that was the
+argument for doing the flash later rather than for leaving the outputs wrong.
+
+**Both now exist.** `PROTOCOL.md` §3.8's `save` writes the wiring, the graph set
+and the autorun settings to data flash, and `main.cpp` reads them back before
+the first `fail_safe()`. The constant did not become redundant: it is what a
+board with a blank, damaged or absent store falls back to, which is the case
+this section is really about.
 
 **The daemon pushes the wiring on connect**, before it does anything else, so the
 window in which a board holds compile-time defaults is the seconds between power
@@ -587,7 +619,7 @@ the code.
 
 | Field | |
 |---|---|
-| `trial_id` | The id from `configure`. **`0` when there was no host-configured trial** — demo mode, the bench, a line-started run before anything assigned an id. This is the whole of the "the MCU needs to optionally know the trial id" requirement, and it is already met: `configure` carries `trial_id` today and `TrialRecord` holds it |
+| `trial_id` | The id from `configure`. **`0` when there was no host-configured trial** — a line-started run before anything assigned an id; a board arming its own trials assigns them itself. This is the whole of the "the MCU needs to optionally know the trial id" requirement, and it is already met: `configure` carries `trial_id` today and `TrialRecord` holds it |
 | `seq` | Per run, from `0`. A gap is what makes a dropped visit **detectable** rather than a hole nobody notices |
 
 #### Emitted at exit, and what that costs
@@ -727,7 +759,9 @@ which is what keeps the UI an honest test of it.
 |---|---|
 | `GET /api/device` | connected, board, `fw`, `proto`, measured `scan_hz`, `caps`, `has_set`, `set_version`, `n_graphs`, link counters, uptime |
 | `GET /api/device/lines` | per line: index, direction, pin label, **your name for it**, invert, enable, safe level, debounce, and its live level. Beside the two lists: `board_input_pins` / `board_output_pins`, which are the board's own answer, and `pin_labels_came_from` |
-| `PATCH /api/device/lines` | rename a line; change invert/enable/safe/debounce. Pushes the wiring config and persists it — §3.4 |
+| `PATCH /api/device/lines` | rename a line; change invert/enable/safe/debounce. Pushes the wiring config to the board and keeps it in this daemon's config store. It does **not** write the board's flash: that is the row below, deliberately, since §3.4's rule is that nothing writes flash implicitly |
+| `GET·PUT /api/device/autorun` | whether the board arms its own trials, and what it would run. The switch that makes this daemon optional — `PROTOCOL.md` §3.7 |
+| `POST /api/device/save` | write the wiring, the graph set and the autorun setting to the board's own storage. Answers with `write_count`, which is flash wear made visible — §3.4 |
 | `GET /api/device/firmware` | the running version against what the installed package ships. See §6.3 |
 
 **The board is asked which pin each line is, not told.** `pins`
@@ -1195,7 +1229,7 @@ milestones that used to be M5 and M6 are now M8 and M9.
 | **M4j** ✅ | **The serial monitor, and views that say what they are.** Two complaints from the first person to open the page who had not written it: what is a "session", what is a "trace". They are words this system uses in a particular way and a tab label teaches neither, so every view carries a sentence — in the nav, above the panel, and inside the panel, since a console embeds the panels and has no tabs. `Graphs` is `Paradigms` and `Lines` is `Lines & wiring` for the same reason. The monitor is the seventh element: `device_line_monitor.py` keeps the last 4 000 lines both directions, tapped in `SerialLink` so a line nothing could parse is in there too, served at `GET /api/device/monitor` and a stream that does not coalesce. Always recording, because a fault that happens once an hour is not reproducible on demand. It sends nothing: a terminal that could type at the board would be a second host on a one-command-in-flight link |
 | **M5** | Packaging: nfpm, systemd, sysusers, udev, logrotate, the builder containers, `release.yml`, one line in `packages/sources.txt`. **Installed on the Pi 5 alongside vstimd and triald** |
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
-| **M7** | **Data flash** (§3.4): the `hal.h` addition, the RA4M1 implementation, a file-backed `native.cpp` stand-in, the boot-time read, and `persist`. Deferred deliberately: the compile-time safe levels of §3.4 hold the fail-safe hole shut without it, and this is easier to build once a daemon exists to exercise it. Renode covers the HAL addition |
+| **M7** ✅ | **Data flash** (§3.4): five `hal::storage_*` entry points, the RA4M1 implementation over `DataFlashBlockDevice`, a file-backed `native.cpp` stand-in, a versioned CRC'd record with a write counter, the boot-time read, and `save` rather than `persist`. It carries the wiring, the graph set and the autorun setting — which is what lets a board run unattended, and what let demo mode be removed. **The RA4M1 path has not run on silicon**; everything above it is tested on the host and against the native device |
 
 **The first numbers off a real board.** M3 has said since it was written that
 the 10 kHz scan rate remains a claim. It is not a claim any more, and the board
@@ -1224,11 +1258,12 @@ argument for the panels polling at 1 Hz rather than at 10, and it is worth a
 number of its own during M6 with a real session's traffic on the link.
 
 **What M4b and M4c cost, measured.** The 255-entry path is +3056 B, exactly as
-budgeted, and it briefly did not fit: demo mode carries a *second* `TrialRunner`,
-so the bench image paid for the path twice and would not link. M4c paid that
-back. A set is **single-buffered** — two do not fit — so the staged `StateGraph`
-a single graph needed is gone, worth about 2.5 KB, and both images fit 255
-again. `caps.max_path` is 255 everywhere, which is the state worth being in.
+budgeted, and it briefly did not fit: the demo paradigm this firmware then
+carried had a *second* `TrialRunner`, so the bench image paid for the path twice
+and would not link. M4c paid that back. A set is **single-buffered** — two do not
+fit — so the staged `StateGraph` a single graph needed is gone, worth about
+2.5 KB. The demo has since gone as well, along with the second image it needed:
+`caps.max_path` is 255 on the one image there is.
 
 | | RAM, of 32 768 |
 |---|---|
@@ -1330,10 +1365,12 @@ diff.
 7. **Who authors the console**, and when. §5 defers it; it should not stay
    deferred long, since it is most of what makes three daemons feel like one rig.
 8. **The RA4M1 data-flash numbers** (§3.4): 8 KB and ~100 000 erase cycles are
-   from memory, not from the datasheet. Cheap to confirm, and #12 depends on the
-   second one being roughly right. **Deferred with M7** — but confirm it before
-   M7 is planned in detail rather than during it, since a figure an order of
-   magnitude out changes whether `persist` is worth having at all.
+   from memory, not from the datasheet. **Still open, and now load-bearing** —
+   M7 shipped against them. The size is no longer a risk (the record is under
+   3 KB and the implementation asks the block device rather than assuming), but
+   the endurance figure is what the write counter is calibrated against, and a
+   figure an order of magnitude out changes how freely `save` may be used.
+   Confirm it, and put the number next to the counter in the UI.
 9. **Trace retention.** Mostly answered by the ring: nothing in the daemon
    depends on what logrotate deletes, because the API reads the ring and never
    the file. What is left is how long the file is kept and by what rule, which is
@@ -1357,9 +1394,10 @@ diff.
    that is right for the daemon, but "optional" across two daemons usually means
    "nobody did it". If the answer is yes it is a triald change, and it lands with
    the amendments in #3 and #5.
-12. **Who is allowed to call `persist`, and how often** — deferred with M7, and
-   the reason the rule is written down now rather than then. "Explicit, never on
-   `graph_end`" is the rule that protects the part, and a rule enforced only by
-   the daemon's good manners is one a future caller breaks. Worth a write counter
-   in `state_report`, so the budget is observable rather than trusted — the same
-   argument `overruns` won.
+12. **Who is allowed to call `save`, and how often** — answered in the shape this
+   entry asked for. "Explicit, never on `graph_end`" is the rule, and it is the
+   protocol's rather than the daemon's good manners: `save` is its own command
+   and nothing else writes flash. The write counter went into the `saved` reply
+   rather than into `state_report`, which was already at its member limit; it is
+   observable rather than trusted, which was the point, and the same argument
+   `overruns` won.

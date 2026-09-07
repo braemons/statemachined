@@ -296,6 +296,25 @@ class StateDefinition(BaseModel):
     timeout: StateTimeout | None = None
     transitions: list[TransitionSpecification] = Field(default_factory=list)
 
+    #: Terminal states only: the distribution the dwell in this state is drawn
+    #: from -- how long before another trial may begin. The inter-trial
+    #: interval, in other words, written where every other duration of a
+    #: paradigm is written and drawn on the device like all of them, so it can
+    #: be jittered and comes back in the record as evidence.
+    #:
+    #: It does not give a terminal state an exit. Nothing exits a terminal
+    #: state; the trial ends there and its record is closed before this is read.
+    #: What it decides is when the *next* trial may start, and whether anything
+    #: acts on it is a property of the device rather than of the paradigm -- a
+    #: graph that declares one runs unchanged under a triald that arms every
+    #: trial itself. See dev/PROTOCOL.md 3.7 for the device setting that does
+    #: act on it.
+    #:
+    #: A terminal state that declares none is where a self-driving board stops,
+    #: which is how a paradigm says "this outcome ends the session" -- per
+    #: outcome, which one device-wide setting could not express.
+    relight_after: str | None = None
+
     @property
     def is_terminal(self) -> bool:
         return self.outcome is not None
@@ -303,6 +322,15 @@ class StateDefinition(BaseModel):
     @model_validator(mode="after")
     def _refuse_a_terminal_state_that_also_leads_somewhere(self) -> StateDefinition:
         if self.outcome is None:
+            # A dwell is drawn on arriving at the end of a trial, so nothing
+            # would ever read one declared here. Refused rather than ignored:
+            # silently dropping it would leave somebody believing they had set
+            # an inter-trial interval.
+            if self.relight_after is not None:
+                raise ValueError(
+                    f"state {self.name!r} declares relight_after but is not terminal. A dwell "
+                    "is how long a trial's *last* state is held before another may start"
+                )
             return self
         if self.outcome not in DECLARABLE_TERMINAL_OUTCOMES:
             legal = ", ".join(sorted(DECLARABLE_TERMINAL_OUTCOMES))
@@ -402,6 +430,10 @@ class GraphDefinition(BaseModel):
             if state.timeout is not None:
                 self._require_state(state.timeout.goto, f"state {state.name!r}'s timeout")
                 self._require_distribution(state.timeout.after, f"state {state.name!r}'s timeout")
+            if state.relight_after is not None:
+                self._require_distribution(
+                    state.relight_after, f"state {state.name!r}'s relight_after"
+                )
             for position, transition in enumerate(state.transitions):
                 where = f"transition {position} of state {state.name!r}"
                 self._require_state(transition.goto, where)

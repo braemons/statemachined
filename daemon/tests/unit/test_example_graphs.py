@@ -225,13 +225,27 @@ def test_every_step_of_the_walk_is_the_same_500_ms():
 
     Six `fixed` entries saying 500 would spend six of the board's thirty-two
     distribution slots on one number, and would let five of them drift.
+
+    `pause` is the other one and is not a step: it is how long `Done` is held
+    before a board arming its own trials walks again.
     """
     walk = load_example_graph("state-walk")
-    assert list(walk.distributions) == ["step"]
     assert walk.distributions["step"].duration_ms == 500
     for state in walk.states:
         if state.timeout is not None:
             assert state.timeout.after == "step"
+
+
+def test_the_walk_comes_round_again_on_a_board_running_by_itself():
+    """The bench instrument's whole point is being watchable, and a march that
+    happens once is one somebody has to keep restarting.
+
+    It costs nothing under triald, which arms every trial itself and never looks
+    at the dwell -- which is the property the field was given to the graph for.
+    """
+    walk = load_example_graph("state-walk")
+    assert walk.state_named("Done").relight_after == "pause"
+    assert walk.distributions["pause"].duration_ms == 1500
 
 
 def test_the_walk_leaves_exactly_one_lamp_lit_at_a_time():

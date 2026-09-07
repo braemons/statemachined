@@ -64,10 +64,10 @@
 // whole handoff is the flag below and the two places that raise it.
 #include <Arduino.h>
 
-#include "demo/demo_graph.h"
 #include "hal.h"
 #include "io/input_conditioner.h"
 #include "io/reply_queue.h"
+#include "io/settings_store.h"
 #include "protocol/host_link_session.h"
 #include "trial/trial_runner.h"
 
@@ -173,6 +173,58 @@ uint32_t measure_scan_floor_hz() {
   return static_cast<uint32_t>((static_cast<uint64_t>(kReps) * 1000000u) / dt);
 }
 
+// ---------------------------------------------------------------------------
+// The store
+// ---------------------------------------------------------------------------
+//
+// The session knows what to remember; this knows where it goes. Same split as
+// the reply sink: the session touches no port, and a board's data flash is as
+// much a port as its USB is.
+
+class FlashSettingsPort : public SettingsPort {
+ public:
+  bool has_storage() const override { return hal::storage_capacity() > 0; }
+
+  bool save(const StoredSettings& s, uint32_t write_count) override {
+    if (!hal::storage_write_begin()) return false;
+    Sink sink;
+    if (!save_settings(s, write_count, sink)) return false;
+    return hal::storage_write_commit();
+  }
+
+  SettingsError load(StoredSettings& s) override {
+    Source source;
+    return load_settings(s, source);
+  }
+
+  bool holds(const StoredSettings& s, uint32_t write_count) override {
+    Source source;
+    return settings_already_stored(s, write_count, source);
+  }
+
+ private:
+  /// Straight through to the HAL, which does the buffering: what a part
+  /// programs in is a fact about the part, and the encoder should not have to
+  /// know it. See hal.h.
+  class Sink : public SettingsWriter {
+   public:
+    bool write(const void* src, size_t n) override { return hal::storage_write(src, n); }
+  };
+  class Source : public SettingsReader {
+   public:
+    bool read(void* dst, size_t n) override {
+      if (!hal::storage_read(at_, dst, n)) return false;
+      at_ += n;
+      return true;
+    }
+
+   private:
+    size_t at_ = 0;
+  };
+};
+
+FlashSettingsPort g_settings;
+
 DeviceIdentity make_identity() {
   DeviceIdentity id;
   id.board = "uno_r4_minima";
@@ -199,51 +251,21 @@ HostLinkSession* g_session = nullptr;
 bool g_link_was_up = false;
 
 // ---------------------------------------------------------------------------
-// Demo mode
+// The heartbeat
 // ---------------------------------------------------------------------------
 //
-// Until a host says `hello`, this board holds no graph and nothing arms a
-// trial, so a board on a bench sits there doing nothing whatsoever. That is
-// correct for a rig -- a device that runs a paradigm nobody uploaded is a
-// hazard -- and it makes the first bring-up needlessly blind: you cannot tell a
-// working board from a dead one, or find out whether your LEDs are on the pins
-// you think they are, without writing a host first.
+// The board's own LED, on D13, which is deliberately NOT one of the eight
+// output lines: it is excluded from the line map on purpose, so this cannot
+// collide with anything a graph drives.
 //
-// So before the first `hello` the board runs demo::build()'s graph on its own
-// runner. It is the real engine on a real graph: the same TrialRunner, the same
-// validate(), the same conditioned input word. What it is not is a fallback
-// paradigm -- the first `hello` ends it permanently (until reset) and hands the
-// pins back through fail_safe(), so a rig cannot silently run the demo while
-// somebody believes it is running an experiment.
-// Costs ~4.6 KB of SRAM -- its own StateGraph and its own TrialRunner -- on a
-// board with 32 KB. That is worth it on a bench and worth nothing on a rig,
-// where a host greets within a second of boot, so a deployed build can drop it
-// with -DSTATEMACHINED_DEMO=0 and get the RAM back. The switch itself lives in
-// firmware/core/config.h, with the capacities that depend on it.
-
-#if STATEMACHINED_DEMO
-GraphSet g_demo_graph;
-bool g_demo_active = false;
-uint32_t g_demo_trial_id = 0;
-Microseconds g_demo_start_at_us = 0;
-bool g_demo_waiting_to_start = false;
-bool g_demo_led = false;
-
-/// Fixed, so the bench replays: the demo draws no random timings today, but it
-/// runs through the code path that would.
-constexpr uint64_t kDemoSeed = 0xF5D0DE30F5D0DE30ULL;
-
-/// How long the outcome lamp stays lit before the next trial arms. A terminal
-/// state's entry actions run and nothing exits it, so the lamp is still on --
-/// this is the pause that makes it readable rather than a flicker.
-constexpr Microseconds kDemoRelightPauseUs = 1500u * 1000u;
-
-/// Constructed on first use so it binds to a graph that has been built. Holds a
-/// pointer to it, not a copy.
-TrialRunner& demo_runner() {
-  static TrialRunner r(g_demo_graph);
-  return r;
-}
+// A board blinking here is a board that booted, started its timer and is
+// scanning -- visible with nothing wired to it at all, and the only thing this
+// firmware shows for itself. That mattered more when this file carried a demo
+// paradigm; now that a bench board runs a real uploaded graph like any other
+// (see the note above setup()), this is what is left of "can I tell a working
+// board from a dead one", and it costs a byte of state and a digitalWrite a
+// second.
+bool g_led = false;
 
 /// Wall-clock comparison that survives the microsecond counter wrapping every
 /// ~71 minutes. A bench board is left running for longer than that.
@@ -251,20 +273,14 @@ bool reached(Microseconds now, Microseconds deadline) {
   return static_cast<int32_t>(now - deadline) >= 0;
 }
 
-/// Defined below, next to the rest of demo mode; declared here because
-/// service_link() is what notices a host has arrived.
-void demo_end(Microseconds now);
-
-#else  // !STATEMACHINED_DEMO
-
-// Stubs, so the call sites read the same in both builds and the compiler drops
-// the branches rather than the reader having to.
-constexpr bool g_demo_active = false;
-inline void demo_begin(Microseconds) {}
-inline void demo_end(Microseconds) {}
-inline void demo_scan(LineBitmask, Microseconds) {}
-
-#endif  // STATEMACHINED_DEMO
+/// Written only when it changes. digitalWrite() costs a microsecond or two on
+/// this core and this runs inside the scan.
+void heartbeat(Microseconds now) {
+  const bool on = (now % 1000000u) < 60000u;
+  if (on == g_led) return;
+  g_led = on;
+  digitalWrite(LED_BUILTIN, on ? HIGH : LOW);
+}
 
 void apply_wiring();
 
@@ -274,27 +290,13 @@ void apply(const OutputUpdate& ops) {
 
 void scan() {
   const Microseconds now = hal::micros_now();
+  heartbeat(now);
   const LineBitmask word = g_inputs.apply(hal::read_inputs(), now);
   apply(g_session->advance_trial(word, now));
 }
 
-#if STATEMACHINED_DEMO
-/// Defined below with the rest of demo mode; the scan has to be able to choose
-/// between it and the session's before either is in scope.
-void demo_scan(LineBitmask word, Microseconds now);
-#endif
-
 /// One scan, wherever it is called from. Both callers hold the engine.
-void scan_once() {
-#if STATEMACHINED_DEMO
-  if (g_demo_active) {
-    const Microseconds now = hal::micros_now();
-    demo_scan(g_inputs.apply(hal::read_inputs(), now), now);
-    return;
-  }
-#endif
-  scan();
-}
+void scan_once() { scan(); }
 
 /// Account for periods that went by with no scan in them, and remember the
 /// worst run of them. Counted, never absorbed: a board that quietly misses
@@ -358,7 +360,12 @@ void service_link() {
       const Microseconds now = hal::micros_now();
       const EngineHold hold;
       apply(g_session->link_lost(now));
-      apply(g_session->fail_safe());
+      // Unless the board was told to drive itself, in which case the port
+      // closing is the expected end of "upload a paradigm, then detach" rather
+      // than a fault, and the trial in flight is not the host's to end. Driving
+      // every line to its safe level here would be a cancellation by another
+      // route. See trial/autorun.h for why that takes an explicit command.
+      if (!g_session->autorun_active()) apply(g_session->fail_safe());
       // Whatever was still queued was for a host that is gone. Keeping it would
       // mean answering, after the port reopens, a message_id from a session
       // that no longer exists. Inside the hold, because clear() is the one
@@ -374,109 +381,15 @@ void service_link() {
   const size_t n = hal::link_read(buf, sizeof(buf));
   if (n > 0) {
     const Microseconds now = hal::micros_now();
-    // The hold covers the parse, the demo handover and the graph's input
-    // configuration -- everything that touches the session, the runner or the
-    // conditioner, and nothing else. Reading those bytes off USB, above, cost
-    // twice as long and needed no hold at all.
+    // The hold covers the parse and the graph's input configuration --
+    // everything that touches the session, the runner or the conditioner, and
+    // nothing else. Reading those bytes off USB, above, cost twice as long and
+    // needed no hold at all.
     const EngineHold hold;
     g_session->receive(buf, n, now);
-    // The first `hello` takes the board out of demo mode for good. Checked
-    // after receive() rather than on link_up(), because opening the port is not
-    // the same as a host being there -- a serial monitor does the former.
-    if (g_demo_active && g_session->state() != LinkState::Greeting) demo_end(now);
     apply_wiring();
   }
 }
-
-#if STATEMACHINED_DEMO
-
-/// The heartbeat on the board's own LED, which is deliberately NOT one of the
-/// eight output lines: D13 is excluded from the line map on purpose, so this
-/// cannot collide with anything a graph drives. A board blinking here is a
-/// board that booted, started its timer and is scanning -- visible with nothing
-/// wired to it at all.
-///
-/// Written only when it changes. digitalWrite() costs a microsecond or two on
-/// this core and this runs inside the scan.
-void demo_heartbeat(Microseconds now) {
-  const bool on = (now % 1000000u) < 60000u;
-  if (on == g_demo_led) return;
-  g_demo_led = on;
-  digitalWrite(LED_BUILTIN, on ? HIGH : LOW);
-}
-
-void demo_begin(Microseconds now) {
-  demo::build(g_demo_graph);
-  // The demo's debounce has to actually reach the conditioner, which is the
-  // same path a `wiring` command's takes below. It is the demo's own wiring and
-  // not the session's: a bench board has whatever is clipped to it, not a rig.
-  const DeviceWiring demo_wiring = demo::wiring();
-  g_inputs.configure(demo_wiring.inputs);
-  g_inputs.prime(hal::read_inputs());
-  pinMode(LED_BUILTIN, OUTPUT);
-  g_demo_active = true;
-  g_demo_waiting_to_start = true;
-  g_demo_start_at_us = now;
-}
-
-/// A host arrived. Stop, and give every line back.
-void demo_end(Microseconds now) {
-  if (!g_demo_active) return;
-  g_demo_active = false;
-  TrialRunner& r = demo_runner();
-  // Through the ordinary exit path, like any other cancel: whatever the current
-  // state raised comes down by the code that always lowers it.
-  if (r.running()) {
-    r.cancel(TrialCancelReason::Host, now);
-    apply(r.advance(g_inputs.word(), now));
-  }
-  g_demo_led = false;
-  digitalWrite(LED_BUILTIN, LOW);
-
-  // The demo's input configuration must not outlive it. The conditioner is
-  // shared with the session, so leaving the demo's 20 ms debounce installed
-  // means a host is silently reading lines 0 and 1 through the demo's idea of
-  // them -- a difference nothing on the host can see. Back to the session's
-  // wiring, which is the compile-time default until a `wiring` command has
-  // arrived, and re-primed because the accepted levels were reached under the
-  // old configuration.
-  g_inputs.configure(g_session->wiring().inputs);
-  g_inputs.prime(hal::read_inputs());
-
-  // The session owns the pins from here, and it has no graph yet, so this is
-  // every output line low.
-  apply(g_session->fail_safe());
-}
-
-void demo_scan(LineBitmask word, Microseconds now) {
-  demo_heartbeat(now);
-  TrialRunner& r = demo_runner();
-
-  if (g_demo_waiting_to_start) {
-    // Pulses and other debts are still owed while nothing is running.
-    apply(r.service_outputs(now));
-    if (!reached(now, g_demo_start_at_us)) return;
-    g_demo_waiting_to_start = false;
-    apply(r.start(++g_demo_trial_id, kDemoSeed, now, word));
-    return;
-  }
-
-  apply(r.advance(word, now));
-  if (!r.running()) {
-    g_demo_waiting_to_start = true;
-    g_demo_start_at_us = now + kDemoRelightPauseUs;
-  }
-}
-
-/// Push a newly committed graph's input configuration into the conditioner.
-///
-/// A graph declares invert, enable and per-line debounce, and until this existed
-/// none of it reached the pins: the conditioner was default-constructed at boot
-/// and never told about any graph, so an opto-isolated active-low input read
-/// back inverted and every declared debounce was silently ignored. The
-/// conditioner is owned here rather than by the session, so this is where the
-/// two are joined.
-#endif  // STATEMACHINED_DEMO
 
 /// Push a changed wiring into the conditioner. Keyed on the session's
 /// revision counter rather than on the graph version, which is the whole
@@ -488,10 +401,6 @@ void apply_wiring() {
   const uint16_t revision = g_session->wiring_revision();
   if (revision == applied) return;
   applied = revision;
-  // The demo owns the conditioner while it runs, and puts the session's wiring
-  // back when it ends. Installing it underneath would give a bench board a
-  // debounce it is not expecting mid-chase.
-  if (g_demo_active) return;
   g_inputs.configure(g_session->wiring().inputs);
   // No previous level for the new polarity to be measured against, so adopt
   // what is there rather than reporting every line as having just moved.
@@ -500,15 +409,56 @@ void apply_wiring() {
 
 }  // namespace
 
+// A board with nothing attached does nothing, and that is now the only
+// behaviour there is.
+//
+// This file used to carry a demo paradigm -- a graph compiled into the firmware
+// that ran before the first `hello`, so that a bench board with a switch and a
+// few LEDs did something you could watch. It cost ~4.6 KB of SRAM on a 32 KB
+// part for its own graph and its own runner, and it was a second way for a
+// board to be running something: a rig image had to compile it out
+// (-DSTATEMACHINED_DEMO=0) precisely so that a rig could not quietly run the
+// demo while somebody believed it was running an experiment.
+//
+// Both of those are gone, because the thing the demo was for is now expressible
+// without it. A bench board is greeted once, handed `graphs/state-walk.json`,
+// told to arm its own trials and saved (dev/PROTOCOL.md 3.7, 3.8) -- and then
+// runs that walk from its own storage, forever, with nothing plugged into it.
+// That is strictly better than the demo was: it is a real uploaded graph, so
+// watching it is evidence about the whole path rather than about a parallel
+// one; it is edited in a file rather than in C++; and there is only one kind of
+// image to flash.
+//
+// What is left here for a board nobody has spoken to is the heartbeat above.
 void setup() {
   hal::init();
   g_health.hz = measure_scan_floor_hz();
   g_inputs.prime(hal::read_inputs());
   g_session = &session();
+  g_session->set_settings_port(&g_settings);
   g_session->report_scan_health(g_health);
+
+  // What this board remembers about itself, read before a single line is
+  // driven. The order matters and is the whole reason storage exists: a stored
+  // wiring carries the output safe levels, so a rig with an active-low valve
+  // driver fails safe to *its* levels at the next power cut rather than to the
+  // compiled-in default. It may also carry a graph set and an instruction to
+  // start running it, which is the board that comes up doing its job with
+  // nothing plugged into it.
+  //
+  // Whatever it says, the compiled-in defaults have to be correct on their own:
+  // a blank store, a damaged one, or a board with no store at all all land
+  // here, and none of them is an error. A mitigation that depends on somebody
+  // having saved settings is not one.
+  g_session->restore_settings(hal::micros_now());
+
   // Every line to its safe level before the first scan. With no graph yet that
   // is all low, and it is applied again the moment a graph is committed.
   apply(g_session->fail_safe());
+  // A restored wiring has to reach the conditioner, exactly as a `wiring`
+  // command's does: debounce and polarity that were saved and then ignored
+  // would be a board reading its own pins through the wrong idea of them.
+  apply_wiring();
   if (!hal::start_scan_timer(kScanHz, on_tick)) {
     // Without the timer nothing advances a trial, so the board would sit there
     // accepting graphs and arming trials that then never end. Halt with every
@@ -523,10 +473,9 @@ void setup() {
     }
   }
 
-  // Nothing has greeted us yet, so run the demo until something does. Last in
-  // setup() because it needs the timer: without a tick nothing would advance it
-  // and a lit ready lamp would be the whole show.
-  demo_begin(hal::micros_now());
+  // The board's own LED, so that a board which booted and is scanning says so
+  // with nothing wired to it.
+  pinMode(LED_BUILTIN, OUTPUT);
 }
 
 void loop() {

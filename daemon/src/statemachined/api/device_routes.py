@@ -12,10 +12,12 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from pydantic import BaseModel, ConfigDict, Field
 
+from ..device.message_framing import DeviceRefusedTheCommand
 from ..model.line_map import LineMap
-from .http_errors import no_device_connected, refusal
-from .rig_service import RigService
+from .http_errors import from_device_refusal, no_device_connected, refusal
+from .rig_service import NoActiveGraph, RigService
 
 router = APIRouter(prefix="/api/device", tags=["device"])
 
@@ -87,6 +89,93 @@ def connect_to_the_device(request: Request) -> dict:
         return service.connect()
     except Exception as exc:  # noqa: BLE001
         raise no_device_connected(f"could not open {service.configuration.device_target}: {exc}")
+
+
+class AutorunRequest(BaseModel):
+    """Who arms the trials, as a caller says it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+    #: A name, never a slot -- like everything else this API takes. Left out
+    #: when enabling, the session's active graph is used, which is the one a
+    #: person looking at this rig would mean.
+    graph_name: str | None = None
+    cap_milliseconds: int = Field(default=0, ge=0)
+    #: The stream the board's own trials draw from. Left out, whatever the board
+    #: already holds stands -- which for a board restored from its own storage
+    #: is the seed that makes an unattended session replay.
+    seed: int | None = Field(default=None, ge=0)
+    first_trial_id: int | None = Field(default=None, ge=0)
+    #: Enable it without starting it. How a rig is set up: `POST
+    #: /api/device/save` is refused on a board that is running, and a board
+    #: arming its own trials is never idle -- so enable, save, power cycle.
+    start_now: bool = True
+
+
+@router.get("/autorun")
+def read_autorun(request: Request) -> dict:
+    """Whether this board arms its own trials, and what it would run.
+
+    Asked of the board rather than remembered here: the setting is stored on the
+    device, outlives this daemon's session, and survives the greeting that took
+    the rig away from it. `enabled` and `active` are not the same fact -- see
+    dev/PROTOCOL.md 3.7.
+    """
+    service = service_of(request)
+    if not service.supervisor.is_connected:
+        raise no_device_connected()
+    try:
+        return service.read_autorun()
+    except DeviceRefusedTheCommand as exc:
+        raise from_device_refusal(exc)
+
+
+@router.put("/autorun")
+def set_autorun(request: Request, wanted: AutorunRequest) -> dict:
+    """Hand the board the job of arming its own trials, or take it back.
+
+    This is the switch that makes the daemon optional: the device starts each
+    run itself and waits out the dwell the terminal state it reached declared.
+    Pair it with `POST /api/device/save` for a board that comes back from a
+    power cut still doing it.
+    """
+    service = service_of(request)
+    if not service.supervisor.is_connected:
+        raise no_device_connected()
+    try:
+        return service.set_autorun(
+            wanted.enabled,
+            graph_name=wanted.graph_name,
+            cap_milliseconds=wanted.cap_milliseconds,
+            seed=wanted.seed,
+            first_trial_id=wanted.first_trial_id,
+            start_now=wanted.start_now,
+        )
+    except NoActiveGraph as exc:
+        # Enabling with no graph named and none selected. Refused with the same
+        # words a trial that named no graph gets, because it is the same gap.
+        raise refusal(409, "no_graph_named", str(exc), "graph_name")
+    except DeviceRefusedTheCommand as exc:
+        raise from_device_refusal(exc)
+
+
+@router.post("/save")
+def save_device_settings(request: Request) -> dict:
+    """Write the board's wiring, graph set and autorun settings to its own
+    storage, so that all three survive a power cut.
+
+    `write_count` in the reply is flash wear made visible: the reference board's
+    data flash is good for about 100,000 erase cycles, and this is a rig telling
+    somebody where it is in that budget rather than failing one day.
+    """
+    service = service_of(request)
+    if not service.supervisor.is_connected:
+        raise no_device_connected()
+    try:
+        return service.save_device_settings()
+    except DeviceRefusedTheCommand as exc:
+        raise from_device_refusal(exc)
 
 
 @router.get("/lines")

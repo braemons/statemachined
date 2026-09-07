@@ -119,6 +119,13 @@ GraphError validate(const GraphSet& g) {
         if (s.timeout_duration >= g.n_distributions) return GraphError::TooManyDistributions;
         if (!mine(s.timeout_target)) return GraphError::BadTarget;
       }
+      // A dwell on a state that is not terminal is a graph saying something it
+      // cannot mean: nothing would ever read it, because a dwell is drawn on
+      // arriving at the end of a run.
+      if (s.relight_duration != kNoRandomDistribution) {
+        if (!s.terminal()) return GraphError::RelightOnLiveState;
+        if (s.relight_duration >= g.n_distributions) return GraphError::TooManyDistributions;
+      }
       for (uint8_t c = 0; c < s.transition_count; ++c) {
         const Transition& t = g.transitions[s.first_transition + c];
         if (!mine(t.target_state)) return GraphError::BadTarget;
@@ -189,6 +196,8 @@ const char* graph_error_str(GraphError e) {
       return "too many graphs in the set";
     case GraphError::EmptyGraph:
       return "a graph in the set has no states";
+    case GraphError::RelightOnLiveState:
+      return "a state that is not terminal declares a relight dwell, which nothing would read";
   }
   return "unknown";
 }
