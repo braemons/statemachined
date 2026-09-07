@@ -155,52 +155,98 @@ reconnecting the bridge must not cost a re-upload.
 
 Answered with `hello_ack`, or `error` / `bad_proto`.
 
-### 3.2 The graph upload
+### 3.2 The set upload
 
-Six message types, in this order:
+**A session uploads every graph it will use, once, before its first trial**, and
+then switches between them with `configure`'s `graph_index` (§3.3). Nothing is
+uploaded between trials. See `dev/DAEMON.md` §3.2 for why: an upload that
+happens only when the trial type *changes* lengthens the ITI on exactly those
+trials, which is a timing difference correlated with the variable under study.
+
+Eight message types, in this order:
 
 ```
-graph_begin
-  graph_dist        × n_distributions
-  graph_state       × n_states, in index order
-    graph_transition  × this state's transitions
-    graph_action      × this state's entry and exit actions
-graph_end
+set_begin
+  graph_dist        × n_distributions        (see below on where these may go)
+  graph_begin       × n_graphs, in slot order
+    graph_state       × that graph's n_states, in index order
+      graph_transition  × this state's transitions
+      graph_action      × this state's entry and exit actions
+  graph_end
+set_end
 ```
 
 **`graph_transition` and `graph_action` attach to the most recently declared
-`graph_state`.** That is not a convenience: the device stores transitions and
-actions as one flat pool per kind, and a state refers to its own as a
-`(first, count)` slice of it. A slice is contiguous by construction only if
-everything belonging to a state arrives together — so the ordering rule on the
-wire *is* the memory invariant, and a violation is refused rather than producing
-a state that owns somebody else's transitions.
+`graph_state`, and a `graph_state` to the most recently declared
+`graph_begin`.** That is not a convenience: the device stores states,
+transitions and actions as one flat pool per kind, shared by every graph in the
+set, and each level refers to its own as a `(first, count)` slice. A slice is
+contiguous by construction only if everything belonging to it arrives together —
+so the ordering rule on the wire *is* the memory invariant, and a violation is
+refused rather than producing a graph that owns somebody else's states.
 
-The upload is staged. **The committed graph is untouched until `graph_end`
-succeeds**, so a failed or abandoned upload leaves the device running the
-paradigm it was already running.
+**State indices are per graph**, counted from zero, because that is how the host
+authored them: `entry`, a `timeout.target` and a transition's `target` all mean
+"the n'th state of *this* graph". The device adds the graph's offset on the way
+in, and reports state indices the same way in `result_path` and `visit`. Every
+other pool index — a distribution, in particular — is **set-global**, because
+those pools are genuinely shared and one graph reusing another's foreperiod is
+the point of sharing them.
 
-#### `graph_begin`
+> **A transition may not leave its own graph.** Selecting a graph by index has
+> to select a *machine*. A shared pool makes crossing easy to write by accident,
+> so it is refused at `set_end` with `bad_graph`.
+
+**The upload is not staged, and this is the one thing that got worse.** A single
+graph was double-buffered, so a failed re-upload left the previous paradigm
+running. Two sets do not fit in 32 KB, so the device fills the live one: from
+`set_begin` until `set_end` succeeds it holds **no graph at all**, `configure` is
+refused with `not_ready`, and every output sits at its safe level (§3.5). That
+fails safe and loudly where the alternative would be a board quietly running a
+paradigm somebody thought they had replaced — and it can only happen between
+sessions, since an upload is refused with `busy` while a trial is armed.
+
+#### `set_begin`
 
 ```json
-{"msg_type":"graph_begin","message_id":1,"graph_version":7,"n_states":4,"entry":0,
- "invert":0,"enable":4294967295,"safe":0,"debounce_ms":[0,2,2,0],"crc":"...."}
+{"msg_type":"set_begin","message_id":1,"set_version":7,"n_graphs":3,"crc":"...."}
 ```
 
 | Field | Type | |
 |---|---|---|
-| `graph_version` | `u16` | The host's identifier for this graph. Echoed in `armed` and checked by `configure` |
+| `set_version` | `u16` | The host's identifier for this set. Echoed in `armed` and checked by `configure` |
+| `n_graphs` | `u8` | Declared up front so an oversize set is refused before the first graph is sent, and so a `set_end` that arrives early is caught rather than committing a set with a hole in it. At most `caps.max_graphs` |
+
+#### `graph_begin`
+
+```json
+{"msg_type":"graph_begin","message_id":4,"slot":0,"n_states":4,"entry":0,"crc":"...."}
+```
+
+| Field | Type | |
+|---|---|---|
+| `slot` | `u8` | Which graph in the set this is, and what `configure`'s `graph_index` will name. Must be the next one: stated rather than implied by arrival order, so a dropped `graph_begin` is a refusal rather than a silently renumbered set |
 | `n_states` | `u8` | Declared up front so an oversize graph is refused before the first state is sent, not after the last |
-| `entry` | `u8` | State index the machine starts in |
-| `invert` | `mask` | Lines read active-low. Opto-isolated inputs routinely are |
-| `enable` | `mask` | Lines that participate at all. Default all ones |
-| `safe` | `mask` | Output levels on watchdog timeout, reset, link loss or a refused graph. Per line, because "off" is not always "low" |
-| `debounce_ms` | array of `u16` | Optional. Per input line, index = line. May be shorter than the line count; missing entries are 0 |
+| `entry` | `u8` | State index the machine starts in, **within this graph** |
+
+> **`invert`, `enable`, `safe` and `debounce_ms` used to be here.** They describe
+> the *wiring* rather than the paradigm, and carrying them on `graph_begin` made
+> "change the debounce" mean "re-upload the graph" — and, worse, left a board
+> with no graph unable to fail safe correctly. They are now §3.5's `wiring`
+> command. A device that receives them here ignores them, as it ignores any
+> unknown member; it does not refuse the upload.
 
 #### `graph_dist`
 
-One entry of the shared distribution pool. Timeouts and holds refer to it by
-index, so a graph reuses one distribution everywhere it means the same thing.
+One entry of the distribution pool, which is shared by the **whole set**.
+Timeouts and holds refer to it by index, so a graph reuses one distribution
+everywhere it means the same thing, and two graphs reuse one where they mean the
+same thing.
+
+A host may send them all at set level, before the first `graph_begin`, or with
+the graph that introduces them. The one rule is the one that has always been
+here: a distribution arrives **before any state that could name it**, so a state
+is range-checked against the pool as it arrives rather than after the fact.
 
 ```json
 {"msg_type":"graph_dist","message_id":2,"i":0,"kind":"uniform","a":300,"b":700,"crc":"...."}
@@ -229,6 +275,21 @@ a dropped message from a silently mis-indexed graph into a refusal.
 | `i` | `u8` | State index. Must equal the number of states already accepted |
 | `terminal` | `i8` or `null` | The outcome code this state reports, or `null` for a non-terminal state. The device treats it as opaque — see §6 |
 | `timeout` | object or `null` | `dist` indexes the distribution pool; `target` is the state entered when it expires |
+| `relight` | `u8` or `null` | **Terminal states only.** The distribution the dwell in this state is drawn from — how long before another run may begin. Absent or `null` means none, which is what every graph written before this field existed says. A `relight` on a state that is not terminal is refused |
+
+**`relight` does not give a terminal state an exit.** Nothing exits a terminal
+state: the run ends there, its record is closed, and the dwell is drawn on
+arrival and reported in that state's visit as `drawn_ms`. What it decides is
+when the *next* run may start, and whether anything acts on it is a property of
+the device rather than of the graph — see §3.7. The same graph therefore runs
+unchanged under a host that arms every trial itself, which is the point of
+putting the timing here and the authority there: an inter-trial interval is a
+paradigm decision that has to replay with the trial it followed, and who arms
+trials is a fact about the deployment.
+
+A terminal state that declares **no** dwell is where a self-driving board stops.
+That is how a paradigm says "this outcome ends the session" — per outcome, which
+a single device-wide setting could not express.
 
 #### `graph_transition`
 
@@ -302,44 +363,66 @@ a graph forgot one is not a failure mode this protocol admits.
 #### `graph_end`
 
 ```json
-{"msg_type":"graph_end","message_id":40,"n_transitions":6,"n_output_actions":5,
- "checksum":"<crc16>","crc":"...."}
+{"msg_type":"graph_end","message_id":40,"n_transitions":6,"n_output_actions":5,"crc":"...."}
 ```
 
+Closes one graph. `n_transitions` and `n_output_actions` are **this graph's**
+counts, not the set's, checked against the device's — a host that miscounted one
+graph should be told which graph. Answered with `ack`.
+
+#### `set_end`
+
+```json
+{"msg_type":"set_end","message_id":41,"n_states":9,"n_transitions":6,
+ "n_output_actions":5,"checksum":"<crc16>","crc":"...."}
+```
+
+The set's totals across every graph, and the checksum.
+
 `checksum` is CRC-16/CCITT-FALSE accumulated over the **CRC-covered bytes of
-every graph message since `graph_begin`, in arrival order, `graph_begin`
-included and `graph_end` excluded**. It is not the same thing as the per-line
-`crc`: that one catches a corrupt line, this one catches a *missing* one.
+every upload message since `set_begin`, in arrival order, `set_begin` included
+and `set_end` excluded**. It is not the same thing as the per-line `crc`: that
+one catches a corrupt line, this one catches a *missing* one.
 
-`n_transitions` and `n_output_actions` are the host's counts, checked against the
-device's. A mismatch is refused, naming both.
-
-On success the assembled graph is validated — every index in range, every slice
-inside its pool, no output line the board does not have, a terminal state
-reachable from the entry state, and no unreachable state — and then committed.
-Answered with `graph_ok` or `error` / `bad_graph`, whose `context` names what
-failed.
+On success the whole set is validated — every index in range, every slice inside
+its pool, no output line the board does not have, no transition leaving its own
+graph, and per graph a terminal state reachable from the entry state with no
+unreachable state — and then committed. **All of it or none of it**: a set that
+uploaded four graphs and validated three is a session that fails at trial 40
+instead of before the animal is in the booth. Answered with `set_ok` or `error`
+/ `bad_graph`, whose `context` names what failed.
 
 ### 3.3 `configure`
 
 The per-trial message. Arms the device for exactly one trial.
 
 ```json
-{"msg_type":"configure","message_id":41,"trial_id":193,"graph_version":7,"cap_ms":30000,
- "start":"serial","patch":[{"i":0,"a":250,"b":900}],"crc":"...."}
+{"msg_type":"configure","message_id":41,"trial_id":193,"set_version":7,"graph_index":2,
+ "cap_ms":30000,"start":"serial","patch":[{"i":0,"a":250,"b":900}],"crc":"...."}
 ```
 
 | Field | Type | |
 |---|---|---|
 | `trial_id` | `u32` | The host's identity for this trial. Appears in `armed` and `result`, and a `cancel` for any other id is refused |
-| `graph_version` | `u16` | Must match the committed graph. A graph edit that did not land would otherwise leave the device confidently running the old paradigm |
+| `set_version` | `u16` | Must match the committed set. A set edit that did not land would otherwise leave the device confidently running the old paradigms |
+| `graph_index` | `u8` | Which graph of the set this trial runs. **This is the switch**: every graph is already on the device, so changing paradigm between two trials is one field on a message that was going to be sent anyway. Absent means `0`. Out of range is refused with `bad_index` |
 | `cap_ms` | `i32` | Wall-clock cap on the whole trial. `0` or absent means the device default. Validation cannot tell a 10 s foreperiod from a hang, so this stays regardless of the graph |
 | `start` | `"serial"` `"line"` `"both"` | What may start the trial once armed |
 | `patch` | array | Optional per-trial overrides of distribution parameters, by pool index. Only `a`, `b`, `c` may be patched; `kind` may not. Reverted when the trial ends |
 
-`patch` is why the graph does not have to be re-uploaded when only the timings
-change, which is the common case. It cannot change the *shape* of anything —
-that would be a different graph, and a different `graph_version`.
+`patch` indices are into the set's shared distribution pool, like every other
+distribution index. It is why a set does not have to be re-uploaded when only
+the timings change, which is the common case. It cannot change the *shape* of
+anything — `kind` may not be patched, because that would be a different graph
+and a different `set_version`.
+
+**The override lasts exactly one trial.** The device keeps the values it
+replaced and puts them back when the trial ends, when another `configure`
+replaces the patches, and whenever a session resets: a patch that outlived its
+trial would be a timing nobody could account for afterwards. A patch entry
+naming a distribution that does not exist is refused with `bad_index`, and a
+malformed one applies **nothing** — a trial running with half a patch on it is
+not a state this protocol admits.
 
 Answered with `armed`, or `error`.
 
@@ -370,6 +453,189 @@ trial was cancelled when the animal had already responded.
 `ping` arms the link-loss watchdog. `state` asks for `state_report` and is for
 inspection only — it is never in a trial's critical path.
 
+### 3.5 `wiring`
+
+What is *wired to the box*, as opposed to what a paradigm does with it. Sent
+when a rig is wired and then not again for a year.
+
+```json
+{"msg_type":"wiring","message_id":9,"invert":0,"enable":4294967295,
+ "safe":0,"debounce_ms":[0,2,2,0],"crc":"...."}
+```
+
+| Field | Type | |
+|---|---|---|
+| `invert` | `mask` | Lines read active-low. Opto-isolated inputs routinely are |
+| `enable` | `mask` | Lines that participate at all. Default all ones |
+| `safe` | `mask` | Output levels on watchdog timeout, reset, link loss or a refused graph. Per line, because "off" is not always "low" |
+| `debounce_ms` | array of `u16` | Per input line, index = line. May be shorter than the line count; **lines it does not name are set to 0**, so a debounce can be removed |
+
+Every member is optional and an absent one leaves that setting alone —
+`{"safe":5}` changes the safe levels and nothing else. `debounce_ms` is the
+exception to "leaves it alone" only in the sense above: sending the array at all
+replaces the whole table.
+
+Answered with `ack`, or `error`. **Refused with `busy` while a trial is armed or
+running**, like a graph upload and for a sharper reason: the conditioning it
+changes is read by the scan, so a debounce edited under a running trial would
+move a timing nobody could account for afterwards.
+
+The wiring is read into a copy and installed whole, so a message that turns out
+to be malformed halfway through leaves the board wired the way it was. A typo in
+a debounce must not take the safe levels with it.
+
+> **It survives a power cycle only if it is saved.** §3.8's `save` writes the
+> wiring to the board's own storage, and the next boot reads it back before it
+> drives a single line — which is what makes a rig with an active-low valve
+> driver fail safe to *its* levels rather than to all-low. A board that has
+> never been saved to, or whose store is blank or damaged, comes up on the
+> compile-time `STATEMACHINED_SAFE_LEVELS` instead, which is why that constant
+> has to stay correct on its own. `hello_ack`'s `has_wiring` is how a host tells
+> a configured board from one running defaults.
+
+### 3.6 `pins`
+
+```json
+{"msg_type":"pins","message_id":9,"dir":"in","crc":"...."}
+```
+
+Asks the device what its lines are called and, by asking twice, which of them
+are inputs and which are outputs. Answered with §4.6's `pin_map`, or with
+`error` / `no_pin_map` by a build that has no pins worth naming.
+
+**Why this is on the wire at all.** Which pin a line is, and which direction it
+has, are fixed when the firmware is compiled: the HAL's `kInputPins` and
+`kOutputPins` are what `init()` calls `pinMode()` over, and no command changes
+either. A host therefore cannot *derive* the map, and the only alternative to
+asking is keeping a copy of the board's table keyed by the `board` string — a
+hand-copied pin map, which is the failure the RA4M1 HAL refuses to risk with the
+Arduino core's table and which is no safer one layer up. A host that guesses
+wrong drives a valve from a lever's line number and nothing anywhere says so.
+
+| field | |
+|---|---|
+| `dir` | **Required.** `"in"` or `"out"`. Anything else is `error` / `bad_field` |
+
+**One direction per request, and no chunking.** Both directions in one reply do
+not fit `max_line` on a 32-line board, and a reply that silently carried half
+the map would be worse than none: the host would believe it had the whole
+thing. One direction always fits. A device whose labels somehow do not answers
+`error` / `too_long` rather than truncating.
+
+`pins` is legal whenever `hello` has been answered, changes nothing, and may be
+asked at any time — including during a trial, though a host with any sense asks
+once per connection.
+
+### 3.7 `autorun`
+
+```json
+{"msg_type":"autorun","message_id":10,"enabled":true,"graph_index":0,
+ "cap_ms":30000,"seed":"0123456789ABCDEF","first_trial_id":1,"crc":"...."}
+```
+
+Who starts the trials. Everywhere else in this protocol the answer is the host:
+triald is the decision authority, it chooses the trial type and arms each trial,
+and the device is the timing authority that runs the one it was given. This is
+the case where there is no decision authority at all — a board on a bench, an
+unsupervised shaping session, a box with nothing plugged into its USB port — and
+the device starts each run itself, taking the interval between them from the
+dwell the terminal state it just reached declared (§3.2, `relight`).
+
+| Field | Type | |
+|---|---|---|
+| `enabled` | bool | Whether the device may start runs on its own. **Absent means this message is a question**: nothing changes and the current settings are reported |
+| `graph_index` | `u8` | Which graph of the committed set it runs. Autorun cannot switch paradigms: switching is a decision, and the premise here is that nothing is making decisions |
+| `cap_ms` | `i32` | Wall-clock cap per run, as `configure`'s. It matters more here — nobody is watching for a graph that has hung |
+| `seed` | hex `u64` | The stream every autorun trial's randomness is derived from. Carried here rather than taken from the session, because a self-driving board may never receive a `hello` and so may never be given one |
+| `first_trial_id` | `u32` | Where the ids it assigns start, so a host can tell runs the board made on its own from its own |
+| `start_now` | bool | Default `true`. `false` records that this board should drive itself **without starting it** — which is how a rig is set up, because §3.8's `save` is refused on a board that is running and a board arming its own trials is never idle. Enable, save, power cycle |
+
+Answered with `autorun_ok`, carrying `enabled`, `active`, `graph_index`,
+`cap_ms` and `next_trial_id`. **`enabled` and `active` are not the same fact:**
+the setting is stored and survives, while `active` is whether the board is
+driving trials right now.
+
+Refused with `not_ready` if no set is committed, `bad_index` if the graph does
+not exist, and `busy` if a *host-driven* trial is running — a message that hands
+the board a new job must not land while it is doing one. `configure` is refused
+the same way while autorun is active: one authority at a time, and disabling
+autorun first is one message that says which of the two is in charge.
+
+**Turning autorun off is never refused as busy.** "Stop" is the thing somebody
+most wants while it is running, and it is the one command that must not be
+refused for the reason that it is running. The run in flight ends through the
+ordinary exit path, exactly as a `cancel` does: its lines come down and its
+result is reported. A cancelled run reached no terminal state, so it drew no
+dwell, so nothing follows it — the board stops without that being a separate
+rule.
+
+**A host that greets takes the rig.** `hello` stops a self-driving board — the
+run in flight is cancelled through the ordinary exit path, so its lines come
+down and its result is still reported — while leaving the stored setting alone,
+so the next boot still comes up self-driving. Starting again takes another
+`autorun`. That asymmetry is deliberate: a daemon that crashed must not be able
+to leave a board delivering rewards to an animal nobody is watching, and the one
+path into unattended running that no host asked for is a boot from settings
+somebody deliberately saved.
+
+**Losing the link does not stop it.** For a board that was explicitly told to
+drive itself, the port closing is the expected end of "upload a paradigm, then
+detach" rather than a fault: nothing is cancelled and nothing fails safe. A
+board that was *not* told to drive itself behaves exactly as it always has — the
+trial is cancelled as `link_lost` and every line goes to its safe level.
+
+### 3.8 `save`
+
+```json
+{"msg_type":"save","message_id":11,"crc":"...."}
+```
+
+Write what the device currently holds — its wiring, its committed graph set and
+its autorun settings — to the board's own storage, so that all three survive a
+power cut. It takes no fields: what is saved is what is there, because a save
+that took its own copy of the settings would be a second place for them to
+disagree.
+
+Answered with `saved`:
+
+```json
+{"msg_type":"saved","message_id":12,"in_reply_to":11,"has_set":true,"set_version":7,
+ "autorun":true,"write_count":3,"written":true,"crc":"...."}
+```
+
+`write_count` is how many times this board's store has been written. It is
+reported because data flash wears out — about 100,000 erase cycles on the
+reference board — and a rig a third of the way through that budget should be
+able to say so rather than failing one day without warning.
+
+**A save that would store what is already stored writes nothing**, answers
+`"written": false`, and leaves `write_count` where it was. The device compares
+before it writes — the record is encoded again and matched against the stored
+bytes as it goes, a few bytes at a time, with no second copy of the graph set —
+because an erase cycle spent to change nothing is an erase cycle spent, and
+pressing a save button twice must not cost one. It is answered rather than
+refused: "it is already saved" is a success, and a caller should not have to
+tell the two apart to know its settings are safe.
+
+Refused with `not_ready` on a board with nowhere to keep settings, `busy` while
+a trial is running (erasing and programming data flash blocks for tens of
+milliseconds against a 100 µs scan, and refusing is better than quietly costing
+somebody's response window its timing), and `storage` if the write did not land
+— in which case the store holds **no** valid record, which the next boot reads
+as "this board has forgotten" rather than as something wrong.
+
+**At boot** the device reads the record back before it drives a single line. A
+stored wiring's output safe levels are therefore the ones the first fail-safe
+uses, which is what stops a rig with an active-low valve driver from opening it
+on every power cycle. A stored set is *validated*, not merely trusted: the CRC
+says the bytes are the ones that were written, not that they were a graph worth
+running. And if the stored autorun says so, the board comes up running trials
+with no host in the picture at all.
+
+A blank store, a damaged one and a board with no store are all ordinary: the
+compiled-in defaults stand, because a mitigation that depends on somebody having
+saved settings is not one.
+
 ---
 
 ## 4. Device → host
@@ -379,10 +645,10 @@ inspection only — it is never in a trial's critical path.
 ```json
 {"msg_type":"hello_ack","message_id":0,"in_reply_to":0,"proto":1,"board":"uno_r4_minima",
  "fw":"0.1.0","n_input_lines":8,"n_output_lines":8,"scan_hz":10000,
- "has_graph":true,"graph_version":7,
+ "has_set":true,"set_version":7,"n_graphs":3,"has_wiring":true,
  "caps":{"max_line":512,"max_states":32,"max_transitions":64,
          "max_output_actions":64,"max_distributions":32,
-         "max_choice_options":32,"max_path":64},"crc":"...."}
+         "max_choice_options":32,"max_path":255,"max_graphs":20},"crc":"...."}
 ```
 
 `scan_hz` is **measured at boot, not declared**, so the host knows the timing
@@ -392,18 +658,30 @@ resolution it is actually getting rather than the one the design hoped for.
 against them before uploading, which turns "refused at `graph_end`" into
 "refused before the first byte" — a better error at no cost.
 
+They are **read, never assumed**, and `max_path` is the one where that has
+already mattered: the reference board briefly shipped two images, one of which
+carried a demo paradigm and therefore a second path buffer, and reported 64
+where the other reported 255. There is one image now and it reports 255 — which
+is exactly why a host reads the number rather than knowing it.
+
 They are **nested rather than flat**, and that is a memory decision rather than a
 stylistic one: a receiver's per-message member limit is what bounds how much
 stack a parse costs, and flattening these would push the largest message in the
 protocol past a limit that every other parse would then pay for.
 
-`has_graph` and `graph_version` say whether a graph survived the reconnect, so a
+`has_wiring` says whether anybody has sent §3.5's `wiring`. **False means the
+board is running its compile-time defaults**, which is a different thing from
+"wired the way this rig needs" and is exactly what a host must not have to
+guess.
+
+`has_set`, `set_version` and `n_graphs` say whether a set survived the reconnect, so a
 bridge that dropped its link knows whether it has to re-upload.
 
 ### 4.2 `armed`
 
 ```json
-{"msg_type":"armed","message_id":1,"in_reply_to":41,"trial_id":193,"graph_version":7,"crc":"...."}
+{"msg_type":"armed","message_id":1,"in_reply_to":41,"trial_id":193,"set_version":7,
+ "graph_index":2,"crc":"...."}
 ```
 
 Both fields, always. This is the confirmation that `start` requires and it is
@@ -411,7 +689,13 @@ not skippable.
 
 ### 4.3 The result
 
-Chunked, for the same reason the upload is: a 64-entry path does not fit in a
+**The result is the record.** §4.4's `visit` stream reports the same visits as
+they happen and is a *preview*: a host reconciles what it streamed against what
+arrives here, and where the two disagree, this wins. The one case the stream is
+the only complete copy is a `truncated` result, and `first_seq` below is what
+lets a host say exactly which visits it is missing.
+
+Chunked, for the same reason the upload is: a full path does not fit in a
 512-byte line, and buffering one that did would cost the device a kilobyte it
 does not have.
 
@@ -423,7 +707,7 @@ result_end
 
 ```json
 {"msg_type":"result_begin","message_id":9,"trial_id":193,"outcome":1,"cancel_reason":0,
- "total_us":1483200,"path_len":5,"truncated":false,"crc":"...."}
+ "total_us":1483200,"path_len":5,"first_seq":0,"total_visits":5,"truncated":false,"crc":"...."}
 
 {"msg_type":"result_path","message_id":10,"trial_id":193,"from":0,
  "p":[[0,"timeout",255,500,0,500120],[1,"transition",2,0,500120,183044]],"crc":"...."}
@@ -441,7 +725,7 @@ Each entry of `p` is a fixed six-element array, **not** an object:
 |---|---|---|
 | 0 | `u8` | Which state. An **index**, not a name — the bridge holds the graph and resolves names host-side, which is part of what keeps the device inside 32 KB |
 | 1 | string | `"timeout"` `"transition"` `"cancel"` `"terminal"` |
-| 2 | `u8` | Which transition fired, or `255` for an exit that was not one |
+| 2 | `u8` | Which of **this state's** transitions fired, counted from zero in declaration order, or `255` for an exit that was not one. Per state, like `state_index` is per graph: the host reads the graph the way it wrote it, and never has to know where a state's slice of the shared pool sits |
 | 3 | `i32` | The **realised** duration of the draw, in ms. Reported so a random timing is evidence in the record and not merely reproducible from the seed |
 | 4 | `u32` | Entry timestamp, device clock |
 | 5 | `u32` | Measured duration. This is what actually happened; position 3 is what was asked for |
@@ -451,31 +735,91 @@ documented once, here, and decoded once, in the bridge.
 
 `truncated` is set when the run visited more states than `max_path` holds. **A
 graph may loop, and a long trial degrades to a truncated path rather than to a
-corrupt one** — the record is a ring buffer with an overflow flag, and the flag
-is on the wire so the host never mistakes a truncated path for a complete one.
+corrupt one.** The record is a genuine ring and it drops from the **front**: the
+interesting part of a trial is the response at the end, so overflow costs the
+oldest visits, not the newest.
+
+| Field | Type | |
+|---|---|---|
+| `path_len` | `u8` | How many entries `p` will carry in total — the size of the window, not of the run |
+| `first_seq` | `u32` | The `seq` (§4.4) of the oldest visit still in that window. `0` unless the ring wrapped |
+| `total_visits` | `u32` | How many visits the run actually made. `total_visits > path_len` is what `truncated` means, and now it says by how much |
+
+`from` on a `result_path` chunk stays an offset into what is being **sent**, not
+into the run: chunk 0 starts at `first_seq`, whatever that is.
 
 `result_end`'s `checksum` accumulates over `result_begin` and every
 `result_path`, exactly as `graph_end`'s does, and catches a dropped chunk.
 
-### 4.4 `event`, `error`, `log`, `pong`, `state_report`
+### 4.4 `visit`
+
+One completed state visit, sent as it happens. Unsolicited, so it can arrive
+between a command and its reply and in the middle of a result.
+
+```json
+{"msg_type":"visit","message_id":57,"trial_id":193,"seq":2,
+ "v":[1,"transition",2,0,500120,183044],"crc":"...."}
+```
+
+`v` is **the same six-element array as a `result_path` entry**, in the same
+order and with the same types (§4.3). It is decoded by the same function on the
+host; two shapes for one fact is how the two drift apart.
+
+| Field | Type | |
+|---|---|---|
+| `trial_id` | `u32` | The id from `configure`. **`0` when there was no host-configured trial** — a line-started run before anything assigned an id. A board arming its own trials assigns them itself (§3.7), so those carry a real id. The trace is still worth having either way |
+| `seq` | `u32` | The visit's ordinal within the run, from `0`. A gap is what makes a dropped visit **detectable** rather than a hole nobody notices |
+
+**Emitted when the state is left, not when it is entered**, because a visit's
+duration and exit cause do not exist before then. For a trace that is not a
+latency problem — what matters is the timestamp, and `entered_us` is exact — and
+for a live display it costs one state of lag on a trial's first state only:
+after that, each exit says both when the reported state ended and, via
+`transition_index` resolved against the graph the host holds, which state the
+machine is in now.
+
+It is called `visit` and not `transition` for two reasons. `transition` is
+already this wire's noun for an edge in a graph (`graph_transition`), and what
+is reported is a completed *visit* that happens to carry the transition which
+ended it.
+
+**Always on.** Unlike `event`, which can fire every scan, this fires a handful
+of times per trial, and there is no rig configuration in which one would rather
+not have the record. `state_report`'s `tx_stalls` is what would say otherwise.
+
+### 4.5 `event`, `error`, `log`, `pong`, `state_report`
 
 ```json
 {"msg_type":"event","message_id":13,"us":1483200,"word":6,"crc":"...."}
 {"msg_type":"error","message_id":14,"in_reply_to":41,"code":"bad_graph","message":"...","context":"...","crc":"...."}
 {"msg_type":"log","message_id":15,"level":"warn","message":"...","crc":"...."}
-{"msg_type":"pong","message_id":16,"in_reply_to":44,"up_us":90210000,"crc":"...."}
+{"msg_type":"pong","message_id":16,"in_reply_to":44,"up_us":90210000,"us":1483200,"crc":"...."}
 ```
 
 `event` reports the conditioned input word on change. **Off by default and never
 in a trial's critical path**: it is a monitoring aid, and a link that cannot keep
 up drops events rather than delaying a scan.
 
+`pong` carries two clocks and they are not interchangeable. `up_us` counts from
+the first time anything asked the device the time, so its origin differs every
+session and it is for reading, not arithmetic. `us` is the **device clock
+itself**, raw and wrapping every ~71 minutes — the same clock a result's
+`entered_us` is in, which is what makes a `ping` round-trip usable to correlate
+the two clocks at all.
+
 `log` is free text, rate-limited, and never load-bearing. Nothing in the bridge
 may parse it.
 
 `state_report` answers `state` with the current state index, uptime, the
-committed `graph_version`, the counts of dropped and unusable lines, and a
-nested `scan` object. Diagnosis, not control.
+nested `graph` object (`has_set`, `set_version`, `n_graphs`, `index`),
+`has_wiring` as in §4.1, `autorun` — whether the board is arming its own trials
+(§3.7) — the counts of dropped and unusable lines, and a nested `scan` object.
+
+`link_state` is what the session is doing: `0` greeting (nothing but `hello` is
+answered), `1` idle, `2` armed, `3` running, `4` relighting — the dwell between
+two self-driven runs, which only a board driving itself is ever in. Nested because a message is capped at sixteen top-level members
+and that cap is what bounds the reader's stack footprint. Diagnosis, not
+control.
 
 ```jsonc
 "io":   {"in": 5, "out": 128},
@@ -504,6 +848,40 @@ skipped.** It is counted rather than absorbed for exactly that reason: a board
 quietly missing scans looks identical to a board that is fine, and the
 difference is a response window measured wrongly. A bridge should surface it.
 
+### 4.6 `pin_map`
+
+```json
+{"msg_type":"pin_map","message_id":31,"in_reply_to":9,"dir":"in","n":8,
+ "pins":["D2","D3","D4","D5","D6","D7","D8","D9"],"crc":"...."}
+```
+
+The answer to §3.6. `pins[i]` is what is written on the board beside line `i` of
+that direction — silkscreen, not an Arduino pin number: `"A0"` is pin 14 to the
+core and `A0` to the person holding the wire, and only one of those is any use
+on a bench.
+
+`n` is this board's line count in that direction and is the length of `pins`. It
+matches `hello_ack`'s `n_input_lines` / `n_output_lines`; a label table in the
+firmware may be longer, and what is answered is what the board actually has,
+because that is what a host is allowed to address.
+
+**Input line *n* and output line *n* are different pins.** They are two
+independent numberings over two disjoint sets of pins, which is why `dir` is
+echoed back: a reply that did not say which direction it described could be
+filed under the wrong one, and that is a lever's number driving a valve.
+
+A label is free text and carries no structure — a board with screw terminals may
+answer `"TB1-3"`, and a host build answers `"sim0"` because it has no pins and
+should not pretend to. What a host may rely on is only that the label is stable
+for a given firmware build, and that it names the same physical thing the line
+number does.
+
+**What this does not prove.** That the wire is actually in the hole the label
+names. Nothing in software can: there is no read-back path from a pin. It closes
+the gap between the firmware's table and the host's belief about it, which is
+the gap that used to be closed by copying; the gap to the soldering iron is
+closed by watching a level change when somebody presses the lever.
+
 ---
 
 ## 5. Errors
@@ -524,9 +902,11 @@ the other two.
 | `bad_index` | An `i` did not match the count already accepted, or an index named something that does not exist |
 | `too_many` | A capacity was exceeded. `context` names **which one**, so the answer is "raise `max_transitions`", not "make the graph smaller" |
 | `bad_graph` | The assembled graph failed validation. `context` names the fault |
-| `graph_mismatch` | `configure` named a `graph_version` the device does not hold |
+| `graph_mismatch` | `configure` named a `set_version` the device does not hold |
 | `unknown_trial` | A `start` or `cancel` for a `trial_id` that is not the armed one |
 | `busy` | A trial is in flight and the command is not legal during one |
+| `no_pin_map` | `pins` was asked of a build that does not name its pins. The host keeps whatever it assumed, and knows that it assumed it |
+| `bad_field` | A field was present, parsable, and not one of the values it is allowed to be — `pins` with a `dir` that is neither `"in"` nor `"out"` |
 | `internal` | A bug. Should never appear; if it does, it is one |
 
 **Every refusal names what to change.** An error whose `context` is empty is a

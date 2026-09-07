@@ -29,6 +29,8 @@ struct JsonSpan;
 enum class MsgType : uint8_t {
   // Host -> device.
   Hello,
+  SetBegin,
+  SetEnd,
   GraphBegin,
   GraphDist,
   GraphState,
@@ -40,11 +42,15 @@ enum class MsgType : uint8_t {
   Cancel,
   Ping,
   State,
+  Wiring,
+  Pins,
+  Autorun,
+  Save,
 
   // Device -> host.
   HelloAck,
   Ack,
-  GraphOk,
+  SetOk,
   Armed,
   Started,
   CancelAck,
@@ -56,6 +62,10 @@ enum class MsgType : uint8_t {
   Log,
   Pong,
   StateReport,
+  Visit,
+  PinMap,
+  AutorunOk,
+  Saved,
 
   /// A `msg_type` this firmware does not know. Never written to the wire: it is
   /// what a name that matched nothing parses to, and it is answered with

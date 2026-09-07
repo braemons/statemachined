@@ -33,8 +33,10 @@ gh run download --name statemachined-uno_r4_minima-<sha>
 Check `MANIFEST.txt` against the commit you believe you are testing. A board in
 a rack cannot be asked what it is running, which is why that file exists.
 
-**Take the `bench` image.** The `rig` image is built with `-DSTATEMACHINED_DEMO=0` and has
-demo mode compiled out, so every step up to §4 will look like a dead board.
+There is one image. There used to be two -- a bench build carrying a demo
+paradigm and a rig build with it compiled out -- and there is now nothing to
+choose between: a board runs whatever graph it was given, out of its own
+storage, and holds none until it is given one.
 
 ---
 
@@ -65,12 +67,17 @@ either: the fault is before the link is serviced.
 
 ## 2. Wire it
 
+These are the lines `configs/uno-r4-minima-bench.config.json` maps, so a board
+wired this way can run every example graph in `graphs/` unchanged.
+
 | What | statemachined line | Pin | Wire it as |
 |---|---|---|---|
 | Start switch | input 0 | **D2** | switch to **5 V**, plus a **10 kΩ pull-down to GND** |
 | Abort switch | input 1 | **D3** | the same |
-| Step LEDs 1-5 | outputs 0-4 | **D10, D11, D12, A0, A1** | anode to pin, cathode through **220-330 Ω** to GND |
-| Ready / done lamp | output 7 | **A4** | the same |
+| Ready lamp | output 0 | **D10** | anode to pin, cathode through **220-330 Ω** to GND |
+| Cue lamp | output 1 | **D11** | the same |
+| Error lamp | output 2 | **D12** | the same |
+| Reward valve | output 3 | **A0** | an LED will do; on a rig it is the driver |
 | Alive heartbeat | *not a line* | **D13** | nothing; it is the on-board LED |
 
 **The pull-downs are not optional.** `hal::init()` sets inputs to `INPUT`, not
@@ -80,40 +87,47 @@ open, and a floating input picks up enough noise to start and abort trials on it
 own. If you have no resistors to hand, a jumper from 5 V touched to D2 is bouncy
 but unambiguous.
 
-Wire the LEDs and the start switch first. Adding the abort switch afterwards
+Wire the lamps and the start switch first. Adding the abort switch afterwards
 isolates a fault to one half of the picture.
 
 ---
 
-## 3. Watch the demo
+## 3. Nothing happens, and that is correct
 
-Press reset, then, in order:
+Press reset. **D13 blinks once a second and every other pin stays dark.**
 
-1. **A4 lights and stays lit.** The `wait` state's entry action. If this does not
-   happen, the LED or its resistor is wrong — the firmware has not reached
-   anything else yet.
-2. **Press start.** One LED walks D10 → D11 → D12 → A0 → A1, **500 ms each**.
-   Count along: 2.5 s end to end.
-3. **A4 comes back on.** That is the terminal `Hit` state's lamp. The next trial
-   arms 1.5 s later.
-4. **Press start, then abort mid-walk.** Everything stops at once and D10 lights
-   as the `Cancelled` lamp.
+That is the whole of what a board nobody has spoken to does. It holds no graph
+until one is uploaded, because a device that runs a paradigm nobody uploaded is
+a hazard -- so there is nothing for it to run, and the heartbeat is how it says
+it booted, started its timer and is scanning.
 
-Two behaviours that are correct and look like faults:
+A dark D13 is the finding here: the fault is before the link, and §4 will not
+help. A blinking D13 with a lamp also lit means either a stored graph is already
+running (§7 -- this board has been set up before) or the lamp is wired to
+something it should not be.
+
+Watching a paradigm run is §7, after there is one on the board. It is worth
+knowing what it will look like: the ready lamp lights, a press on the start
+switch walks one lamp across D10 -> D11 -> D12 and round again at **500 ms a
+step**, the trial ends as a `Hit`, and 1.5 s later it goes again. That is
+`graphs/state-walk.json`, and the point of it is that it is a file you uploaded
+rather than a light show compiled into the firmware.
+
+**With a scope**, this is where the first numbers that are not arithmetic live,
+once §7 has given the board a graph: probe D2 and D10 together for
+input-to-output latency, and any step lamp for the 500 ms dwell.
+
+Two behaviours that are correct and look like faults, when you get there:
 
 * **Holding start down does not re-trigger.** A transition fires on its
   predicate's *rising edge*, so the switch has to be released and pressed again.
   It is the same rule that stops a lever the animal is already holding from
   ending a trial the instant it begins.
-* **One LED at a time, never two.** Exiting a state lowers everything that state
-  raised, by the same code that lowers it on any other transition. Two lit at
-  once would be a real finding — report it.
+* **One lamp at a time, never two.** Exiting a state lowers everything that
+  state raised, by the same code that lowers it on any other transition. Two lit
+  at once would be a real finding -- report it.
 
 Erratic or self-starting chases are the pull-downs, not the firmware.
-
-**With a scope**, this is where the first numbers that are not arithmetic live:
-probe D2 and D10 together for input-to-output latency, and any step LED for the
-500 ms dwell.
 
 ---
 
@@ -122,7 +136,7 @@ probe D2 and D10 together for input-to-output latency, and any step LED for the
 Every line carries a CRC-16/CCITT-FALSE, so typing JSON into a serial monitor
 gets no reply. Use the repository's own bench instrument, which frames commands
 with the same helper CI drives the emulated board with
-([`tools/bringup/`](../tools/bringup/README.md)):
+([`daemon/`](../daemon/README.md)):
 
 ```sh
 make bringup ARGS="hello"
@@ -152,17 +166,43 @@ evaluating a state's transitions sits on top of it and depends on the graph.
 Renode reports something in the hundreds of kHz here and it means nothing, since
 virtual time is not time.
 
-Sending `hello` also **ends demo mode for good until the next reset**. Every line
-goes to its safe level and D13 stops blinking. That handover is deliberate: a rig
-must never be able to run the demo while somebody believes it is running an
-experiment. Note that *opening* the port is not enough — a serial monitor does
+Sending `hello` also **takes the rig**: a board that was arming its own trials
+out of its own storage (§7) stops doing so, the run in flight is cancelled
+through the ordinary exit path, and its result is still reported. The stored
+setting survives, so the next boot comes up self-driving again; restarting it in
+this session takes another `autorun`. That asymmetry is deliberate — a daemon
+that crashed must not be able to leave a board rewarding an animal nobody is
+watching. Note that *opening* the port is not enough — a serial monitor does
 that — it is the greeting that hands over. Only `hello` and `report` greet the
 board; `make bringup ARGS="monitor"` watches the link and sends nothing, which
-is how you look at a board that is still running the demo.
+is how you look at a board that is still running.
 
 ---
 
 ## 5. Prove the pins reach the line numbers
+
+First, ask the board which pin each line *is*. It answers out of the same table
+its firmware calls `pinMode()` over, so this is the board's own word and not
+this tool's:
+
+```sh
+make bringup ARGS="--hello pins"
+```
+
+```
+  inputs
+    line 0   D2
+    ...
+  outputs
+    line 3   A0
+```
+
+Firmware older than `PROTOCOL.md` §3.6 answers `no_pin_map` here, which is not
+a failure — it means the daemon will fall back to its own table and label every
+pin it shows as **assumed**. Flash current firmware if you would rather it were
+checked.
+
+Then watch the lines move:
 
 ```sh
 make bringup ARGS="state"
@@ -170,7 +210,7 @@ make bringup ARGS="state"
 
 If the board has not been greeted since it was reset it answers `not_ready`,
 because nothing but `hello` is accepted before a session exists. Use
-`ARGS="--hello state"` — which ends demo mode, as §4 says.
+`ARGS="--hello state"` — which takes the rig, as §4 says.
 
 `"io":{"in":N,"out":M}` is the only way anything outside the device can check
 that a graph's line numbers reach the pins somebody wired, because there is no
@@ -183,7 +223,9 @@ and names the pins from `HARDWARE.md`:
 ```
 
 Hold the start switch and ask again: `in` goes from `0` to `1`. Hold both
-switches: `3`. `ARGS="watch"` polls it a few times a second so you can do that
+switches: `3`. **This is the only check that cannot be done in software**: the
+`pins` command settles what the firmware believes, and this settles whether the
+wire is in that hole. `ARGS="watch"` polls it a few times a second so you can do that
 with both hands on the wires.
 
 The same reply carries `scan.overruns` and `scan.worst_gap` — scan periods that
@@ -214,8 +256,8 @@ Everything from §4 and §5 that does not need a person's eyes is a test suite:
 make test-hardware                      # or TARGET=host:5000, as above
 ```
 
-Connect the board and run it. It greets the device once — **which ends demo
-mode**, as §4 says — and then asserts what the sections above ask you to read:
+Connect the board and run it. It greets the device once — **which takes the
+rig**, as §4 says — and then asserts what the sections above ask you to read:
 `scan_hz` against the 10 kHz target, what a command costs the scan, a drawn
 duration against the board's own clock, the framing rules against lines a
 well-behaved host would never send, and a whole trial's result arriving intact
@@ -243,7 +285,7 @@ and say so; nothing else changes.
 **The inputs are D6–D8 and not D2–D5 on purpose.** §2 wires the switches as a
 contact to **5 V**, so a jumper driving one of those pins would be fighting the
 switch every time somebody pressed it — an output pin pulling low against 5 V
-through a closed contact. Inputs 4–6 are untouched by §2, so the demo wiring and
+through a closed contact. Inputs 4–6 are untouched by §2, so the bench wiring and
 the loopback harness can sit on the same board. Sharing the *output* pins is
 fine: a pin can drive an LED and a jumper at once.
 
@@ -261,10 +303,94 @@ LEDs go dark, on a meter if you want it recorded.
 "The valve actually closed" is a different claim from "the test asserted it
 closed", and only one of them is checked here.
 
-One cosmetic wart so it does not surprise anybody: closing a serial monitor
-*during demo mode* trips the same fail-safe, blanking the demo's lamps until the
-next state change — up to 500 ms, or until the next trial if it was sitting in
-`wait`. Demo-only and harmless.
+One exception, and it is the point of §7 rather than a wart: a board that was
+**told** to arm its own trials does not fail safe when the cable goes, because
+for that board an unplugged cable is the expected end of "upload a paradigm,
+then detach" rather than a fault. Nothing else behaves that way, and it takes an
+explicit `autorun` to get there.
+
+---
+
+## 7. The daemon and the web UI, in front of the board
+
+Everything above talks to the board with one command at a time. This runs the
+whole host half against it -- the API of [`API.md`](API.md), the trace, and the
+six panels of [`DAEMON.md`](DAEMON.md) §5 -- so that what you are looking at in
+a browser is a real device.
+
+```sh
+make bench                       # /dev/ttyACM0, or make bench TARGET=...
+```
+
+Then open **http://127.0.0.1:8081/**. The daemon greets the board on startup,
+pushes the wiring from the line map in
+`daemon/bench/statemachined_bench_configuration.toml`, and seeds its graph store
+from `graphs/` into `build/bench/graphs` -- a copy, so deleting a graph in the
+browser does not delete an example from the repository. Greeting takes the rig,
+as it does anywhere else.
+
+**The board must be running current firmware.** An image from before the graph
+set exists answers `hello` perfectly well and then refuses the upload: the tell
+is `max_graphs` missing from `caps`, and `max_path` at 64 rather than 255.
+`make upload` fixes it.
+
+```sh
+make bringup ARGS="hello"        # caps, before wondering why an upload failed
+```
+
+### 7a. Give it a graph, and let go of it
+
+This is what §3 deferred, and it is what replaced demo mode. In the **Session**
+panel:
+
+1. Tick **state-walk** and upload it as the session's set.
+2. Press **arm and start** once, with the start switch in reach. The ready lamp
+   lights; press start and one lamp walks D10 -> D11 -> D12 and round again at
+   500 ms a step; the trial ends as a `Hit`. That is the graph you just
+   uploaded running on the board's own clock.
+3. Under **Run without the daemon**, press **let the board run itself**. It
+   arms its own trials from here, waiting out the 1.5 s dwell `state-walk`'s
+   `Done` state declares between them (`relight_after`).
+4. **Pull the USB cable.** It keeps going. Nothing was cancelled and nothing
+   failed safe, because this board was told to do this -- which is exactly why
+   it takes a command of its own rather than being somewhere a dropped cable
+   can arrive at by accident.
+5. Plug it back in, press **take the rig back**, then **save to the board**, and
+   power-cycle it. It comes back walking, with nothing attached: the graph, the
+   wiring and the instruction to run it are in its data flash.
+
+The reply to a save carries `write_count`. That is flash wear made visible --
+the RA4M1's data flash is good for about 100,000 erase cycles -- and it is worth
+glancing at on a board that has been through a lot of bring-ups.
+
+If you would rather do it without the browser:
+
+```sh
+curl -X PUT localhost:8081/api/device/autorun \
+     -H 'content-type: application/json' \
+     -d '{"enabled":true,"graph_name":"state-walk","start_now":false}'
+curl -X POST localhost:8081/api/device/save
+```
+
+`start_now: false` is the order that works while setting a rig up: a save is
+refused on a board that is running, and a board arming its own trials is never
+idle, so the intent is written down first and the power cycle is what acts on
+it.
+
+### With no board at all
+
+The same firmware, built for this machine, on a TCP port -- not a mock, and not
+a second protocol implementation, but `firmware/native/` driven by an ordinary
+loop instead of a timer ISR. Two terminals:
+
+```sh
+make bench-device                             # socket://127.0.0.1:5300
+make bench TARGET=socket://127.0.0.1:5300
+```
+
+What this cannot tell you is anything the board is for: no pin reaches a wire,
+no scan has a deadline, and `scan_hz` is whatever this machine managed. It is
+for the UI and the API, and the section above is for the rig.
 
 ---
 

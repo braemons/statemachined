@@ -13,6 +13,7 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 
 #include "hal.h"
@@ -23,6 +24,32 @@ namespace {
 LineBitmask inputs_ = 0;
 LineBitmask levels_ = 0;
 }  // namespace
+
+// No pins, and the labels say so rather than borrowing a board's.
+//
+// A host build could plausibly answer "D2" here and let the integration tests
+// look more like a rig. It would be a lie of exactly the kind the `pins`
+// command exists to prevent: nothing here is wired to anything. "sim0" is
+// honest, and it still exercises the whole path -- a host that resolves a
+// config's `pin = "sim0"` against this device is doing precisely what it does
+// against a board, which is asking rather than assuming.
+constexpr const char* kSimulatedLineLabels[] = {
+    "sim0",  "sim1",  "sim2",  "sim3",  "sim4",  "sim5",  "sim6",  "sim7",
+    "sim8",  "sim9",  "sim10", "sim11", "sim12", "sim13", "sim14", "sim15",
+    "sim16", "sim17", "sim18", "sim19", "sim20", "sim21", "sim22", "sim23",
+    "sim24", "sim25", "sim26", "sim27", "sim28", "sim29", "sim30", "sim31",
+};
+
+// One table for both directions: input line 3 and output line 3 are different
+// things on a board and neither of them is here, so inventing two sets of names
+// would only suggest otherwise.
+static_assert(sizeof(kSimulatedLineLabels) / sizeof(kSimulatedLineLabels[0]) >= kMaxLines,
+              "every input line this build reports needs a label");
+static_assert(sizeof(kSimulatedLineLabels) / sizeof(kSimulatedLineLabels[0]) >= kMaxOutputLines,
+              "every output line this build reports needs a label");
+
+const char* const* input_pin_labels() { return kSimulatedLineLabels; }
+const char* const* output_pin_labels() { return kSimulatedLineLabels; }
 
 void init() {
   levels_ = 0;
@@ -77,6 +104,87 @@ size_t link_write_some(const char* src, size_t n) {
 }
 
 bool link_up() { return true; }
+
+// -------------------------------------------------------------- the store ---
+//
+// A file, so that the host behaves like a board in the one way that matters
+// here: settings written by one run are there for the next. Named by
+// STATEMACHINED_STORE if the environment says so, which is what lets two native
+// devices in one test run not share a store; otherwise a file in the working
+// directory.
+//
+// The whole store is held in memory, which would be indefensible on the board
+// and is nothing on a host: 8 KB, the size of the RA4M1's data flash, so that a
+// record that would not fit there does not fit here either.
+
+namespace {
+
+constexpr size_t kStoreBytes = 8192;
+uint8_t store_[kStoreBytes];
+bool store_loaded_ = false;
+size_t write_at_ = 0;
+bool write_failed_ = false;
+
+const char* store_path() {
+  const char* p = std::getenv("STATEMACHINED_STORE");
+  return (p != nullptr && p[0] != '\0') ? p : "statemachined-store.bin";
+}
+
+/// Erased flash reads as 0xFF, and so does an absent file. That is what makes a
+/// board nobody has saved to report BadMagic rather than something worse.
+void load_store() {
+  if (store_loaded_) return;
+  store_loaded_ = true;
+  for (size_t i = 0; i < kStoreBytes; ++i) store_[i] = 0xFF;
+  std::FILE* f = std::fopen(store_path(), "rb");
+  if (f == nullptr) return;
+  // A short read is not an error here, and the count is deliberately used
+  // rather than ignored: a file smaller than the store -- or one truncated by
+  // the power going during a save -- leaves the rest of the array at 0xFF,
+  // which is exactly what the unwritten part of a real erased sector reads as.
+  const size_t got = std::fread(store_, 1, kStoreBytes, f);
+  (void)got;
+  std::fclose(f);
+}
+
+}  // namespace
+
+size_t storage_capacity() { return kStoreBytes; }
+
+bool storage_read(size_t offset, void* dst, size_t n) {
+  load_store();
+  if (offset + n > kStoreBytes) return false;
+  for (size_t i = 0; i < n; ++i) static_cast<uint8_t*>(dst)[i] = store_[offset + i];
+  return true;
+}
+
+bool storage_write_begin() {
+  load_store();
+  for (size_t i = 0; i < kStoreBytes; ++i) store_[i] = 0xFF;  // the erase
+  write_at_ = 0;
+  write_failed_ = false;
+  return true;
+}
+
+bool storage_write(const void* src, size_t n) {
+  if (write_failed_) return false;
+  if (write_at_ + n > kStoreBytes) {
+    write_failed_ = true;
+    return false;
+  }
+  for (size_t i = 0; i < n; ++i) store_[write_at_ + i] = static_cast<const uint8_t*>(src)[i];
+  write_at_ += n;
+  return true;
+}
+
+bool storage_write_commit() {
+  if (write_failed_) return false;
+  std::FILE* f = std::fopen(store_path(), "wb");
+  if (f == nullptr) return false;
+  const size_t wrote = std::fwrite(store_, 1, kStoreBytes, f);
+  std::fclose(f);
+  return wrote == kStoreBytes;
+}
 
 // ------------------------------------------------------ the rig, simulated ---
 

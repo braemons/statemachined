@@ -1,0 +1,105 @@
+# One description of the package, both formats.
+#
+# nfpm rather than a debian/ directory plus a hand-written .spec: the two would
+# be the same list of files written twice, and the second copy is the one that
+# is wrong. vstimd needs cargo-deb and a .spec because it is Rust; this is a
+# Python tree and a handful of unit files, and nfpm packs both from here.
+#
+# Everything ${LIKE_THIS} is filled in from the environment by
+# packaging/Makefile. Paths are not: nfpm substitutes in scalar metadata but not
+# in `contents[].src`, so the staged tree is named literally here and relative
+# to the repository root, which is where the Makefile runs nfpm from. If
+# packaging/Makefile's STAGE moves, these three paths move with it.
+#
+# Run `make -C packaging deb` rather than nfpm by hand -- the tree these point
+# at is what that Makefile builds.
+
+name: statemachined
+# Named _PKG_ rather than STATEMACHINED_VERSION because that one is the *input*
+# override packaging/scripts/git-version.sh short-circuits on; this is the
+# resolved output. Keeping them apart is what stops a build reading its own
+# answer back as its question.
+version: ${STATEMACHINED_PKG_VERSION}
+# The version is already the final string; nfpm must not try to read a `v`
+# prefix or a semver pre-release out of it. See packaging/scripts/git-version.sh
+# for why `~rc1` is spelled that way.
+version_schema: none
+release: ${STATEMACHINED_RELEASE}
+arch: ${STATEMACHINED_ARCH}
+platform: linux
+
+# The timestamps nfpm writes come from SOURCE_DATE_EPOCH in the environment,
+# which packaging/Makefile sets from the commit -- so two builds of one commit
+# are the same bytes. Not a field here: nfpm substitutes environment variables
+# into some scalars and not into this one, and a `${...}` that arrives at the
+# date parser unexpanded fails the build.
+maintainer: ${STATEMACHINED_MAINTAINER}
+description: |
+  The host side of one statemachined device.
+  Owns the serial link to a state machine board: uploads graphs, arms trials,
+  reassembles outcomes, keeps the trace, and serves an HTTP API and a web UI
+  for all of it. One daemon per device.
+vendor: braemons
+homepage: https://github.com/braemons/statemachined
+license: LGPL-3.0-or-later
+section: science
+priority: optional
+
+depends:
+  - systemd
+recommends:
+  - logrotate
+  - udev
+
+contents:
+  # The vendored interpreter and the package inside it. Per-architecture despite
+  # being pure Python, which is the price of not depending on whatever Python
+  # the distribution ships -- and worth it on a rig, where an OS upgrade that
+  # moves Python must not be able to stop an experiment.
+  - src: build/package/root/opt/braemons/statemachined
+    dst: /opt/braemons/statemachined
+    type: tree
+
+  # The flashable images and their MANIFEST.txt, so a box can be asked which
+  # firmware it is supposed to have. GET /api/device/firmware compares the
+  # running `fw` against this.
+  - src: build/package/root/usr/share/braemons/statemachined/firmware
+    dst: /usr/share/braemons/statemachined/firmware
+    type: tree
+
+  - src: build/package/root/usr/share/doc/statemachined
+    dst: /usr/share/doc/statemachined
+    type: tree
+
+  # One name on PATH for the operator, pointing into the vendored tree.
+  - src: /opt/braemons/statemachined/bin/statemachined
+    dst: /usr/bin/statemachined
+    type: symlink
+
+  - src: packaging/systemd/statemachined.service
+    dst: /usr/lib/systemd/system/statemachined.service
+  - src: packaging/sysusers/statemachined.conf
+    dst: /usr/lib/sysusers.d/statemachined.conf
+  - src: packaging/udev/60-statemachined.rules
+    dst: /usr/lib/udev/rules.d/60-statemachined.rules
+
+  # Conffiles: hand-edited, and an upgrade must not silently replace an edit.
+  # `config|noreplace` is what makes dpkg prompt and rpm write .rpmnew instead.
+  - src: packaging/etc/statemachined-rig-config.toml
+    dst: /etc/braemons/statemachined-rig-config.toml
+    type: config|noreplace
+  - src: packaging/etc/statemachined.env
+    dst: /etc/braemons/statemachined.env
+    type: config|noreplace
+  - src: packaging/logrotate/statemachined
+    dst: /etc/logrotate.d/statemachined
+    type: config|noreplace
+
+scripts:
+  postinstall: packaging/scripts/postinstall.sh
+  preremove: packaging/scripts/preremove.sh
+  postremove: packaging/scripts/postremove.sh
+
+deb:
+  fields:
+    Bugs: https://github.com/braemons/statemachined/issues

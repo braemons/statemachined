@@ -1,0 +1,47 @@
+{
+  "_comment": [
+    "Golden framing vectors for dev/PROTOCOL.md 1.1. Data, not code, so that",
+    "every implementation of the framing in this repository is checked against",
+    "the same bytes rather than against another one's opinion of them.",
+    "`body` is a message without its closing brace; `line` is what must go on",
+    "the wire. Every CRC here was produced by emulation/tests' copy and verified",
+    "against firmware/core/protocol/crc16.cpp, so the file is golden against the",
+    "device rather than against the host. A change here is a protocol change and",
+    "belongs in PROTOCOL.md first."
+  ],
+  "lines": [
+    {
+      "why": "the smallest legal command",
+      "body": "{\"msg_type\":\"ping\",\"message_id\":1",
+      "line": "{\"msg_type\":\"ping\",\"message_id\":1,\"crc\":\"6FE7\"}"
+    },
+    {
+      "why": "message_id 0, which is legal and which the counter wraps through",
+      "body": "{\"msg_type\":\"state\",\"message_id\":0",
+      "line": "{\"msg_type\":\"state\",\"message_id\":0,\"crc\":\"2B9F\"}"
+    },
+    {
+      "why": "a seed as hex64 text, never a JSON number: 64 bits do not survive a double",
+      "body": "{\"msg_type\":\"hello\",\"message_id\":1,\"proto\":1,\"seed\":\"0123456789ABCDEF\"",
+      "line": "{\"msg_type\":\"hello\",\"message_id\":1,\"proto\":1,\"seed\":\"0123456789ABCDEF\",\"crc\":\"4D87\"}"
+    },
+    {
+      "why": "null is a value here, not an omission: a non-terminal state says so",
+      "body": "{\"msg_type\":\"graph_state\",\"message_id\":6,\"i\":1,\"terminal\":null,\"timeout\":{\"dist\":0,\"target\":2}",
+      "line": "{\"msg_type\":\"graph_state\",\"message_id\":6,\"i\":1,\"terminal\":null,\"timeout\":{\"dist\":0,\"target\":2},\"crc\":\"624D\"}"
+    },
+    {
+      "why": "masks are numbers and arrays nest, so the CRC covers a body with both",
+      "body": "{\"msg_type\":\"wiring\",\"message_id\":9,\"invert\":0,\"enable\":4294967295,\"safe\":0,\"debounce_ms\":[0,2,2,0]",
+      "line": "{\"msg_type\":\"wiring\",\"message_id\":9,\"invert\":0,\"enable\":4294967295,\"safe\":0,\"debounce_ms\":[0,2,2,0],\"crc\":\"25A5\"}"
+    }
+  ],
+  "rolling": {
+    "why": "the fold graph_end carries: one CRC over the covered bytes of each line in order",
+    "over": [
+      0,
+      4
+    ],
+    "checksum": "3BA3"
+  }
+}

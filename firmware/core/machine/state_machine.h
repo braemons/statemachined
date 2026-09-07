@@ -29,21 +29,25 @@
 #include <cstdint>
 
 #include "config.h"
+#include "graph/graph_set.h"
 #include "graph/output_action.h"
 #include "graph/state.h"
-#include "graph/state_graph.h"
 #include "random/rng.h"
 
 namespace statemachined {
 
 /// One visited state. `state_index`, not a name: the bridge holds the graph and
 /// resolves names host-side, which is part of what keeps the device inside
-/// 32 KB.
+/// 32 KB. It is the index **within this graph**, counted from zero, not into
+/// the set's shared state pool -- the host authored the graph and counts its
+/// states the way it wrote them.
 struct StateVisit {
   StateIndex state_index = 0;
   StateExitCause cause = StateExitCause::Terminal;
-  TransitionIndex transition_index = kNoTransition;  ///< which transition fired,
-                                                     ///< if StateExitCause::Transition
+  /// Which of *this state's* transitions fired, counted from zero in
+  /// declaration order, if StateExitCause::Transition. Not an index into the
+  /// shared pool: the host holds the graph and reads it the way it wrote it.
+  TransitionIndex transition_index = kNoTransition;
   Milliseconds drawn_ms = 0;  ///< the realised duration, reported so that a
                               ///< random draw is evidence and not just
                               ///< reproducible
@@ -51,28 +55,77 @@ struct StateVisit {
   Microseconds duration_us = 0;
 };
 
+/// Somewhere for a completed visit to go the moment it happens, so that a host
+/// learns what the machine is doing while the trial is still running rather
+/// than only in the result at the end.
+///
+/// A sink passed in rather than a call to the link, because the machine must
+/// not learn that a link exists: it reads no clock, touches no pin, and this is
+/// the same rule. The native tests pass one that appends to a vector.
+class VisitSink {
+ public:
+  virtual ~VisitSink() = default;
+  /// `seq` counts visits within the run from 0, and is what makes a dropped
+  /// one detectable rather than a hole nobody notices.
+  virtual void on_visit(const StateVisit& v, uint32_t seq) = 0;
+};
+
 /// What the machine saw during one run, with no interpretation attached.
+///
+/// `path` is a genuine ring: when a looping graph overruns it, the OLDEST visit
+/// is dropped rather than the newest, because the interesting part of a trial
+/// is the response at the end. Read it through visit(), never by indexing
+/// `path` directly -- slot 0 is not visit 0 once it has wrapped.
 struct StateMachineRunRecord {
   StateVisit path[kMaxPath];
-  uint8_t path_len = 0;
+  uint8_t path_first = 0;     ///< slot the oldest surviving visit is in
+  uint8_t path_len = 0;       ///< how many are in the window, at most kMaxPath
+  uint32_t total_visits = 0;  ///< how many the run actually made
   bool path_truncated = false;
+
+  /// The i'th visit still held, oldest first. i < path_len.
+  const StateVisit& visit(uint8_t i) const {
+    const uint16_t slot = static_cast<uint16_t>(path_first) + i;
+    return path[slot < kMaxPath ? slot : slot - kMaxPath];
+  }
+
+  /// The `seq` of the oldest visit still held. Zero unless the ring wrapped,
+  /// and what tells a host which window of a truncated path it received.
+  uint32_t first_seq() const { return total_visits - path_len; }
   Microseconds total_us = 0;
   TerminalCode terminal_code = kNotTerminal;  ///< set if a terminal state was reached
-  bool force_ended = false;                   ///< ended by force_end() rather than by the graph
-  bool hit_run_cap = false;                   ///< ...and specifically by the cap
+
+  /// The dwell the terminal state reached declared, drawn on arrival -- how
+  /// long before another run may start. kNoRelight when the terminal state
+  /// declares none, and on a run that ended any other way: a cancelled run
+  /// reached no terminal state and so was told nothing about what comes after
+  /// it.
+  ///
+  /// The machine draws it and reports it, and does nothing else with it.
+  /// Restarting is a decision about the device, not about the run, and it is
+  /// taken a layer up (see HostLinkSession's autorun) -- which is what keeps
+  /// this record what it has always been: an account of one run, with no
+  /// interpretation attached.
+  Milliseconds relight_ms = kNoRelight;
+  bool force_ended = false;  ///< ended by force_end() rather than by the graph
+  bool hit_run_cap = false;  ///< ...and specifically by the cap
 };
 
 class StateMachine {
  public:
-  /// The graph arrives at construction and never changes. A machine without one
-  /// would be an object with no legal operation on it, and a set_graph() would
-  /// mean every method had to consider the case where nobody had called it.
-  /// Committing a different graph means constructing a different machine --
-  /// which is also the honest semantics, since a new graph invalidates every
-  /// index the old run was recording.
-  explicit StateMachine(const StateGraph& g) : graph_(&g) {}
+  /// The set and which graph in it. Both arrive at construction and neither
+  /// changes. A machine without a graph would be an object with no legal
+  /// operation on it, and a set_graph() would mean every method had to consider
+  /// the case where nobody had called it. Switching graphs means constructing a
+  /// different machine -- which is also the honest semantics, since a different
+  /// graph invalidates every index the old run was recording, and it is cheap:
+  /// the pools do not move.
+  explicit StateMachine(const GraphSet& s, uint8_t graph_index = 0)
+      : set_(&s), graph_index_(graph_index) {}
 
-  const StateGraph& graph() const { return *graph_; }
+  const GraphSet& graph_set() const { return *set_; }
+  uint8_t graph_index() const { return graph_index_; }
+  const GraphEntry& graph() const { return set_->graphs[graph_index_]; }
 
   /// Begin a run. `now_us` is the arming instant. Returns the entry state's
   /// output actions -- they are outputs like any other and must not wait for
@@ -142,13 +195,22 @@ class StateMachine {
   bool force_end(Microseconds now_us);
 
   bool is_running() const { return running_; }
-  StateIndex get_current_state_index() const { return current_; }
+  /// Within this graph, counted from zero, like everything else that crosses
+  /// the wire. kNoState when no run has started.
+  StateIndex get_current_state_index() const {
+    return current_ == kNoState ? kNoState
+                                : static_cast<StateIndex>(current_ - graph().first_state);
+  }
   const StateMachineRunRecord& get_record() const { return record_; }
 
   /// Wall-clock cap on a whole run. A graph is user data and may contain a
   /// state that never exits; validation cannot tell a 10 s foreperiod from a
   /// hang, so the cap stays regardless.
   void set_run_cap_ms(Milliseconds ms) { run_cap_ms_ = ms; }
+
+  /// Report every completed visit as it happens. Null by default: a machine
+  /// with no sink behaves exactly as it did before there was one.
+  void set_visit_sink(VisitSink* sink) { visits_ = sink; }
 
  private:
   void enter(StateIndex state, Microseconds now_us, LineBitmask word);
@@ -160,7 +222,9 @@ class StateMachine {
   /// been folded, so it can be applied again to a merged one.
   void note(const OutputUpdate& ops);
 
-  const StateGraph* graph_;
+  const GraphSet* set_;
+  uint8_t graph_index_ = 0;
+  VisitSink* visits_ = nullptr;
   Rng rng_;
   StateMachineRunRecord record_;
   TransitionState trans_state_[kMaxTransitions];

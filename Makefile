@@ -45,14 +45,8 @@ golden:                     ## the tests at -O0 and -O3, for reproducibility
 BOARD ?= uno_r4_minima
 
 .PHONY: firmware
-firmware:                   ## build for the reference board (demo mode on)
+firmware:                   ## build for the reference board
 	pio run -e $(BOARD)
-
-# Demo mode is 4.6 KB of SRAM on a 32 KB part, so a rig build drops it. Built
-# here as well as by CI, or the #else half of that switch rots unnoticed.
-.PHONY: firmware-rig
-firmware-rig:               ## the same, with demo mode compiled out
-	PLATFORMIO_BUILD_FLAGS=-DSTATEMACHINED_DEMO=0 pio run -e $(BOARD)
 
 # Emulation. Covers what the host build cannot compile -- the pin map, the port
 # registers, the timer ISR, the protocol over a real UART -- and says nothing
@@ -69,7 +63,7 @@ upload:                     ## flash the reference board
 	pio run -e $(BOARD) -t upload
 
 # The bench instrument dev/BRINGUP.md §4 and §5 ask for. Its one dependency
-# (pyserial) lives in tools/bringup/pyproject.toml rather than in whichever
+# (pyserial) lives in daemon/pyproject.toml rather than in whichever
 # python3 is on PATH, so `uv run --project` builds an environment for it on
 # first use and neither renode-test's interpreter nor the uv-tool sandboxes
 # above notice. TARGET is a device path, a host:port, or any pyserial URL --
@@ -78,7 +72,55 @@ TARGET ?= /dev/ttyACM0
 
 .PHONY: bringup
 bringup:                    ## talk to a board: make bringup ARGS="state"
-	uv run --project tools/bringup statemachined-bringup -t $(TARGET) $(ARGS)
+	uv run --project daemon statemachined -t $(TARGET) $(ARGS)
+
+# The firmware's own session and engine, built for this machine. Named by the
+# integration tests' skip message and by the bench, both of which are useless
+# without it, and it is a fraction of `make test`: one binary, no ctest.
+.PHONY: integration-device
+integration-device:         ## build build/statemachined_native_device on its own
+	cmake -S . -B $(BUILD) -DCMAKE_BUILD_TYPE=Debug
+	cmake --build $(BUILD) -j --target statemachined_native_device
+
+# The bench: the daemon, its API and its web UI, in front of a device. This is
+# the target that answers "does the thing work" without a package, a Pi, or
+# triald -- open http://127.0.0.1:8081/ and click.
+#
+# TARGET is the same variable `make bringup` uses, so the same two paths work:
+# a board on a cable, or `make bench-device` in another terminal and
+# TARGET=socket://127.0.0.1:5300. Greeting a board takes the rig: one that was
+# arming its own trials stops doing so until it is told to again.
+#
+# The stores are seeded from graphs/ and configs/ rather than pointed at them:
+# deleting a graph or a state-machine config in the web UI must not delete an
+# example from the repository. Copied only when absent, so an edit made on the
+# bench survives the next `make bench`.
+BENCH_CONFIG    ?= daemon/bench/statemachined_bench_rig_config.toml
+BENCH_STORE     := build/bench/graphs
+BENCH_CONFIGS   := build/bench/configs
+BENCH_HOST      ?= 127.0.0.1
+BENCH_PORT      ?= 8081
+
+.PHONY: bench
+bench:                      ## the daemon + web UI against a device: make bench TARGET=...
+	@mkdir -p $(BENCH_STORE) $(BENCH_CONFIGS) build/bench/trace build/bench/recordings
+	@for graph in graphs/*.json; do \
+	  [ -f "$(BENCH_STORE)/$$(basename $$graph)" ] || cp "$$graph" $(BENCH_STORE)/; \
+	done
+	@for config in configs/*.config.json; do \
+	  [ -f "$(BENCH_CONFIGS)/$$(basename $$config)" ] || cp "$$config" $(BENCH_CONFIGS)/; \
+	done
+	uv run --project daemon statemachined -t $(TARGET) serve \
+	  --config $(BENCH_CONFIG) \
+	  --host $(BENCH_HOST) --port $(BENCH_PORT) $(ARGS)
+
+# The other half of the no-board path: the firmware's own session and engine,
+# built for this machine, on a TCP port the daemon can dial. Not a mock -- see
+# the file's docstring, and daemon/tests/integration/conftest.py, which is the
+# same bridge.
+.PHONY: bench-device
+bench-device: integration-device  ## the native device on socket://127.0.0.1:5300
+	python3 daemon/bench/native_device_on_a_socket.py $(ARGS)
 
 # The only tests in this repository that need hardware. Everything else -- the
 # core on the host, the HAL under Renode -- runs in CI with no board attached,
@@ -89,12 +131,32 @@ bringup:                    ## talk to a board: make bringup ARGS="state"
 # Deliberately NOT part of `make ci`. A target that fails on every machine
 # without a board attached is a target people learn to ignore.
 #
-# Greeting the board ends demo mode until the next reset, which this cannot
-# avoid: the greeting is what hands over.
+# Greeting the board takes the rig, which this cannot avoid: the greeting is
+# what hands over. A board that was running on its own stops.
 .PHONY: test-hardware
 test-hardware:              ## the suite that needs a board: make test-hardware TARGET=...
-	uv run --project tools/bringup --group test \
-	  pytest tools/bringup/tests/hardware --target=$(TARGET) $(ARGS)
+	uv run --project daemon --group test \
+	  pytest daemon/tests/hardware --target=$(TARGET) $(ARGS)
+
+# The daemon's tests that need no board, part of `make ci`.
+#
+# tests/unit is arithmetic and translation -- the framing, which now exists
+# three times in this tree and would otherwise drift silently, and the compiler,
+# checked message by message against dev/PROTOCOL.md.
+#
+# tests/integration drives whole sessions against build/statemachined_native_device,
+# which is the firmware's own session and engine built for this machine. It
+# skips itself when that binary is not there, so this target is safe to run
+# before `make test`; `make ci` runs `make test` first, so in CI it is always
+# built.
+.PHONY: test-daemon
+test-daemon:                ## the daemon's tests that need no board
+	uv run --project daemon --group test pytest daemon/tests/unit daemon/tests/integration $(ARGS)
+
+# The two together, in the order that makes the integration half actually run.
+.PHONY: test-integration
+test-integration: test      ## build the native device, then drive whole sessions against it
+	uv run --project daemon --group test pytest daemon/tests/integration $(ARGS)
 
 # Pinned to match .github/workflows/ci.yml. clang-format's output changes
 # between major versions, and `BasedOnStyle: Google` in .clang-format resolves
@@ -175,24 +237,22 @@ install-renode:             ## the pinned Renode, portable, into /opt/renode
 # A flashable image
 # --------------------------------------------------------------------------
 #
-# Two images, because they are for two different people: the bench image runs
-# the demo graph with no host attached, the rig image drops it and gets the
-# SRAM back. Flashing the wrong one is a thing somebody will do, so they are
-# named rather than numbered, and what they are travels with them -- a board in
-# a rack cannot be asked which commit it is running.
+# One image, since the demo paradigm left: there used to be a bench build that
+# ran a graph compiled into the firmware and a rig build that compiled it out,
+# and flashing the wrong one was a thing somebody was going to do. A bench board
+# now runs a real uploaded graph out of its own storage like any other, so there
+# is one binary and one thing to flash. What it is still travels with it -- a
+# board in a rack cannot be asked which commit it is running.
 IMAGE_DIR ?= image
 IMAGE_SHA ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 
 .PHONY: image
-image:                      ## build both flashable images, with a manifest
+image:                      ## build the flashable image, with a manifest
 	rm -rf $(IMAGE_DIR)
 	mkdir -p $(IMAGE_DIR)
 	$(MAKE) firmware
-	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/statemachined-$(BOARD)-bench.bin
-	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/statemachined-$(BOARD)-bench.elf
-	$(MAKE) firmware-rig
-	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/statemachined-$(BOARD)-rig.bin
-	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/statemachined-$(BOARD)-rig.elf
+	cp .pio/build/$(BOARD)/firmware.bin $(IMAGE_DIR)/statemachined-$(BOARD).bin
+	cp .pio/build/$(BOARD)/firmware.elf $(IMAGE_DIR)/statemachined-$(BOARD).elf
 	@{ \
 	  echo "statemachined firmware for the $(BOARD)"; \
 	  echo; \
@@ -200,9 +260,9 @@ image:                      ## build both flashable images, with a manifest
 	  echo "built:  $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
 	  echo "pio:    $$(pio --version)"; \
 	  echo; \
-	  echo "statemachined-$(BOARD)-bench.bin  demo mode ON: runs a built-in graph until a"; \
-	  echo "                          host says hello. Wiring in dev/HARDWARE.md"; \
-	  echo "statemachined-$(BOARD)-rig.bin    demo mode OFF (-DSTATEMACHINED_DEMO=0)"; \
+	  echo "statemachined-$(BOARD).bin"; \
+	  echo "  Holds no graph until one is uploaded, and comes back up running"; \
+	  echo "  whatever it was last saved with. Wiring in dev/HARDWARE.md"; \
 	  echo; \
 	  echo "flash with:  make upload   or   bossac -i -e -w -R <file>.bin"; \
 	  echo; \
@@ -215,15 +275,43 @@ image:                      ## build both flashable images, with a manifest
 	@cat $(IMAGE_DIR)/MANIFEST.txt
 
 # --------------------------------------------------------------------------
+# The installable package
+# --------------------------------------------------------------------------
+#
+# `.deb` and `.rpm` for a rig: a vendored interpreter under
+# /opt/braemons/statemachined, a systemd unit, a udev rule naming the board, a
+# conffile describing the box, and the flashable firmware `make image` builds.
+# It lives in packaging/ rather than here because it is a build of its own --
+# see packaging/README.md and dev/DAEMON.md §6 -- and these lines exist so that
+# nobody has to know that to build one.
+#
+# `make packages` is what a release publishes: both architectures, each built
+# inside a pinned container, so the artifact is a function of the commit rather
+# than of the machine. `make deb` is the quick one for iterating -- this
+# architecture, no container.
+#
+# `make image` first, and the firmware goes into the package. Without it the
+# package installs a note saying why there is none.
+
+.PHONY: deb
+deb:                        ## the .deb for this machine, no container
+	$(MAKE) -C packaging deb
+
+.PHONY: packages
+packages:                   ## every release artifact: amd64 and arm64, deb and rpm
+	$(MAKE) -C packaging packages
+
+# --------------------------------------------------------------------------
 
 # Everything CI runs, in the order it runs it, minus the toolchain installs.
 # The point is that a red build can be reproduced with one command.
 .PHONY: ci
-ci: check-core test sanitize golden format-check firmware firmware-rig  ## everything CI runs, except emulation
+ci: check-core test sanitize golden format-check test-daemon firmware  ## everything CI runs, except emulation
 
 .PHONY: clean
 clean:
 	rm -rf build build-san build-O0 build-O3 .pio $(IMAGE_DIR)
+	$(MAKE) -C packaging clean
 
 .PHONY: help
 help:

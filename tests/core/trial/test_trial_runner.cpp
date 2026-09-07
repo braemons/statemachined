@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // The engine is a pure function of (graph, seed, input word, time), which is
 // what lets these tests drive whole trials with no board, no clock and no I/O.
+#include <vector>
+
 #include "doctest.h"
 #include "helpers.h"
 #include "trial/trial_runner.h"
@@ -17,14 +19,111 @@ void run_until(TrialRunner& e, uint32_t word, uint32_t& t, uint32_t until_us) {
     e.advance(word, t);
   }
 }
+/// A visit sink that keeps what it was handed. What the link's does for real,
+/// and the reason the machine takes a sink at all rather than calling one:
+/// nothing in core/ may learn that a link exists.
+struct Recorder : VisitSink {
+  std::vector<StateVisit> visits;
+  std::vector<uint32_t> seqs;
+  void on_visit(const StateVisit& v, uint32_t seq) override {
+    visits.push_back(v);
+    seqs.push_back(seq);
+  }
+};
 }  // namespace
+
+TEST_CASE("every visit reaches the sink, including the ones the ring drops") {
+  // The stream is what makes a truncated path recoverable: it has no kMaxPath,
+  // so a host that saw the stream has the visits the record could not keep.
+  Builder b;
+  const uint8_t loop = b.state();
+  const uint8_t hit = b.terminal(TrialOutcome::Hit);
+  b.timeout(loop, b.fixed(1), loop);  // self-loop every 1 ms
+  Transition c;
+  c.all_high = bit(0);
+  c.target_state = hit;
+  b.on(loop, c);
+  b.entry(loop);
+
+  Recorder rec;
+  TrialRunner e(b.g);
+  e.set_visit_sink(&rec);
+  uint32_t t = 0;
+  e.start(1, 1, t);
+  run_until(e, 0, t, ms(500));
+
+  const StateMachineRunRecord& r = e.run_record();
+  CHECK(r.path_truncated);
+  CHECK(rec.visits.size() == r.total_visits);
+  // seq counts visits within the run from 0, with no gaps -- which is what
+  // makes a *dropped* one detectable on the wire rather than a hole nobody
+  // notices.
+  for (size_t i = 0; i < rec.seqs.size(); ++i) CHECK(rec.seqs[i] == i);
+
+  // And the window the record kept is the tail of what the sink saw.
+  REQUIRE(rec.visits.size() >= r.path_len);
+  const size_t offset = rec.visits.size() - r.path_len;
+  for (uint8_t i = 0; i < r.path_len; ++i)
+    CHECK(r.visit(i).entered_us == rec.visits[offset + i].entered_us);
+}
+
+TEST_CASE("a fired transition is reported by its position within the state") {
+  // Not by its index into the shared pool. The host holds the graph and reads
+  // it the way it wrote it -- "transition 1 of Foreperiod" -- and must never
+  // have to know where this state's slice of the pool happens to sit.
+  Builder b;
+  const uint8_t first = b.state();
+  const uint8_t second = b.state();
+  const uint8_t hit = b.terminal(TrialOutcome::Hit);
+  b.timeout(first, b.fixed(10), second);
+
+  // `second` owns pool transitions 0 and 1; only the second of them can fire.
+  Transition never;
+  never.all_high = bit(7);
+  never.target_state = first;
+  b.on(second, never);
+  Transition always;
+  always.all_high = bit(0);
+  always.target_state = hit;
+  b.on(second, always);
+  b.entry(first);
+
+  TrialRunner e(b.g);
+  uint32_t t = 0;
+  e.start(1, 1, t);
+  run_until(e, 0, t, ms(20));  // through the timeout, into `second`
+  run_until(e, bit(0), t, ms(40));
+
+  const StateMachineRunRecord& r = e.run_record();
+  REQUIRE(r.path_len >= 2);
+  CHECK(r.visit(1).cause == StateExitCause::Transition);
+  CHECK(r.visit(1).transition_index == 1);  // the second of that state's two
+}
+
+TEST_CASE("a machine with no sink records exactly as it did before") {
+  // The sink is null by default and must stay optional: the native tests, the
+  // a bench runner and anything else that only wants the record must not have to
+  // supply one.
+  Builder b;
+  const uint8_t wait = b.state();
+  const uint8_t ns = b.terminal(TrialOutcome::NotStarted);
+  b.timeout(wait, b.fixed(50), ns);
+  b.entry(wait);
+
+  TrialRunner e(b.g);
+  uint32_t t = 0;
+  e.start(1, 1, t);
+  run_until(e, 0, t, ms(100));
+  CHECK(e.run_record().path_len == 2);
+  CHECK(e.run_record().total_visits == 2);
+}
 
 TEST_CASE("a timeout carries the trial to its terminal state") {
   Builder b;
   const uint8_t wait = b.state();
   const uint8_t ns = b.terminal(TrialOutcome::NotStarted);
   b.timeout(wait, b.fixed(500), ns);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner e(b.g);
@@ -49,7 +148,7 @@ TEST_CASE("a single-line transition fires on its rising edge") {
   c.all_high = bit(0);
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner e(b.g);
@@ -77,7 +176,7 @@ TEST_CASE("a transition already true at entry does not fire unless level") {
     c.target_state = hit;
     c.fire_if_true_on_entry = fire_if_true_on_entry;
     b.on(wait, c);
-    b.g.entry = wait;
+    b.entry(wait);
   };
 
   SUBCASE("edge semantics wait for the line to fall first") {
@@ -122,7 +221,7 @@ TEST_CASE("a line that rises between arming and the first scan is an edge") {
   c.all_high = bit(0);
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -145,7 +244,7 @@ TEST_CASE("a combination of TTL lines is one transition") {
   c.none_high = bit(2);          // and the abort line low
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner e(b.g);
@@ -174,7 +273,7 @@ TEST_CASE("any-of fires on whichever line arrives") {
   c.any_high = bit(3) | bit(4);
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -197,7 +296,7 @@ TEST_CASE("hold_ms requires the predicate to stay true") {
   c.target_state = hit;
   c.hold_duration = hold;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -240,7 +339,7 @@ TEST_CASE("declaration order resolves a tie") {
   c.any_high = bit(0) | bit(1);
   c.target_state = second;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -258,7 +357,7 @@ TEST_CASE("outputs a state raised come down when it is left") {
   const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.on_entry(reward, OutputAction{2, OutputActionKind::High, 0});  // the valve
   b.timeout(reward, b.fixed(100), hit);
-  b.g.entry = reward;
+  b.entry(reward);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner e(b.g);
@@ -280,7 +379,7 @@ TEST_CASE("cancel lowers the outputs and names CANCELLED") {
   const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.on_entry(reward, OutputAction{2, OutputActionKind::High, 0});
   b.timeout(reward, b.fixed(10000), hit);
-  b.g.entry = reward;
+  b.entry(reward);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -311,7 +410,7 @@ TEST_CASE("the first terminal decision wins") {
   c.all_high = bit(0);
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -336,7 +435,7 @@ TEST_CASE("the trial cap catches a graph that cannot end") {
   c.all_high = bit(9);  // never raised in this test
   c.target_state = hit;
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);  // it *looks* fine
 
   TrialRunner e(b.g);
@@ -360,7 +459,7 @@ TEST_CASE("a self-transition resets the timer and redraws the duration") {
   c.all_high = bit(0);
   c.target_state = wait;  // back to itself
   b.on(wait, c);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner e(b.g);
@@ -391,7 +490,7 @@ TEST_CASE("the path records every state with its realised duration") {
   const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.timeout(a, b.fixed(200), c);
   b.timeout(c, b.fixed(300), hit);
-  b.g.entry = a;
+  b.entry(a);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -418,7 +517,7 @@ TEST_CASE("a randomised duration is reported and is reproducible") {
   const uint8_t fore = b.state();
   const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.timeout(fore, b.uniform(200, 800), hit);
-  b.g.entry = fore;
+  b.entry(fore);
 
   auto run = [&](uint32_t trial_id) {
     TrialRunner e(b.g);
@@ -448,15 +547,31 @@ TEST_CASE("the path truncates rather than corrupts") {
   c.all_high = bit(0);
   c.target_state = hit;
   b.on(loop, c);
-  b.g.entry = loop;
+  b.entry(loop);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
   e.start(1, 1, t);
-  run_until(e, 0, t, ms(500));  // ~500 visits into a 64-entry buffer
+  run_until(e, 0, t, ms(500));  // ~500 visits into a 255-entry buffer
 
-  CHECK(e.run_record().path_len <= kMaxPath);
-  CHECK(e.run_record().path_truncated);
+  const StateMachineRunRecord& r = e.run_record();
+  CHECK(r.path_len == kMaxPath);
+  CHECK(r.path_truncated);
+  CHECK(r.total_visits > r.path_len);
+
+  // It keeps the LAST kMaxPath visits, not the first. A trial's interesting
+  // part is the response at the end, so overflow costs the oldest.
+  CHECK(r.first_seq() == r.total_visits - r.path_len);
+  CHECK(r.first_seq() > 0);
+
+  // Read in order through visit(), the newest last. Every entry is a real
+  // visit to the looping state rather than a slot nothing wrote.
+  for (uint8_t i = 0; i < r.path_len; ++i) CHECK(r.visit(i).state_index == loop);
+  // Entry times increase across the window, which is what would break first if
+  // visit() indexed the ring wrongly.
+  for (uint8_t i = 1; i < r.path_len; ++i)
+    CHECK(r.visit(i).entered_us > r.visit(i - 1).entered_us);
+  CHECK(r.visit(r.path_len - 1).entered_us > r.visit(0).entered_us);
 }
 
 TEST_CASE("micros() wraparound does not disturb a trial") {
@@ -465,7 +580,7 @@ TEST_CASE("micros() wraparound does not disturb a trial") {
   const uint8_t wait = b.state();
   const uint8_t ns = b.terminal(TrialOutcome::NotStarted);
   b.timeout(wait, b.fixed(500), ns);
-  b.g.entry = wait;
+  b.entry(wait);
 
   TrialRunner e(b.g);
   uint32_t t = 0xFFFFFFFF - ms(200);  // wraps mid-trial
@@ -509,7 +624,7 @@ TEST_CASE("a level transition fires on entry even when the input word never move
   c.target_state = hit;
   c.fire_if_true_on_entry = true;
   b.on(held, c);
-  b.g.entry = first;
+  b.entry(first);
 
   TrialRunner e(b.g);
   uint32_t t = 0;
@@ -540,7 +655,7 @@ TEST_CASE("entering a state does not let an edge transition fire on a stale pred
   c.target_state = hit;
   c.fire_if_true_on_entry = false;
   b.on(held, c);
-  b.g.entry = first;
+  b.entry(first);
 
   TrialRunner e(b.g);
   uint32_t t = 0;

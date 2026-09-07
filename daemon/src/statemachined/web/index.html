@@ -1,0 +1,37 @@
+<!doctype html>
+<!--
+  SPDX-License-Identifier: LGPL-3.0-or-later
+
+  The rig's own page. Everything on it is one of the custom elements under
+  /elements/, which is the same contract a console in another repo uses -- so
+  this page is an honest test of that contract rather than a privileged view
+  with a private route behind it.
+
+  No build step, no framework, no CDN: a rig box may have no route to the
+  internet and a browser in a booth must not wait on unpkg.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>statemachined</title>
+    <link rel="stylesheet" href="/ui/statemachined_user_interface.css" />
+    <script type="module" src="/ui/application_shell.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>statemachined</h1>
+      <span id="rig-summary" class="summary">connecting...</span>
+    </header>
+
+    <nav id="view-navigation" aria-label="views"></nav>
+
+    <main id="view-container"></main>
+
+    <footer>
+      Every panel here is a custom element served from
+      <code>/elements/statemachined.js</code>, and everything it shows came through
+      <code>/api/</code>. There is no private route.
+    </footer>
+  </body>
+</html>

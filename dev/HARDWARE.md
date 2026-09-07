@@ -21,7 +21,7 @@ Eight in, eight out. The board has more usable pins than that, but D0/D1 are the
 UART and D13 carries the on-board LED; a line map that quietly includes either
 is one that surprises somebody at 2 a.m.
 
-| statemachined input | Pin | | statemachined output | Pin |
+| input line | Pin | | output line | Pin |
 |---|---|---|---|---|
 | 0 | D2 | | 0 | D10 |
 | 1 | D3 | | 1 | D11 |
@@ -37,6 +37,57 @@ number. The Arduino pin number is turned into a port and a bit with the core's
 own `digitalPinToBspPin()` rather than a hand-written table: a hand-copied pin
 map is a silent wrong-valve bug and the core already knows the answer.
 
+**Three things about this table are load-bearing, and none of them is
+configurable.**
+
+**Which pin is an input and which is an output is fixed when the firmware is
+compiled.** `init()` calls `pinMode()` over these two arrays and nothing
+afterwards changes a direction: the `wiring` command (`PROTOCOL.md` §3.5)
+carries invert, enable, debounce and output safe levels, and no direction field
+exists in it. So a rig that needs D9 to drive a valve does not edit a config
+file — it edits `kInputPins`/`kOutputPins` and reflashes. That is deliberate. A
+direction that could be changed over the wire is a valve line that can be turned
+into an input by a bad config, and a board comes up long before any config
+reaches it.
+
+**Input line *n* and output line *n* are different pins.** They are two
+independent numberings over two disjoint sets of pins, because the protocol
+carries two separate words. Input line 3 is D5; output line 3 is A0. There is no
+line 3 in the sense of "one pin".
+
+**The line number is what a graph means — and the board is asked what the pin
+labels are, rather than told.** `line_index` in a state-machine config
+(`/var/lib/braemons/statemachined/configs/`) is a bit position in those words
+and is the only part that reaches the device. `pin_label` beside it names the pin, and it
+used to be free text checked against nothing: writing `D9` next to input line 1
+did not move it — line 1 is D3 because `kInputPins[1]` is 3 — it only put a
+wrong label on the web UI for the next person.
+
+It is checked now. The `pins` command (`PROTOCOL.md` §3.6) answers with this
+table, out of the firmware that holds it, so:
+
+- a line may name **only** a pin — `pin = "D6"` — and the daemon resolves it to
+  line 4 by asking the board;
+- a line naming both has them **checked**, and a pair that disagree stops the
+  daemon connecting rather than being pushed;
+- a line naming a pin this board does not have — or naming an output's pin as an
+  input — is refused, with the board's actual pins in the message.
+
+**The first of those three is the form to write, and it is what the files in
+this repository now use.** `graphs/uno-r4-minima-lines.json` and the bench
+conffile name a pin per line and no bit position at all. A `line_index` beside
+a pin is checked and adds nothing: it is the half of the pair that is written
+nowhere on the hardware, so nobody at the bench can confirm it — and it is the
+half that silently stops being true when this table is reordered. A map written
+in pins follows a reflash; one written in indices goes on naming the old holes.
+
+`make bringup ARGS="--hello pins"` prints exactly what the board answers.
+
+What none of that proves is that the wire is in the hole the label names. There
+is no read-back path from a pin, so the Lines panel showing each line's live
+level is still the only verification of *that*: press the lever, watch which dot
+lights.
+
 The graph pools are sized for 32 lines on every board so the data structures do
 not change shape per target. What this board can physically drive is the eight
 above, reported in `hello_ack` as `n_input_lines` / `n_output_lines`, and the
@@ -49,17 +100,19 @@ bridge checks a graph against them before uploading a byte of it.
 > write down afterwards, is [`BRINGUP.md`](BRINGUP.md). This section is the
 > wiring it refers to.
 
-Before any host says `hello`, the board runs a built-in graph so that a bench
-board is visibly alive (`firmware/core/demo/demo_graph.cpp`; compile it out with
-`-DSTATEMACHINED_DEMO=0`). It uses two inputs and six outputs, and it is the cheapest way
-to find out whether your wiring reaches the lines you think it does.
+The board holds no graph until one is uploaded, so a bench board wired up and
+powered on does nothing but blink -- see BRINGUP.md §3, and §7a for giving it a
+graph to run out of its own storage. This wiring is what the shipped examples in
+`graphs/` and the line map in `configs/uno-r4-minima-bench.config.json` expect.
 
 | What | statemachined line | Pin | Wire it as |
 |---|---|---|---|
 | Start switch | input 0 | **D2** | switch to **5 V**, plus a **10 kΩ pull-down to GND** |
 | Abort switch | input 1 | **D3** | the same |
-| Step LEDs 1-5 | outputs 0-4 | **D10, D11, D12, A0, A1** | LED anode to pin, cathode through **220-330 Ω** to GND |
-| Ready / done lamp | output 7 | **A4** | the same |
+| Ready lamp | output 0 | **D10** | LED anode to pin, cathode through **220-330 Ω** to GND |
+| Cue lamp | output 1 | **D11** | the same |
+| Error lamp | output 2 | **D12** | the same |
+| Reward valve | output 3 | **A0** | an LED on the bench; on a rig, the driver |
 | Alive heartbeat | *not a line* | **D13** (on-board LED) | nothing — it is the LED already on the board |
 
 **The pull-downs are not optional.** `hal::init()` sets inputs to `INPUT`, not
@@ -71,22 +124,24 @@ is a jumper wire from 5 V touched to D2, which is bouncy but unambiguous.
 
 What you should see, with nothing attached at all: **D13 blinks** briefly once a
 second. That alone says the board booted, the `FspTimer` ISR is running and the
-scan loop is turning, which are the three things that fail first.
+scan loop is turning, which are the three things that fail first. Nothing else
+moves, because nothing has given the board anything to run.
 
-With the LEDs and the start switch wired: the ready lamp on A4 is lit, and stays
-lit. Press the start switch and one LED walks D10 → D11 → D12 → A0 → A1, **500 ms
-each**, then the trial ends as `Hit` and A4 comes back on. Press the abort switch
-mid-walk and it stops immediately, leaving D10 lit as a `Cancelled` lamp. Either
-way the next trial arms 1.5 s later.
+With `graphs/state-walk.json` uploaded and the board told to arm its own trials
+(BRINGUP.md §7a): the ready lamp on D10 is lit and stays lit. Press the start
+switch and one lamp walks D10 → D11 → D12 and round again, **500 ms each**, then
+the trial ends as `Hit` and D10 comes back on; 1.5 s later it goes again, which
+is the dwell that graph's terminal state declares.
 
 Holding the start switch down does not re-trigger: a transition fires on its
 predicate's *rising edge*, so the switch has to be released and pressed again.
 That is the same rule that stops a lever the animal is already holding from
 ending a trial the instant it begins.
 
-The moment a host sends `hello`, demo mode ends for good (until reset) and every
-line goes to its safe level. A serial *monitor* opening the port is not enough —
-it is the greeting that hands over, not the connection.
+The moment a host sends `hello`, it **takes the rig**: a board arming its own
+trials stops, the run in flight is cancelled through the ordinary exit path, and
+every line goes to its safe level. A serial *monitor* opening the port is not
+enough — it is the greeting that hands over, not the connection.
 
 ### Electrical
 
@@ -152,7 +207,7 @@ Three things follow, and they are the point of measuring rather than estimating:
 
 ### Scan rate and link cost — measured 2026-09-03
 
-On the board, with `tools/bringup` driving it over USB CDC.
+On the board, with `daemon/` driving it over USB CDC.
 
 | | |
 |---|---|
@@ -190,6 +245,39 @@ budgets a ping at 8 periods and a `state_report` at 20, against the 3.0 and 9.1
 measured here. Reverting the handoff fails it on the first assertion, which is
 the point — a measurement written down once is a measurement that quietly stops
 being true.
+
+### What `pins` costs — measured 2026-09-04
+
+The board answering which pin each line is (`PROTOCOL.md` §3.6) is the cheapest
+thing in this document.
+
+| | rig image |
+|---|---|
+| Flash | 69 048 B → **69 672 B** (+624 B: two label tables, the handler, the two names) |
+| RAM | 13 656 B → **13 664 B** (+8 B: the two pointers `DeviceIdentity` carries) |
+
+The label tables are in flash — `nm` puts both at 0x15300 — because a
+`constexpr` table of pointers to string literals is not copied into RAM. What
+the 8 B buys is a host that no longer keeps its own copy of this pinout.
+
+### The graph set, over the link — measured 2026-09-04
+
+`dev/DAEMON.md` §3.2 uploads every graph a session uses once and then switches
+by index, and the whole argument for that is the second row of this table.
+
+| | |
+|---|---|
+| Uploading a set: 2 graphs, 15 states, 11 transitions, 9 actions, 5 distributions | **205 ms** |
+| `configure`, switching to a graph already on the board | **27 ms** |
+| A trial capped at 8 000 ms, as the device measured it | 8 000 055 µs |
+
+The 205 ms is paid once per session, before the first trial. The 27 ms is what
+each inter-trial interval actually pays, and it is the number §3.2 exists to
+produce: uploading go/no-go per trial would put the first figure there instead.
+
+The set used 2 of 20 graph slots and 15 of 32 states, which is the capacity
+question open question 10 asks about — a real paradigm set is what will settle
+it, not this one.
 
 ### Trial timing — measured 2026-09-03
 

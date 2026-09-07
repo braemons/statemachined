@@ -24,7 +24,7 @@ TEST_CASE("a graph built in C++ runs with no protocol layer linked") {
   const uint8_t hit = b.terminal(TrialOutcome::Hit);
   b.timeout(wait, b.fixed(250), hit);
   b.on_entry(wait, OutputAction{5, OutputActionKind::High, 0});
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner r(b.g);
@@ -53,7 +53,7 @@ TEST_CASE("input lines drive it just as well without a host") {
   t.all_high = bit(0);
   t.target_state = hit;
   b.on(wait, t);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   TrialRunner r(b.g);
@@ -75,7 +75,7 @@ TEST_CASE("the run is reproducible from the seed, with nothing else involved") {
     const uint8_t wait = b.state();
     const uint8_t hit = b.terminal(TrialOutcome::Hit);
     b.timeout(wait, b.uniform(100, 900), hit);
-    b.g.entry = wait;
+    b.entry(wait);
     TrialRunner r(b.g);
     r.start(7, seed, 0);
     // A visit is recorded when its state is left, not when it is entered, so

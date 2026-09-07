@@ -56,10 +56,13 @@ const char* upload_error_str(UploadError e) {
 
 UploadError GraphBuilder::fail(UploadError e, const char* what) {
   context_ = what;
-  // A refused message abandons the upload rather than leaving it half-built for
-  // the next one to add to. The host has to start again, which is cheap, and
-  // the alternative is a graph assembled from two different attempts.
+  // A refused message abandons the whole upload rather than leaving it
+  // half-built for the next one to add to. The host has to start again, which
+  // is cheap, and the alternative is a set assembled from two different
+  // attempts. The target is left invalid, so the board holds no graph until a
+  // set_end succeeds.
   open_ = false;
+  graph_open_ = false;
   complete_ = false;
   return e;
 }
@@ -68,61 +71,89 @@ void GraphBuilder::fold(JsonSpan covered) {
   checksum_ = crc16_ccitt(covered.p, covered.n, checksum_);
 }
 
-UploadError GraphBuilder::begin(const JsonObject& m, JsonSpan covered) {
-  g_ = StateGraph{};
+UploadError GraphBuilder::begin_set(const JsonObject& m, JsonSpan covered) {
+  g_ = GraphSet{};
   checksum_ = 0xFFFF;
   current_state_ = kNoState;
+  first_state_ = 0;
   seen_exit_action_ = false;
   open_ = false;
+  graph_open_ = false;
   complete_ = false;
   graph_error_ = GraphError::None;
   context_ = "";
 
   uint16_t version = 0;
-  uint8_t n_states = 0;
-  uint8_t entry = 0;
-  if (!m.u16("graph_version", &version)) return fail(UploadError::BadField, "graph_version");
-  if (!m.u8("n_states", &n_states)) return fail(UploadError::BadField, "n_states");
-  if (!m.u8("entry", &entry)) return fail(UploadError::BadField, "entry");
+  uint8_t n_graphs = 0;
+  if (!m.u16("set_version", &version)) return fail(UploadError::BadField, "set_version");
+  if (!m.u8("n_graphs", &n_graphs)) return fail(UploadError::BadField, "n_graphs");
 
-  // Declared up front so an oversize graph is refused before the first state is
-  // sent rather than after the last.
-  if (n_states == 0) return fail(UploadError::BadField, "n_states is zero");
-  if (n_states > kMaxStates) return fail(UploadError::TooMany, "max_states");
-  if (entry >= n_states) return fail(UploadError::BadField, "entry");
-
-  bool bad = false;
-  uint32_t v = 0;
-  if (opt_u32(m, "invert", &v, &bad)) g_.inputs.invert_mask = v;
-  if (opt_u32(m, "enable", &v, &bad)) g_.inputs.enable_mask = v;
-  if (opt_u32(m, "safe", &v, &bad)) g_.output_safe_levels = v;
-  if (bad) return fail(UploadError::BadField, "invert/enable/safe");
-
-  if (m.type_of("debounce_ms") != JsonType::Missing) {
-    JsonArray a;
-    if (!m.array("debounce_ms", &a)) return fail(UploadError::BadField, "debounce_ms");
-    // May be shorter than the line count; missing entries stay 0.
-    for (uint8_t i = 0; i < kMaxLines; ++i) {
-      int32_t ms = 0;
-      if (!a.next_i32(&ms)) break;
-      if (ms < 0 || ms > UINT16_MAX) return fail(UploadError::BadField, "debounce_ms");
-      g_.inputs.debounce_ms[i] = static_cast<NarrowMilliseconds>(ms);
-    }
-  }
+  // Declared up front so an oversize set is refused before the first graph is
+  // sent rather than after the last -- the same reason graph_begin declares its
+  // state count, one level up.
+  if (n_graphs == 0) return fail(UploadError::BadField, "n_graphs is zero");
+  if (n_graphs > kMaxGraphs) return fail(UploadError::TooMany, "max_graphs");
 
   g_.version = version;
-  g_.entry = entry;
-  expected_states_ = n_states;
+  expected_graphs_ = n_graphs;
   open_ = true;
   fold(covered);
   return UploadError::None;
 }
 
+UploadError GraphBuilder::begin_graph(const JsonObject& m, JsonSpan covered) {
+  if (!open_) return fail(UploadError::NotOpen, "graph_begin");
+  if (graph_open_) return fail(UploadError::BadOrder, "graph_begin before graph_end");
+  if (g_.n_graphs >= expected_graphs_)
+    return fail(UploadError::BadIndex, "more graphs than set_begin declared");
+
+  uint8_t slot = 0;
+  uint8_t n_states = 0;
+  uint8_t entry = 0;
+  if (!m.u8("slot", &slot)) return fail(UploadError::BadField, "slot");
+  if (!m.u8("n_states", &n_states)) return fail(UploadError::BadField, "n_states");
+  if (!m.u8("entry", &entry)) return fail(UploadError::BadField, "entry");
+
+  // Stated rather than implied by arrival order, for the reason graph_state's
+  // `i` is -- and it must be the next one, because a graph's states are a
+  // contiguous slice of the shared pool.
+  if (slot != g_.n_graphs) return fail(UploadError::BadIndex, "slot");
+
+  // Declared up front so an oversize graph is refused before the first state is
+  // sent rather than after the last.
+  if (n_states == 0) return fail(UploadError::BadField, "n_states is zero");
+  if (static_cast<uint16_t>(g_.n_states) + n_states > kMaxStates)
+    return fail(UploadError::TooMany, "max_states");
+  if (entry >= n_states) return fail(UploadError::BadField, "entry");
+
+  first_state_ = g_.n_states;
+  graph_first_transition_ = g_.n_transitions;
+  graph_first_action_ = g_.n_output_actions;
+  GraphEntry& e = g_.graphs[slot];
+  e.first_state = first_state_;
+  e.n_states = 0;  // grows as states arrive; end_graph checks it
+  e.entry = static_cast<StateIndex>(first_state_ + entry);
+
+  expected_states_ = n_states;
+  current_state_ = kNoState;
+  seen_exit_action_ = false;
+  graph_open_ = true;
+  fold(covered);
+  return UploadError::None;
+}
+
 UploadError GraphBuilder::add_distribution(const JsonObject& m, JsonSpan covered) {
+  // A distribution belongs to the SET, not to a graph: the pool is shared, and
+  // a graph reusing another's foreperiod is the point of sharing it. So a host
+  // may send them all at set level, before the first graph_begin, or with the
+  // graph that introduces them.
+  //
+  // The one rule is the one that was always here: a distribution comes before
+  // any state that could name it, so a state is range-checked against the pool
+  // as it arrives rather than after the fact.
   if (!open_) return fail(UploadError::NotOpen, "graph_dist");
-  // Distributions come before the states that name them, so a state can be
-  // range-checked against the pool as it arrives.
-  if (g_.n_states > 0) return fail(UploadError::BadOrder, "graph_dist after graph_state");
+  if (graph_open_ && g_.graphs[g_.n_graphs].n_states > 0)
+    return fail(UploadError::BadOrder, "graph_dist after graph_state");
 
   uint8_t i = 0;
   if (!m.u8("i", &i)) return fail(UploadError::BadField, "i");
@@ -198,12 +229,15 @@ UploadError GraphBuilder::add_distribution(const JsonObject& m, JsonSpan covered
 }
 
 UploadError GraphBuilder::add_state(const JsonObject& m, JsonSpan covered) {
-  if (!open_) return fail(UploadError::NotOpen, "graph_state");
+  if (!graph_open_) return fail(UploadError::NotOpen, "graph_state");
 
   uint8_t i = 0;
   if (!m.u8("i", &i)) return fail(UploadError::BadField, "i");
-  if (i != g_.n_states) return fail(UploadError::BadIndex, "graph_state i");
-  if (g_.n_states >= expected_states_)
+  // Per graph, counted from zero: the host authored this graph and numbered its
+  // states the way it wrote them.
+  const uint8_t local = static_cast<uint8_t>(g_.n_states - first_state_);
+  if (i != local) return fail(UploadError::BadIndex, "graph_state i");
+  if (local >= expected_states_)
     return fail(UploadError::BadIndex, "more states than graph_begin declared");
 
   State s;
@@ -233,18 +267,35 @@ UploadError GraphBuilder::add_state(const JsonObject& m, JsonSpan covered) {
     if (dist >= g_.n_distributions) return fail(UploadError::BadIndex, "timeout.dist");
     if (target >= expected_states_) return fail(UploadError::BadIndex, "timeout.target");
     s.timeout_duration = dist;
-    s.timeout_target = target;
+    s.timeout_target = static_cast<StateIndex>(first_state_ + target);
+  }
+
+  // Optional, unlike `terminal` and `timeout`, and absent means none. Those two
+  // are required because a graph_state that forgot to mention them would be a
+  // dropped field silently deciding whether a trial can end; a state that says
+  // nothing about relighting is saying the thing every graph written before
+  // this existed says, and it says it unambiguously.
+  if (m.type_of("relight") != JsonType::Missing && !m.is_null("relight")) {
+    uint8_t dist = 0;
+    if (!m.u8("relight", &dist)) return fail(UploadError::BadField, "relight");
+    if (dist >= g_.n_distributions) return fail(UploadError::BadIndex, "relight");
+    // Refused here as well as in validate(), because this one can say which
+    // message was wrong while the upload is still open.
+    if (s.terminal_code == kNotTerminal)
+      return fail(UploadError::BadField, "relight on a state that is not terminal");
+    s.relight_duration = dist;
   }
 
   g_.states[g_.n_states++] = s;
-  current_state_ = i;
+  ++g_.graphs[g_.n_graphs].n_states;
+  current_state_ = static_cast<StateIndex>(first_state_ + i);
   seen_exit_action_ = false;
   fold(covered);
   return UploadError::None;
 }
 
 UploadError GraphBuilder::add_transition(const JsonObject& m, JsonSpan covered) {
-  if (!open_) return fail(UploadError::NotOpen, "graph_transition");
+  if (!graph_open_) return fail(UploadError::NotOpen, "graph_transition");
   if (current_state_ == kNoState)
     return fail(UploadError::BadOrder, "graph_transition before any graph_state");
   if (g_.n_transitions >= kMaxTransitions) return fail(UploadError::TooMany, "max_transitions");
@@ -264,7 +315,9 @@ UploadError GraphBuilder::add_transition(const JsonObject& m, JsonSpan covered) 
   uint8_t target = 0;
   if (!m.u8("target", &target)) return fail(UploadError::BadField, "target");
   if (target >= expected_states_) return fail(UploadError::BadIndex, "target");
-  t.target_state = target;
+  // A transition may not leave the graph it belongs to: selecting a graph by
+  // index has to select a machine, not a doorway into somebody else's.
+  t.target_state = static_cast<StateIndex>(first_state_ + target);
 
   if (m.type_of("hold") != JsonType::Missing && !m.is_null("hold")) {
     uint8_t hold = 0;
@@ -286,7 +339,7 @@ UploadError GraphBuilder::add_transition(const JsonObject& m, JsonSpan covered) 
 }
 
 UploadError GraphBuilder::add_action(const JsonObject& m, JsonSpan covered) {
-  if (!open_) return fail(UploadError::NotOpen, "graph_action");
+  if (!graph_open_) return fail(UploadError::NotOpen, "graph_action");
   if (current_state_ == kNoState)
     return fail(UploadError::BadOrder, "graph_action before any graph_state");
   if (g_.n_output_actions >= kMaxOutputActions)
@@ -346,8 +399,8 @@ UploadError GraphBuilder::add_action(const JsonObject& m, JsonSpan covered) {
   return UploadError::None;
 }
 
-UploadError GraphBuilder::end(const JsonObject& m) {
-  if (!open_) return fail(UploadError::NotOpen, "graph_end");
+UploadError GraphBuilder::end_graph(const JsonObject& m, JsonSpan covered) {
+  if (!graph_open_) return fail(UploadError::NotOpen, "graph_end");
 
   uint8_t n_transitions = 0, n_actions = 0;
   if (!m.u8("n_transitions", &n_transitions))
@@ -355,7 +408,35 @@ UploadError GraphBuilder::end(const JsonObject& m) {
   if (!m.u8("n_output_actions", &n_actions))
     return fail(UploadError::BadField, "n_output_actions");
 
-  if (g_.n_states != expected_states_) return fail(UploadError::CountMismatch, "n_states");
+  GraphEntry& e = g_.graphs[g_.n_graphs];
+  if (e.n_states != expected_states_) return fail(UploadError::CountMismatch, "n_states");
+  // Per graph, not per set: a host that miscounted one graph's transitions
+  // should be told which graph.
+  if (g_.n_transitions - graph_first_transition_ != n_transitions)
+    return fail(UploadError::CountMismatch, "n_transitions");
+  if (g_.n_output_actions - graph_first_action_ != n_actions)
+    return fail(UploadError::CountMismatch, "n_output_actions");
+
+  ++g_.n_graphs;
+  graph_open_ = false;
+  current_state_ = kNoState;
+  fold(covered);
+  return UploadError::None;
+}
+
+UploadError GraphBuilder::end_set(const JsonObject& m) {
+  if (!open_) return fail(UploadError::NotOpen, "set_end");
+  if (graph_open_) return fail(UploadError::BadOrder, "set_end before graph_end");
+  if (g_.n_graphs != expected_graphs_) return fail(UploadError::CountMismatch, "n_graphs");
+
+  uint8_t n_states = 0, n_transitions = 0, n_actions = 0;
+  if (!m.u8("n_states", &n_states)) return fail(UploadError::BadField, "n_states");
+  if (!m.u8("n_transitions", &n_transitions))
+    return fail(UploadError::BadField, "n_transitions");
+  if (!m.u8("n_output_actions", &n_actions))
+    return fail(UploadError::BadField, "n_output_actions");
+
+  if (g_.n_states != n_states) return fail(UploadError::CountMismatch, "n_states");
   if (g_.n_transitions != n_transitions)
     return fail(UploadError::CountMismatch, "n_transitions");
   if (g_.n_output_actions != n_actions)

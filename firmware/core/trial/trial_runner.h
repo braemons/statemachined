@@ -16,9 +16,13 @@ namespace statemachined {
 
 class TrialRunner {
  public:
-  explicit TrialRunner(const StateGraph& g) : machine_(g) {}
+  /// The set and which graph in it -- the whole of what "switching paradigm
+  /// between two trials" costs, since the pools do not move. See
+  /// dev/DAEMON.md 3.2.
+  explicit TrialRunner(const GraphSet& s, uint8_t graph_index = 0) : machine_(s, graph_index) {}
 
-  const StateGraph& graph() const { return machine_.graph(); }
+  const GraphSet& graph_set() const { return machine_.graph_set(); }
+  uint8_t graph_index() const { return machine_.graph_index(); }
 
   /// Begin a trial. The per-trial stream is derived rather than free-running:
   /// replaying trial 412 alone must draw trial 412's numbers, and a link reset
@@ -55,6 +59,12 @@ class TrialRunner {
   const StateMachineRunRecord& run_record() const { return machine_.get_record(); }
 
   void set_trial_cap_ms(Milliseconds ms) { machine_.set_run_cap_ms(ms); }
+
+  /// Report every completed state visit as it happens. Passed straight down:
+  /// the trial layer adds the trial's identity to what the machine reports, but
+  /// it is the machine that knows when a visit ended. See
+  /// StateMachine::set_visit_sink().
+  void set_visit_sink(VisitSink* sink) { machine_.set_visit_sink(sink); }
 
  private:
   /// Read the run's ending, if it has one, and write down what it meant for the

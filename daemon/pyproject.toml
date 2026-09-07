@@ -1,0 +1,75 @@
+# The daemon, as its own uv project rather than as scripts in the repo root:
+# it is the only Python in this tree with runtime dependencies, and keeping
+# them inside one project means `uv run --project` builds an environment for it
+# without touching the interpreter renode-test drives or the uv-tool sandboxes
+# the Makefile installs.
+#
+# It was tools/bringup/ until M4a, and until M4d it is still only the bench instrument
+# dev/BRINGUP.md asks for. What changed at M4a is where it lives and what it is
+# called: see dev/DAEMON.md §7.
+[project]
+name = "statemachined"
+# The sentinel. packaging/scripts/git-version.sh stamps the real version from
+# the tag at build time (dev/DAEMON.md §6.1), so a 0.0.0 artifact in the wild
+# means the stamping was bypassed rather than that this number was forgotten.
+version = "0.0.0"
+description = "Owns one statemachined device: the wire, the graphs, and the API over both"
+requires-python = ">=3.11"
+license = "LGPL-3.0-or-later"
+dependencies = [
+    # serial_for_url() is why this one is here rather than a hand-written
+    # transport: it already speaks socket:// and rfc2217://, so the day a board
+    # is on a switch instead of a USB cable, nothing above device/link.py
+    # changes.
+    "pyserial>=3.5",
+    # A graph arrives from a file somebody edited or from an HTTP request, and
+    # "refuse it, naming the field" is the whole job at that boundary. The same
+    # models become the API's schema at M4f, which is why this is pydantic
+    # rather than dataclasses plus hand-written checks.
+    "pydantic>=2.13.5",
+    "fastapi>=0.141.1",
+    # `[standard]` for one reason: the WebSocket implementation. Plain uvicorn
+    # answers a WebSocket upgrade with 404 -- not an error in the log, a 404 --
+    # so `WS /api/stream`, the trace tail and the serial monitor would all be
+    # dead in the shipped daemon while every test passed, because Starlette's
+    # TestClient implements WebSockets in process and needs no server library
+    # at all. Found by connecting to a running one.
+    "uvicorn[standard]>=0.52.4",
+    "httpx>=0.28.1",
+    # A console discovers a rig instead of being hand-configured with URLs --
+    # dev/DAEMON.md §5, and the same record vstimd already publishes. Imported
+    # lazily and never fatal: a daemon that cannot advertise still serves, and a
+    # rig with no mDNS on its network is a rig, not an error.
+    "zeroconf>=0.132",
+]
+
+[project.scripts]
+statemachined = "statemachined.command_line_interface:main"
+
+# pytest is a dependency of the test suites, not of the package, so it lives in
+# a group rather than in `dependencies`: `uv run --project` installs it for
+# `make test-daemon` and `make test-hardware` and leaves it out of anything
+# that just wants to talk to a board.
+[dependency-groups]
+test = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+# tests/unit is host-only. tests/integration needs the native device built --
+# `make test` does it -- and skips itself with instructions when it is not
+# there, so a bare `pytest` here never fails for want of a build. tests/hardware
+# needs a board and is deliberately not named: a target that fails on every
+# machine without hardware is a target people learn to ignore.
+testpaths = ["tests/unit", "tests/integration"]
+markers = [
+    "loopback: needs output-to-input jumper wires; see tests/hardware/test_lines.py",
+]
+# One device, one order. Without this, a plugin that reorders or parallelises
+# would have several hardware tests arming the same board at once.
+addopts = "-p no:randomly"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/statemachined"]

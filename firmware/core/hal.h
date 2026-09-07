@@ -78,5 +78,61 @@ size_t link_write_some(const char* src, size_t n);
 /// on rather than waiting for a heartbeat to time out.
 bool link_up();
 
+// -------------------------------------------------------------- the store ---
+//
+// Settings storage: data flash on a board, a file on the host. Written in one
+// pass, whole -- the record has a CRC over all of it and is accepted only
+// intact, so there is nothing to be gained by updating part of one.
+//
+// Buffered by the implementation rather than by the caller. Data flash programs
+// in small fixed units and erases in larger ones, and a caller that had to know
+// which would be a caller that knows the part number; the settings encoder just
+// hands over bytes in order. See core/io/settings_store.h for why that matters:
+// the largest thing stored is the graph set, and staging a copy of it would
+// double the largest structure in the system.
+
+/// How many bytes of settings storage this build has, or 0 for a board with
+/// none -- which is a board whose settings do not survive a power cut, not a
+/// board that fails. Everything above this treats storage as optional.
+size_t storage_capacity();
+
+/// Read `n` bytes from `offset`. False if the range is outside the store, which
+/// a truncated record reads as.
+bool storage_read(size_t offset, void* dst, size_t n);
+
+/// Begin a whole-store write, discarding what is there. On a board this is the
+/// erase, which is why an interrupted save reads back as a blank store rather
+/// than as a mixture of two records.
+bool storage_write_begin();
+
+/// Append bytes to the write in progress. False once the store is full, and
+/// once anything has failed: a failed write stays failed, so the caller does
+/// not have to check every call to find out that the first one did not take.
+bool storage_write(const void* src, size_t n);
+
+/// Flush whatever is left, padding to whatever unit the part programs in. False
+/// if any part of the write failed, in which case the store now holds no valid
+/// record -- which is the honest outcome and the one the settings CRC turns
+/// into "this board has forgotten", never into "this board believes something
+/// wrong".
+bool storage_write_commit();
+
+// ---------------------------------------------------------------- the pins ---
+
+/// What is written on the board beside each line, indexed by line number, or
+/// nullptr where this build has no pins worth naming.
+///
+/// These come from the same table that `init()` calls pinMode() over, and that
+/// is the whole point of them. Which pin a line is, and which direction it has,
+/// are decided when this firmware is compiled; nothing on the wire changes
+/// either. A host that wants to know therefore has to be *told* by the board,
+/// and the alternative -- a table in the host keyed by the board name -- is a
+/// hand-copied pin map, which is what the RA4M1 HAL refuses to keep of the
+/// Arduino core's for exactly the reason it would be wrong here.
+///
+/// Answered to the host by the `pins` command. See dev/PROTOCOL.md 3.6.
+const char* const* input_pin_labels();
+const char* const* output_pin_labels();
+
 }  // namespace hal
 }  // namespace statemachined

@@ -25,7 +25,7 @@ TEST_CASE("a run reports the terminal code it reached, not an interpretation") {
   const uint8_t wait = b.state();
   const uint8_t done = b.terminal_code(7);
   b.timeout(wait, b.fixed(10), done);
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -45,7 +45,7 @@ TEST_CASE("force_end ends a run through the ordinary exit path") {
   const uint8_t done = b.terminal_code(1);
   b.timeout(hold, b.fixed(10000), done);
   b.on_entry(hold, OutputAction{3, OutputActionKind::High, 0});
-  b.g.entry = hold;
+  b.entry(hold);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -73,7 +73,7 @@ TEST_CASE("the run cap stops a graph that validates but never ends") {
   const uint8_t done = b.terminal_code(1);
   // Reachable on paper, never reached in practice: nothing drives the input.
   b.on(spin, Transition{bit(0), 0, 0, done, kNoRandomDistribution, false});
-  b.g.entry = spin;
+  b.entry(spin);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -92,7 +92,7 @@ TEST_CASE("the same seed gives the same run") {
   const uint8_t wait = b.state();
   const uint8_t done = b.terminal_code(1);
   b.timeout(wait, b.uniform(10, 200), done);
-  b.g.entry = wait;
+  b.entry(wait);
 
   auto run_once = [&](uint64_t seed) {
     StateMachine m(b.g);
@@ -117,7 +117,7 @@ TEST_CASE("every output action kind has a defined effect on the update") {
   b.on_entry(drive, OutputAction{2, OutputActionKind::Toggle, 0});
   b.on_entry(drive, OutputAction{3, OutputActionKind::Pulse, 50});
   b.timeout(drive, b.fixed(10), done);
-  b.g.entry = drive;
+  b.entry(drive);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -155,7 +155,7 @@ TEST_CASE("a pulse shorter than its state comes down on its own width") {
   const uint8_t done = b.terminal_code(1);
   b.on_entry(drive, OutputAction{4, OutputActionKind::Pulse, 20});
   b.timeout(drive, b.fixed(500), done);
-  b.g.entry = drive;
+  b.entry(drive);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -183,7 +183,7 @@ TEST_CASE("a reward pulsed on entering a terminal state still comes down") {
   const uint8_t hit = b.terminal_code(1);
   b.timeout(wait, b.fixed(10), hit);
   b.on_entry(hit, OutputAction{7, OutputActionKind::Pulse, 30});
-  b.g.entry = wait;
+  b.entry(wait);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -216,7 +216,7 @@ TEST_CASE("toggle is resolved against where the line actually is") {
   const uint8_t done = b.terminal_code(1);
   b.on_entry(a, OutputAction{9, OutputActionKind::Toggle, 0});
   b.timeout(a, b.fixed(10), done);
-  b.g.entry = a;
+  b.entry(a);
   REQUIRE(validate(b.g) == GraphError::None);
 
   StateMachine m(b.g);
@@ -234,6 +234,88 @@ TEST_CASE("a pulse with no width is refused rather than never coming down") {
   const uint8_t done = b.terminal_code(1);
   b.on_entry(a, OutputAction{1, OutputActionKind::Pulse, 0});
   b.timeout(a, b.fixed(10), done);
-  b.g.entry = a;
+  b.entry(a);
   CHECK(validate(b.g) == GraphError::BadPulse);
+}
+
+TEST_CASE("a terminal state's dwell is drawn on arrival and reported") {
+  // The inter-trial interval is a duration like any other: drawn on the device,
+  // from the run's own stream, and reported -- so it replays with the trial it
+  // followed rather than being whatever the next caller happens to ask for.
+  Builder b;
+  const uint8_t a = b.state();
+  const uint8_t done = b.terminal_code(1);
+  b.timeout(a, b.fixed(10), done);
+  b.relight(done, b.uniform(1000, 2000));
+  b.entry(a);
+  REQUIRE(validate(b.g) == GraphError::None);
+
+  StateMachine m(b.g);
+  m.start(0xABCD, 0);
+  uint32_t t = 0;
+  while (m.is_running() && t < ms(100)) m.advance(0, t += 100);
+  REQUIRE_FALSE(m.is_running());
+
+  const StateMachineRunRecord& r = m.get_record();
+  CHECK(r.relight_ms >= 1000);
+  CHECK(r.relight_ms <= 2000);
+  // The terminal visit reports its own entry and the duration it drew, like
+  // every other visit does.
+  const StateVisit& last = r.visit(static_cast<uint8_t>(r.path_len - 1));
+  CHECK(last.cause == StateExitCause::Terminal);
+  CHECK(last.drawn_ms == r.relight_ms);
+  CHECK(last.entered_us == t);
+
+  // And it replays: the same seed draws the same dwell.
+  StateMachine again(b.g);
+  again.start(0xABCD, 0);
+  uint32_t u = 0;
+  while (again.is_running() && u < ms(100)) again.advance(0, u += 100);
+  CHECK(again.get_record().relight_ms == r.relight_ms);
+}
+
+TEST_CASE("a terminal state that declares no dwell is where a run stops") {
+  Builder b;
+  const uint8_t a = b.state();
+  const uint8_t done = b.terminal_code(1);
+  b.timeout(a, b.fixed(10), done);
+  b.entry(a);
+  REQUIRE(validate(b.g) == GraphError::None);
+
+  StateMachine m(b.g);
+  m.start(1, 0);
+  uint32_t t = 0;
+  while (m.is_running() && t < ms(100)) m.advance(0, t += 100);
+  CHECK(m.get_record().relight_ms == kNoRelight);
+}
+
+TEST_CASE("a cancelled run is told nothing about what comes after it") {
+  // It reached no terminal state, so there is no dwell to have drawn -- which
+  // is what stops a self-driving board after a cancel rather than having it
+  // start another trial nobody asked for.
+  Builder b;
+  const uint8_t a = b.state();
+  const uint8_t done = b.terminal_code(1);
+  b.timeout(a, b.fixed(10000), done);
+  b.relight(done, b.fixed(500));
+  b.entry(a);
+  REQUIRE(validate(b.g) == GraphError::None);
+
+  StateMachine m(b.g);
+  m.start(1, 0);
+  m.advance(0, 100);
+  REQUIRE(m.force_end(ms(5)));
+  CHECK(m.get_record().relight_ms == kNoRelight);
+}
+
+TEST_CASE("a dwell on a state that is not terminal is refused") {
+  // Nothing would ever read it: a dwell is drawn on arriving at the end of a
+  // run, and this state is not one.
+  Builder b;
+  const uint8_t a = b.state();
+  const uint8_t done = b.terminal_code(1);
+  b.timeout(a, b.fixed(10), done);
+  b.relight(a, b.fixed(500));
+  b.entry(a);
+  CHECK(validate(b.g) == GraphError::RelightOnLiveState);
 }

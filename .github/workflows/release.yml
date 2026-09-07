@@ -1,0 +1,183 @@
+name: Release
+
+# Tag-driven release: builds the .debs, the .rpms and the flashable firmware,
+# then publishes them all on a GitHub Release.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Re-running the workflow for an existing tag updates that release's assets.
+#
+# vstimd's release.yml is the model, with two differences worth stating.
+#
+# Its package matrix is by format *and* architecture, because cargo-deb and
+# rpmbuild are different tools. nfpm packs both formats from one staged tree, so
+# this matrix is by architecture alone and each job produces two artifacts.
+#
+# And the firmware is built first rather than alongside, because it goes *into*
+# the packages: /usr/share/braemons/statemachined/firmware, which
+# GET /api/device/firmware compares the running board against. A rig that cannot
+# say which firmware it is supposed to have is a rig nobody can debug remotely.
+on:
+  push:
+    tags: ['v*']
+  # Manual runs are useful for exercising the build without cutting a tag.
+  # They produce workflow artifacts but no release (see the `release` job's if:).
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ── The flashable image ────────────────────────────────────────────────────
+  # First, because the packages carry it. `make image` writes the .bin, the .elf
+  # and a MANIFEST.txt recording the commit, sizes and checksums -- a board in a
+  # rack cannot be asked which commit it is running.
+  firmware:
+    name: firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The version is derived from the git tag, and the default shallow
+          # fetch brings down no tags at all -- `git describe` would fail.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          make install-pio || pip install platformio==6.1.16
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Build the image
+        run: make image
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: image/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── .deb / .rpm ────────────────────────────────────────────────────────────
+  # One job per architecture so a single one failing does not hide the other,
+  # and so the two run in parallel rather than serially inside one runner. Each
+  # builds inside packaging/docker/Dockerfile.package-builder, whose base image
+  # and tools are pinned -- that container, not this runner, is what makes the
+  # artifact a function of the commit.
+  packages:
+    name: packages-${{ matrix.arch }}
+    needs: firmware
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # There is nothing to cross-compile -- the daemon is Python -- but the
+      # interpreter vendored into the package is a native artifact, so the arm64
+      # package is built by running the builder image *as* arm64.
+      - name: Register binfmt handlers
+        if: matrix.arch == 'arm64'
+        run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+
+      # Into image/, which the builder image copies and the stage step packs
+      # into /usr/share/braemons/statemachined/firmware.
+      - uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: image
+
+      # Fails fast and visibly when the tag situation leaves the build without
+      # a version, rather than aborting deep inside a Docker build.
+      - name: Resolve version
+        run: echo "building version $(make -s -C packaging print-version)"
+
+      - name: Build
+        run: make -C packaging packages-${{ matrix.arch }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkg-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── Publish ───────────────────────────────────────────────────────────────
+  release:
+    needs: [firmware, packages]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect release assets
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.deb' -o -name '*.rpm' \
+               -o -name '*.bin' -o -name '*.elf' -o -name 'MANIFEST.txt' \) \
+               -exec cp -v {} release/ \;
+          ls -lh release/
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG=${GITHUB_REF#refs/tags/}
+          NOTES=$(cat <<'EOF'
+          ## Installing
+
+          **Debian / Ubuntu / Raspberry Pi OS** —
+          `sudo apt install ./statemachined_*_<arch>.deb`
+
+          **Fedora / RHEL** — `sudo dnf install ./statemachined-*.<arch>.rpm`
+
+          The package is enabled but **not started**: starting the daemon greets
+          the board, and greeting takes the rig, so a board that was running
+          trials on its own would stop. Say what the rig is in
+          `/etc/braemons/statemachined-rig-config.toml`, then
+          `sudo systemctl start statemachined` and open port 8081.
+
+          Everything the daemon writes lives under
+          `/var/lib/braemons/statemachined/`, which an upgrade or a removal
+          never touches.
+
+          ## Firmware
+
+          `statemachined-uno_r4_minima.bin` is the image for the board, and is
+          also installed at `/usr/share/braemons/statemachined/firmware/` by the
+          packages above — `GET /api/device/firmware` compares a connected
+          board against it. `MANIFEST.txt` records the commit, sizes and
+          checksums.
+
+          Flash it with `bossac -i -e -w -R statemachined-uno_r4_minima.bin`, or
+          from a checkout with `make upload`. A board holds no graph until one
+          is uploaded, and comes back up running whatever it was last saved
+          with.
+          EOF
+          )
+          # A hyphen is semver's pre-release marker (v0.1.0-alpha1). Without
+          # this, GitHub would badge an alpha as the project's Latest release.
+          PRERELEASE=
+          case "$TAG" in *-*) PRERELEASE=--prerelease ;; esac
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* \
+              --title "$TAG" --notes "$NOTES" --verify-tag $PRERELEASE
+          fi

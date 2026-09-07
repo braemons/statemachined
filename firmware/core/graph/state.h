@@ -27,6 +27,12 @@ enum class StateExitCause : uint8_t {
 using TerminalCode = int8_t;
 constexpr TerminalCode kNotTerminal = -1;
 
+/// A dwell that was never drawn, because the terminal state reached declares
+/// none. Signed like every other Milliseconds for the same reason: a dwell of
+/// zero is a legal instruction -- "start the next run on the next scan" -- and
+/// must not read as the absence of one.
+constexpr Milliseconds kNoRelight = -1;
+
 /// A node of the graph. Its transitions and its output actions live in the
 /// graph's shared pools rather than inside the state, so each is a (first,
 /// count) run into the relevant array -- a slice, not a list. That is what makes
@@ -49,6 +55,24 @@ struct State {
   StateIndex timeout_target = kNoState;  ///< where a timeout goes
 
   TerminalCode terminal_code = kNotTerminal;  ///< set => terminal
+
+  /// How long a terminal state is dwelt in before the machine may be started
+  /// again. kNoRandomDistribution means it may not be: reaching this terminal
+  /// state is where a self-driving board stops.
+  ///
+  /// This does not give a terminal state an exit. Nothing exits a terminal
+  /// state -- the run ends there and its record is closed before this is read
+  /// -- and what the dwell decides is when the NEXT run may start. That is a
+  /// fact about the paradigm rather than about the run, which is why it is
+  /// written in the graph beside every other duration; whether anything acts on
+  /// it is a property of the device (see HostLinkSession's autorun). A graph
+  /// that declares one still runs unchanged under a host that arms every trial
+  /// itself.
+  ///
+  /// Drawn from the shared pool like a timeout, so an inter-trial interval can
+  /// be jittered, replays from the seed, and is reported as evidence rather
+  /// than merely being reproducible.
+  RandomDistributionIndex relight_duration = kNoRandomDistribution;
 
   constexpr bool terminal() const { return terminal_code != kNotTerminal; }
 };

@@ -47,8 +47,8 @@ OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask
   has_pending_ = false;
   pending_ = OutputUpdate{};
 
-  enter(graph_->entry, now_us, word);
-  const State& s = graph_->states[current_];
+  enter(graph().entry, now_us, word);
+  const State& s = set_->states[current_];
   OutputUpdate ops = apply_actions(s.first_entry_action, s.entry_action_count, now_us);
   ops.set_low |= left_over & ~ops.set_high;
   raised_ |= ops.set_high;
@@ -61,11 +61,11 @@ void StateMachine::enter(StateIndex state, Microseconds now_us, LineBitmask word
   entered_us_ = now_us;
   // This state's transitions have never been looked at. See advance().
   just_entered_ = true;
-  const State& s = graph_->states[state];
+  const State& s = set_->states[state];
 
   timeout_ms_ = (s.timeout_duration == kNoRandomDistribution)
                     ? -1
-                    : graph_->distributions[s.timeout_duration].draw(rng_);
+                    : set_->distributions[s.timeout_duration].draw(rng_);
 
   // Arm this state's transitions against the input word AS IT IS AT ENTRY.
   //
@@ -76,14 +76,13 @@ void StateMachine::enter(StateIndex state, Microseconds now_us, LineBitmask word
   // and the first scan is a genuine rising edge and must fire.
   for (uint8_t c = 0; c < s.transition_count; ++c) {
     const TransitionIndex i = s.first_transition + c;
-    const Transition& cond = graph_->transitions[i];
+    const Transition& cond = set_->transitions[i];
     TransitionState& cs = trans_state_[i];
     cs.was_true = cond.holds(word);
     cs.armed = cond.fire_if_true_on_entry || !cs.was_true;
     cs.held_since = now_us;
-    const RandomDistributionIndex hd = graph_->transitions[i].hold_duration;
-    cs.hold_needed_ms =
-        (hd == kNoRandomDistribution) ? 0 : graph_->distributions[hd].draw(rng_);
+    const RandomDistributionIndex hd = set_->transitions[i].hold_duration;
+    cs.hold_needed_ms = (hd == kNoRandomDistribution) ? 0 : set_->distributions[hd].draw(rng_);
   }
 }
 
@@ -95,7 +94,7 @@ OutputUpdate StateMachine::apply_actions(OutputActionIndex first, uint8_t count,
   // what the first one did rather than what the pin was before either.
   LineBitmask level = driven_;
   for (uint8_t i = 0; i < count; ++i) {
-    const OutputAction& a = graph_->output_actions[first + i];
+    const OutputAction& a = set_->output_actions[first + i];
     const LineBitmask bit = 1u << a.output_line;
     bool high;
     switch (a.kind) {
@@ -135,24 +134,49 @@ OutputUpdate StateMachine::apply_actions(OutputActionIndex first, uint8_t count,
 
 void StateMachine::record_visit(StateExitCause cause, TransitionIndex fired,
                                 Microseconds now_us) {
+  StateVisit e;
+  // Within this graph, not into the shared pool: the host resolves it against
+  // the graph it selected.
+  e.state_index = static_cast<StateIndex>(current_ - graph().first_state);
+  e.cause = cause;
+  // And within this state: "the n'th transition of Foreperiod", which is how a
+  // person reads a graph file and is what the host can resolve to a target
+  // without knowing where this state's slice of the shared pool happens to sit.
+  e.transition_index =
+      (fired == kNoTransition)
+          ? kNoTransition
+          : static_cast<TransitionIndex>(fired - set_->states[current_].first_transition);
+  e.drawn_ms = timeout_ms_;
+  e.entered_us = entered_us_;
+  e.duration_us = since(entered_us_, now_us);
+
+  // A ring, and it drops from the front. A graph may loop, and a long trial has
+  // to degrade to a truncated path rather than to a corrupt one -- but which
+  // half survives is a choice, and the end of a trial is where the response is.
+  // Keeping the first 255 visits and discarding everything after was the wrong
+  // half. `truncated` still says it happened, and total_visits says by how much.
+  const uint16_t next = static_cast<uint16_t>(record_.path_first) + record_.path_len;
+  const uint8_t slot = static_cast<uint8_t>(next < kMaxPath ? next : next - kMaxPath);
+  record_.path[slot] = e;
   if (record_.path_len < kMaxPath) {
-    StateVisit& e = record_.path[record_.path_len++];
-    e.state_index = current_;
-    e.cause = cause;
-    e.transition_index = fired;
-    e.drawn_ms = timeout_ms_;
-    e.entered_us = entered_us_;
-    e.duration_us = since(entered_us_, now_us);
+    ++record_.path_len;
   } else {
-    // A graph may loop. Truncate the path rather than corrupt it, and say so.
+    record_.path_first =
+        static_cast<uint8_t>(record_.path_first + 1 < kMaxPath ? record_.path_first + 1 : 0);
     record_.path_truncated = true;
   }
+
+  // After the record, never before: a sink that took a long time must not be
+  // able to leave the run's own account of itself half written. The seq is the
+  // visit's ordinal in the run, so a gap in the stream is detectable.
+  const uint32_t seq = record_.total_visits++;
+  if (visits_ != nullptr) visits_->on_visit(e, seq);
 }
 
 OutputUpdate StateMachine::leave(StateExitCause cause, TransitionIndex fired,
                                  Microseconds now_us) {
   record_visit(cause, fired, now_us);
-  const State& s = graph_->states[current_];
+  const State& s = set_->states[current_];
   OutputUpdate ops = apply_actions(s.first_exit_action, s.exit_action_count, now_us);
   // Everything this state raised comes down, whether or not the graph said so.
   // A valve left open because a graph forgot an on_exit is not an acceptable
@@ -212,7 +236,7 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
     return ops;
   }
 
-  const State& s = graph_->states[current_];
+  const State& s = set_->states[current_];
   StateIndex next = kNoState;
   TransitionIndex fired = kNoTransition;
   StateExitCause cause = StateExitCause::Timeout;
@@ -230,7 +254,7 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   // predicate is already true at entry has no edge coming, and silently never
   // fired. That is exactly the case `level` exists for: "wait until held",
   // where the lever is already down and nothing is going to move. Found on
-  // hardware, by tools/bringup/tests/hardware/test_lines.py, because every host
+  // hardware, by daemon/tests/hardware/test_lines.py, because every host
   // test for `level` entered its state at start() -- where have_last_word_ is
   // false and the first scan therefore evaluated anyway.
   const bool word_changed = !have_last_word_ || word != last_word_;
@@ -245,7 +269,7 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   // the first transition in the list wins, as in Bpod.
   for (uint8_t c = 0; need_eval && c < s.transition_count && next == kNoState; ++c) {
     const TransitionIndex i = s.first_transition + c;
-    const Transition& cond = graph_->transitions[i];
+    const Transition& cond = set_->transitions[i];
     TransitionState& cs = trans_state_[i];
     const bool now_true = cond.holds(word);
 
@@ -284,11 +308,25 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   const OutputUpdate exit_ops = leave(cause, fired, now_us);
   merge(ops, exit_ops);
 
-  const State& target = graph_->states[next];
+  const State& target = set_->states[next];
   if (target.terminal()) {
     record_.terminal_code = target.terminal_code;
     record_.total_us = since(started_us_, now_us);
     current_ = next;
+    // Drawn here, from the run's own stream, so an inter-trial interval replays
+    // with the trial it followed rather than depending on when somebody next
+    // asked for one. The machine only draws and reports it; what starts another
+    // run is a layer up.
+    record_.relight_ms = (target.relight_duration == kNoRandomDistribution)
+                             ? kNoRelight
+                             : set_->distributions[target.relight_duration].draw(rng_);
+    // The terminal visit is a visit like any other and reports its own entry,
+    // not the entry of whichever state led here: entered_us is now, its
+    // duration is zero because nothing exits it, and the duration it drew is
+    // the dwell -- which is the field that has always meant "what this state
+    // drew on entry".
+    entered_us_ = now_us;
+    timeout_ms_ = record_.relight_ms;
     record_visit(StateExitCause::Terminal, kNoTransition, now_us);
     running_ = false;
 
