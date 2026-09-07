@@ -1,0 +1,110 @@
+# Build the package inside the OS it targets, so the artifact is a function of
+# this file rather than of whoever's laptop ran it.
+#
+# vstimd's Dockerfile.deb-builder is the model, and one thing about it does not
+# carry over. vstimd is Rust: it *cross*-compiles, one image producing an arm64
+# binary on an amd64 host. There is nothing to cross-compile here -- the daemon
+# is Python -- but the interpreter that gets vendored into the package is a
+# native artifact of the architecture it is fetched for, so the arm64 package is
+# built by running this image *as* arm64 under qemu:
+#
+#   docker build --platform linux/arm64 ...
+#
+# Slower than a cross-compile and much simpler, because nothing is compiled: uv
+# downloads a python-build-standalone interpreter and prebuilt wheels for the
+# platform it is running as. The emulation only has to run pip-shaped work and
+# the check at the end.
+#
+# One image produces both formats. vstimd needs a builder per format because
+# cargo-deb and rpmbuild are different tools; nfpm packs a .deb and a .rpm from
+# the same staged tree, so the matrix here is by architecture alone.
+#
+# Usage -- via `make -C packaging packages-amd64` / `packages-arm64`, which pass
+# the version and the timestamp the host computed:
+#
+#   docker build --platform linux/amd64 \
+#     -f packaging/docker/Dockerfile.package-builder \
+#     --build-arg STATEMACHINED_VERSION=0.1.0 -t statemachined-package-builder-amd64 .
+#   docker run --rm -v $(pwd)/dist:/output statemachined-package-builder-amd64
+
+# Pinned by digest, not by tag. `bookworm-slim` names a moving target, and a
+# builder image that drifts is a build that is reproducible only until somebody
+# pushes to Docker Hub. Bookworm because that is what Raspberry Pi OS 12 is, so
+# the glibc the interpreter is fetched against is the one the Pi 5 has.
+ARG BASE_IMAGE=debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.13@sha256:841c8e6fe30a8b07b4478d12d0c608cba6de66102d29d65d1cc423af86051563
+
+FROM ${UV_IMAGE} AS uv
+FROM ${BASE_IMAGE}
+
+ARG NFPM_VERSION=2.43.1
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Everything the build needs and nothing else: no compiler, because nothing
+# here is compiled. `file` earns its place in the check below.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        make git curl ca-certificates xz-utils file \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=uv /uv /usr/local/bin/uv
+
+# nfpm's release assets say x86_64 but arm64, which is neither uname's spelling
+# nor dpkg's consistently -- hence the map rather than a substitution.
+RUN set -eux; \
+    case "$(uname -m)" in \
+      x86_64)  nfpm_arch=x86_64 ;; \
+      aarch64) nfpm_arch=arm64  ;; \
+      *) echo "no nfpm build for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/nfpm.tar.gz \
+      "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_${nfpm_arch}.tar.gz"; \
+    tar xzf /tmp/nfpm.tar.gz -C /usr/local/bin nfpm; \
+    rm -f /tmp/nfpm.tar.gz; \
+    nfpm --version
+
+WORKDIR /src
+
+# The build recipes live in packaging/Makefile rather than being restated here,
+# so there is one definition of how the package is assembled.
+COPY Makefile              ./
+COPY README.md LICENSE NOTICE ./
+COPY dev/                  dev/
+COPY packaging/            packaging/
+COPY daemon/               daemon/
+
+# The flashable firmware, when the caller has built it. `make image` needs
+# PlatformIO and an ARM toolchain, which this image deliberately does not carry
+# -- the firmware is built once by whoever has that, and dropped in here, the
+# same one image going into the amd64 and the arm64 package because a firmware
+# binary has nothing to do with the host that serves it.
+#
+# packaging/Makefile creates the directory before it calls docker, so this COPY
+# always has something to copy; an empty one is a package whose firmware
+# directory holds the note saying `make image` was not run.
+COPY image/ image/
+
+# Declared *here* rather than beside the other ARGs at the top, because an ARG
+# invalidates its own layer and every layer after it. The version changes with
+# every commit -- git describe appends a distance suffix -- so declaring it
+# early would re-run apt, the nfpm download and the interpreter fetch on every
+# single build. Everything above this line is version-independent and stays
+# cached.
+#
+# There is no default on purpose, and the build context has no .git: an unset
+# value makes packaging/scripts/git-version.sh abort rather than invent one.
+ARG STATEMACHINED_VERSION
+ENV STATEMACHINED_VERSION=${STATEMACHINED_VERSION}
+
+# The commit's own timestamp, so every mtime in the package is a property of
+# the commit rather than of when somebody ran the build. Without it two builds
+# of one commit differ in every file's mtime and share not a single byte.
+ARG SOURCE_DATE_EPOCH
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
+
+# `packages` = stage the vendored tree, run it, and pack both formats.
+RUN make -C packaging packages-here \
+    && mkdir -p /out \
+    && find dist -maxdepth 1 \( -name '*.deb' -o -name '*.rpm' \) -exec cp {} /out/ \;
+
+CMD ["sh", "-c", "cp /out/* /output/ && ls -lh /output/"]

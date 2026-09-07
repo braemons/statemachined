@@ -1,0 +1,25 @@
+# What the packaging build context is allowed to carry.
+#
+# Not tidiness: build/ holds the 133 MB staged tree from the last local package
+# build and .pio holds an entire toolchain's output, and docker uploads the
+# whole context to the daemon before reading the first line of the Dockerfile.
+# An unfiltered context here is minutes of copying, per architecture, to send
+# files the build then ignores.
+#
+# image/ is deliberately *not* excluded: the flashable firmware goes into the
+# package. See packaging/docker/Dockerfile.package-builder.
+build*/
+dist/
+.pio/
+.git/
+.venv/
+**/.venv/
+**/__pycache__/
+**/*.egg-info/
+site/
+emulation/
+sim/
+.devcontainer/
+robot_output.xml
+log.html
+report.html

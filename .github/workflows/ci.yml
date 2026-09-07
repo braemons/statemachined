@@ -122,6 +122,33 @@ jobs:
           # builds, short enough not to hoard binaries forever.
           retention-days: 90
 
+  package:
+    name: the package builds, twice, to the same bytes
+    # The daemon's own tests are what say the code works; this says the artifact
+    # a rig installs can be built at all, and that building it twice gives the
+    # same bytes. That second half fails silently -- one file carrying a
+    # wall-clock timestamp is enough, and the package still installs perfectly
+    # -- so it is worth a job rather than a good intention.
+    #
+    # amd64 only, and out of the pinned builder image rather than natively:
+    # arm64 runs under qemu and costs about ten minutes, which is the release
+    # workflow's business rather than every push's.
+    needs: [daemon-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # git-version.sh refuses to invent a version, so it needs the tags.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - run: make -C packaging install-nfpm
+      - run: echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      # An explicit version, because a pull request is not a tagged commit and
+      # git-version.sh is deliberately fatal about that. What is under test here
+      # is the build, not the version.
+      - name: Build twice and compare
+        run: make -C packaging repro STATEMACHINED_VERSION=0.0.1
+
   emulation:
     name: the HAL runs on an emulated board
     runs-on: ubuntu-latest

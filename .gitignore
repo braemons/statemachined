@@ -36,3 +36,7 @@ report.html
 # the working directory by `make bench-device` unless STATEMACHINED_STORE names
 # somewhere else; the tests give each device one under their own tmp_path.
 /statemachined-store.bin
+
+# vstimd puts its build output here and so does this; the release workflow
+# collects from it.
+/dist/

@@ -147,15 +147,21 @@ the same thing locally.
 
 ## Install it on a rig
 
-`make deb` builds an installable package — the daemon and a vendored Python
+`make packages` builds installable packages — the daemon and a vendored Python
 under `/opt/braemons/statemachined`, a systemd unit, a udev rule that names the
-board by VID/PID instead of granting the daemon every serial port on the box,
-and a conffile describing what the rig is. `make -C packaging packages` builds
-the `.rpm` too, from the same staged tree.
+board by VID/PID instead of granting the daemon every serial port on the box, a
+conffile describing what the rig is, and the flashable firmware. `.deb` and
+`.rpm`, amd64 and arm64, the last of those being a Raspberry Pi 5 running
+beside vstimd and triald.
 
-It is deliberately **enabled but not started** on a first install: starting it
-greets the board, and greeting takes the rig — a board that was running trials
-on its own would stop. See [`packaging/README.md`](packaging/README.md).
+Each is built inside a container pinned by digest, and building the same commit
+twice gives the same bytes — `make -C packaging repro` checks it, and so does
+CI. A `v*` tag publishes the lot on a GitHub Release.
+
+The package is deliberately **enabled but not started** on a first install:
+starting it greets the board, and greeting takes the rig — a board that was
+running trials on its own would stop. See
+[`packaging/README.md`](packaging/README.md).
 
 ## Target hardware
 

@@ -279,20 +279,26 @@ image:                      ## build the flashable image, with a manifest
 # --------------------------------------------------------------------------
 #
 # `.deb` and `.rpm` for a rig: a vendored interpreter under
-# /opt/braemons/statemachined, a systemd unit, a udev rule naming the board, and
-# a conffile describing the box. It lives in packaging/ rather than here because
-# it is a build of its own -- see packaging/README.md and dev/DAEMON.md §6 --
-# and these two lines exist so that nobody has to know that to build one.
+# /opt/braemons/statemachined, a systemd unit, a udev rule naming the board, a
+# conffile describing the box, and the flashable firmware `make image` builds.
+# It lives in packaging/ rather than here because it is a build of its own --
+# see packaging/README.md and dev/DAEMON.md §6 -- and these lines exist so that
+# nobody has to know that to build one.
 #
-# `make image` first if the package should carry the firmware; without it the
+# `make packages` is what a release publishes: both architectures, each built
+# inside a pinned container, so the artifact is a function of the commit rather
+# than of the machine. `make deb` is the quick one for iterating -- this
+# architecture, no container.
+#
+# `make image` first, and the firmware goes into the package. Without it the
 # package installs a note saying why there is none.
 
 .PHONY: deb
-deb:                        ## the installable package for this machine
+deb:                        ## the .deb for this machine, no container
 	$(MAKE) -C packaging deb
 
 .PHONY: packages
-packages:                   ## .deb and .rpm, from the one staged tree
+packages:                   ## every release artifact: amd64 and arm64, deb and rpm
 	$(MAKE) -C packaging packages
 
 # --------------------------------------------------------------------------

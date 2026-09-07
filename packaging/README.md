@@ -5,13 +5,26 @@ that says *which* board and *who* may open it, and a conffile describing what
 the box is.
 
 ```sh
-make -C packaging install-nfpm     # once
-make image                         # optional: the flashable firmware goes in too
-make -C packaging deb              # build/package/dist/statemachined_<version>_<arch>.deb
+make image                         # the flashable firmware goes into the package
+make -C packaging packages         # both architectures, both formats, into dist/
+make -C packaging packages-arm64   # just the Pi 5
 make -C packaging inspect          # what went in, without installing it
 ```
 
-`make deb` from the repository root is the same thing.
+That builds inside a pinned container. For iterating, the same recipe runs
+natively on this machine — quicker, and correct for this architecture only:
+
+```sh
+make -C packaging install-nfpm     # once
+make -C packaging deb              # or `make deb` from the repository root
+make -C packaging repro            # build twice, prove the bytes match
+```
+
+arm64 runs the builder image under qemu, so register the handler once per boot:
+
+```sh
+docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
+```
 
 ## What the package is
 
@@ -25,7 +38,33 @@ experiment, and a box in a rack does not need a working `pip` to be repaired.
 
 **One `nfpm.yaml`, both formats.** A `debian/` directory plus a hand-written
 `.spec` would be the same list of files written twice, and the second copy is
-the one that goes wrong.
+the one that goes wrong. vstimd needs a builder image per format because
+cargo-deb and rpmbuild are different tools; nfpm packs both from one staged
+tree, so the matrix here is by architecture alone.
+
+**Built in a pinned container, and reproducible.** Base image pinned by digest,
+uv and nfpm by version, dependencies installed from `daemon/uv.lock` with
+hashes rather than resolved against PyPI at build time, every mtime taken from
+the commit, and every `.pyc` rebuilt with hash-based invalidation so that
+normalising those mtimes does not invalidate them. Two builds of one commit are
+then the same bytes: `make -C packaging repro` builds twice and compares, and CI
+runs it.
+
+Worth *checking* rather than asserting, because it fails silently — the package
+still installs perfectly. All four of the above were found that way rather than
+predicted. The one that would never have been guessed: uv leaves a
+`uv_cache.json` in the dist-info recording the nanosecond of the install.
+
+Reproducible *for a given builder*. The container and a native `make deb` on
+this machine produce different bytes — different base OS, so different wheel
+selection — which is exactly why what a release publishes comes out of the
+container.
+
+**Not a cross-compile.** vstimd cross-compiles because it is Rust. Nothing here
+is compiled at all — uv fetches a prebuilt interpreter and prebuilt wheels — but
+that interpreter is native to the architecture it was fetched for, so the arm64
+package is built by running the builder image *as* arm64 under qemu. Slower,
+and much simpler than a cross toolchain.
 
 **The version comes from the git tag.** `daemon/pyproject.toml` carries a
 `0.0.0` sentinel and `scripts/git-version.sh` stamps the real version into a
@@ -38,6 +77,7 @@ forgot to bump a number.
 | | |
 |---|---|
 | `Makefile` | stages the tree, checks it, and hands it to nfpm |
+| `docker/Dockerfile.package-builder` | the pinned image both architectures are built in |
 | `nfpm.yaml` | what goes where, and what is a conffile |
 | `scripts/git-version.sh` | the version, in its package form and its PEP 440 form |
 | `scripts/check-staged-tree.py` | runs the interpreter that is about to be shipped |
@@ -70,12 +110,31 @@ included. It holds the graph store, the state-machine configs somebody authored
 in the web UI, and the recordings: an experiment's data, which a package
 removal is not permission to delete.
 
-## Cross-building
+## Releases
 
-Not attempted. The interpreter is a native artifact, so an arm64 package is
-built on an arm64 machine — a Pi, or a container on one — and `make deb`
-refuses to guess rather than labelling a package with an architecture it was
-not built on.
+`.github/workflows/release.yml`, from vstimd's. A `v*` tag builds the firmware
+first — it goes *into* the packages, at
+`/usr/share/braemons/statemachined/firmware/`, which
+`GET /api/device/firmware` compares a connected board against — then both
+architectures in parallel, then publishes the `.deb`s, the `.rpm`s, the `.bin`
+and the `MANIFEST.txt` on a GitHub Release. A hyphen in the tag marks a
+pre-release.
+
+The version comes from the tag and nothing else: `git-version.sh` **refuses**
+to invent one, because a wrong-but-plausible version baked into a package is
+worse than a failed build. Pass `STATEMACHINED_VERSION=` to build outside a
+tagged checkout — the container does exactly that, since its build context has
+no `.git`.
+
+Ingestion into the braemons archive is one line in `braemons/packages/sources.txt`:
+
+```
+braemons/statemachined
+```
+
+That is the whole integration. This repository needs no workflow changes for it
+and holds no credentials, and a `~` in the version routes a pre-release to
+`testing` rather than `stable`.
 
 ## After installing
 

@@ -1133,11 +1133,41 @@ The braemons pattern for a Python daemon is already written down, in
 the first Python braemons daemon to actually build packages**, and triald
 inherits whatever this gets right.
 
-`packaging/` builds them now — `make deb`, or `make -C packaging packages` for
-both formats — and what is below describes what that produces rather than what
-it should. `packaging/README.md` is the operator's half of it. What is *not*
-done is the release side: no `release.yml`, no builder containers for the
-architectures this machine is not, and nothing installed on the Pi yet.
+`packaging/` builds them now. `make packages` produces both architectures and
+both formats out of a pinned builder container, `.github/workflows/release.yml`
+is vstimd's, and what is below describes what that produces rather than what it
+should. `packaging/README.md` is the operator's half of it. What is *not* done
+is the last step: **nothing has been installed on the Pi 5 yet**, which is the
+only thing that can find out whether any of this is right.
+
+Two departures from vstimd's pipeline, both because this daemon is Python.
+
+Its matrix is by format *and* architecture, because cargo-deb and rpmbuild are
+different tools; nfpm packs a `.deb` and a `.rpm` from one staged tree, so this
+one is by architecture alone. And vstimd *cross*-compiles, one image producing
+an arm64 binary on an amd64 host. Nothing here is compiled — uv fetches a
+prebuilt interpreter and prebuilt wheels — but that interpreter is a native
+artifact, so the arm64 package is built by running the builder image *as* arm64
+under qemu. Slower than a cross toolchain and much simpler, because the
+emulation only has to run pip-shaped work.
+
+**The build is reproducible, and that is checked rather than asserted.** Four
+things had to be nailed down, and every one of them was found by building twice
+and diffing rather than by predicting it: the base image is pinned by digest and
+the tools by version; dependencies are installed from `daemon/uv.lock` with
+hashes instead of being resolved against PyPI at build time, or a release of
+fastapi between two builds changes the artifact; every mtime comes from the
+commit rather than the clock; and every `.pyc` is rebuilt with hash-based
+invalidation, because normalising those mtimes otherwise invalidates the ones
+python-build-standalone shipped and leaves the daemon recompiling the stdlib on
+every start into a tree its user cannot write. uv's `uv_cache.json`, which
+records the nanosecond of the install in the dist-info, is deleted.
+
+`make -C packaging repro` builds twice and compares; CI runs it. Worth a job
+rather than a good intention, because it fails silently — the package still
+installs perfectly. It is reproducibility *for a given builder*: the container
+and a native build on a developer's machine differ, which is the argument for
+the container being what a release publishes.
 
 One thing the shape below did not anticipate, and it is worth writing down
 because it is the only part of this repository that runs the artifact rather
@@ -1243,7 +1273,7 @@ milestones that used to be M5 and M6 are now M8 and M9.
 | **M4h** ▶️ | **The bench: this UI in front of a real board.** Promoted ahead of packaging, because until somebody has clicked through the six panels with a device on the other end, everything above is a set of tests agreeing with each other. `make bench` runs the daemon, the API and the UI against `TARGET` -- a board on a cable, or `make bench-device` and `socket://127.0.0.1:5300` for the same firmware built for this machine -- from `daemon/bench/statemachined_bench_configuration.toml`, whose store is seeded from `graphs/` under `build/` so deleting a graph in the browser never deletes an example. The bridge the integration tests use moved to `daemon/bench/native_device_on_a_socket.py` and is now shared rather than copied, and `make integration-device`, named by three docstrings and existing in none, exists. **Done against the R4**: reflashed to M4c firmware, wiring pushed, the set uploaded, and a whole configure → start → result through the HTTP API. **Left**: the browser. No panel of this UI has ever been rendered |
 | **M4i** ✅ | **The board says which pin each line is** (`PROTOCOL.md` §3.6). The daemon kept its own copy of the firmware's pin table, keyed by the board name — a hand-copied pin map, which is the thing the RA4M1 HAL refuses to keep of the Arduino core's table for exactly the reason it was wrong here: a host cannot otherwise know which pin a line is, or even which lines are inputs, because both are fixed when the firmware is compiled. `pins`/`pin_map` answers out of the same table `pinMode()` is called over, one direction per request so a 32-line board's labels cannot overflow a line. A config may now name a pin instead of a bit position; where it names both they are checked, and a disagreement stops the daemon connecting rather than driving the wrong line for a session. Firmware older than the command answers `no_pin_map`, the daemon falls back to its own table, and every label it shows is then marked `assumed` rather than passing as the board's word. 624 B of flash and 8 B of RAM |
 | **M4j** ✅ | **The serial monitor, and views that say what they are.** Two complaints from the first person to open the page who had not written it: what is a "session", what is a "trace". They are words this system uses in a particular way and a tab label teaches neither, so every view carries a sentence — in the nav, above the panel, and inside the panel, since a console embeds the panels and has no tabs. `Graphs` is `Paradigms` and `Lines` is `Lines & wiring` for the same reason. The monitor is the seventh element: `device_line_monitor.py` keeps the last 4 000 lines both directions, tapped in `SerialLink` so a line nothing could parse is in there too, served at `GET /api/device/monitor` and a stream that does not coalesce. Always recording, because a fault that happens once an hour is not reproducible on demand. It sends nothing: a terminal that could type at the board would be a second host on a one-command-in-flight link |
-| **M5** ▶️ | Packaging. **Done**: `packaging/`, and `make deb` builds an installable `.deb` (and `.rpm`) out of a vendored interpreter — nfpm, the systemd unit with triald's hardening, sysusers, the udev rule that names the board by VID/PID rather than granting `dialout`, logrotate for the trace tail, both conffiles, and a `check` that runs the staged tree before it is packed. **Left**: the builder containers for the architectures the build machine is not, `release.yml`, one line in `packages/sources.txt`, and **installing it on the Pi 5 alongside vstimd and triald** — which is the only part that can find out whether any of this is right |
+| **M5** ▶️ | Packaging. **Done**: `packaging/`, and `make packages` builds the `.deb` and `.rpm` for amd64 and arm64 out of a vendored interpreter in a pinned builder container — nfpm, the systemd unit with triald's hardening, sysusers, the udev rule that names the board by VID/PID rather than granting `dialout`, logrotate for the trace tail, both conffiles, the flashable firmware inside the package, a `check` that runs the staged tree before it is packed, a build that is byte-reproducible and a CI job that proves it, and `release.yml` lifted from vstimd. **Left**: one line in `packages/sources.txt`, and **installing it on the Pi 5 alongside vstimd and triald** — the only part that can find out whether any of this is right |
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
 | **M7** ✅ | **Data flash** (§3.4): five `hal::storage_*` entry points, the RA4M1 implementation over `DataFlashBlockDevice`, a file-backed `native.cpp` stand-in, a versioned CRC'd record with a write counter, the boot-time read, and `save` rather than `persist`. It carries the wiring, the graph set and the autorun setting — which is what lets a board run unattended, and what let demo mode be removed. **The RA4M1 path has not run on silicon**; everything above it is tested on the host and against the native device |
 
