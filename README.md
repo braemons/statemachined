@@ -1,11 +1,30 @@
 # statemachined — the trial state machine
 
-> **Status:** the portable core, the wire protocol and the Uno R4 Minima HAL are
-> implemented and tested — on the host, and on an emulated board under Renode.
-> **No physical board has run this yet:** the RAM budget is measured, the 10 kHz
-> scan rate is not. The host bridge to triald is next and does not exist yet.
-> [`dev/PLAN.md`](dev/PLAN.md) is still the argument for all of it, milestones
-> at the end, and it is meant to be argued with.
+> ## ⚠️ Alpha — `v0.1.0-alpha1`
+>
+> **Do not run an experiment on this.** It has never controlled a session with a
+> subject in it, and it is not yet something a rig should depend on.
+>
+> What *is* real: the portable core, the wire protocol and the Uno R4 Minima HAL
+> are implemented and tested — on the host, under sanitizers, on an emulated
+> board under Renode, and on a physical R4, which measured **122 767 Hz**
+> against the 10 kHz target. The daemon, its HTTP API and its web UI exist and
+> drive whole trials against a board.
+>
+> What has **not** happened, and matters:
+>
+> - **No session has ever run against triald.** The daemon reports outcomes to
+>   an interface nothing has exercised end to end (M6).
+> - **The board's data flash has never run on silicon.** Saving wiring, autorun
+>   and the graph set is tested on the host and against a native build of the
+>   same firmware; the RA4M1 path itself is unproven (M7).
+> - **The packages have never been installed on a machine.** They build, they
+>   are reproducible, and no rig has one (M5).
+>
+> Pre-releases go to the braemons archive's `testing` suite, never `stable` —
+> a `~` in the version is what keeps a rig tracking `stable` from being offered
+> one. [`dev/PLAN.md`](dev/PLAN.md) is the argument for all of it, milestones at
+> the end, and it is meant to be argued with.
 
 **statemachined** is the part of a braemons rig that runs the *within-trial* state machine
 on a microcontroller: it steps through a finite set of states, each with a map of
