@@ -32,7 +32,7 @@ from fastapi.testclient import TestClient
 
 from statemachined.api.application import create_application
 from statemachined.api.web_user_interface_routes import read_asset, web_directory
-from statemachined.daemon_configuration import DaemonConfiguration
+from statemachined.rig_configuration import RigConfiguration
 from statemachined.model.graph_definition import TransitionPredicate
 from statemachined.model.trial_outcome import DECLARABLE_TERMINAL_OUTCOMES
 
@@ -40,6 +40,7 @@ ELEMENT_TAG_NAMES = [
     "statemachined-device",
     "statemachined-lines",
     "statemachined-graph",
+    "statemachined-configs",
     "statemachined-session",
     "statemachined-trace",
     "statemachined-firmware",
@@ -54,10 +55,11 @@ def client(tmp_path: Path) -> TestClient:
     `connect_on_startup` off because there is no board and a test that waited
     for a serial timeout would be slow for no reading.
     """
-    configuration = DaemonConfiguration(
+    configuration = RigConfiguration(
         device_target="loop://",
         connect_on_startup=False,
         graph_store_directory=tmp_path / "graphs",
+        state_machine_config_directory=tmp_path / "configs",
         trace_directory=tmp_path / "trace",
     )
     with TestClient(create_application(configuration)) as client:
@@ -163,7 +165,16 @@ def test_every_view_says_what_it_is() -> None:
     """
     shell = (web_directory() / "application_shell.js").read_text()
     described = re.findall(r'id: "([a-z]+)",\n\s+label: "[^"]+",\n\s+tag: "[^"]+",\n\s+description:', shell)
-    assert set(described) == {"device", "lines", "graphs", "session", "trace", "monitor", "firmware"}
+    assert set(described) == {
+        "device",
+        "lines",
+        "graphs",
+        "configs",
+        "session",
+        "trace",
+        "monitor",
+        "firmware",
+    }
 
     # And the two words that prompted this are explained in their own panels,
     # not only in the shell.

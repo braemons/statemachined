@@ -104,9 +104,9 @@ def read_lines(request: Request) -> dict:
     output_word = int(state_report.get("io", {}).get("out", 0))
     # Resolved where there is a board to resolve against, so that a line
     # configured by pin reports the index it will actually be uploaded with.
-    line_map = supervisor.resolved_line_map if supervisor.is_connected else (
-        service.configuration.line_map
-    )
+    # Both come from the loaded state-machine config; `line_map` is what it
+    # says and `resolved_line_map` is that with the board's answer folded in.
+    line_map = supervisor.resolved_line_map if supervisor.is_connected else supervisor.line_map
     pin_map = supervisor.pin_map
 
     def described(definition, word: int) -> dict:
@@ -142,32 +142,50 @@ def replace_the_line_map(request: Request, line_map: LineMap) -> dict:
     Renaming is free -- names are the daemon's alone and never reach the wire --
     and the rest is pushed to the device in the same call, because a debounce
     that only this side knows about is a debounce that is wrong after a reset.
+
+    **Where this lands, and where it does not.** The map goes to the device and
+    into the loaded state-machine config *in memory*. It is not written to
+    `/var/lib/braemons/statemachined/configs/` until somebody saves the config
+    (`PUT /api/state-machine-configs/{name}`), and this reply says so in
+    `saved_to_the_store`. That is the honest shape for a panel somebody is
+    editing while watching a lamp: a wiring change has to reach the board
+    immediately to be *checked* against the wire, and an edit that reached the
+    disk on every keystroke would make "revert" mean nothing.
+
+    A rig with no config loaded takes the map anyway and holds it in the
+    supervisor. It has nowhere to save it -- there is no config to put it in --
+    which the reply also says.
     """
     service = service_of(request)
     supervisor = service.supervisor
-    if not supervisor.is_connected:
-        service.configuration.line_map = line_map
-        supervisor.line_map = line_map
-        supervisor.resolved_line_map = line_map
-        return {"pushed_to_device": False, "line_map": line_map.model_dump()}
+    if supervisor.is_connected:
+        # Resolved against the board *before* anything is kept, so a map naming
+        # a pin this board does not have is refused with the rig still running
+        # on the map it had. See dev/PROTOCOL.md §3.6.
+        try:
+            resolved = line_map.resolved_against(supervisor.pin_map)
+        except ValueError as exc:
+            raise refusal(422, "line_map_does_not_match_the_board", str(exc), "line_map")
+    else:
+        resolved = line_map
 
-    # Resolved against the board *before* anything is kept, so a map naming a
-    # pin this board does not have is refused with the rig still running on the
-    # map it had. See dev/PROTOCOL.md §3.6.
-    try:
-        resolved = line_map.resolved_against(supervisor.pin_map)
-    except ValueError as exc:
-        raise refusal(422, "line_map_does_not_match_the_board", str(exc), "line_map")
-
-    service.configuration.line_map = line_map
     supervisor.line_map = line_map
     supervisor.resolved_line_map = resolved
-    with service.device_lock:
-        supervisor.push_wiring()
+    config = service.state_machine_config
+    if config is not None:
+        config.line_map = line_map
+    if supervisor.is_connected:
+        with service.device_lock:
+            supervisor.push_wiring()
+
     return {
-        "pushed_to_device": True,
+        "pushed_to_device": supervisor.is_connected,
         "line_map": line_map.model_dump(),
         "resolved_line_map": resolved.model_dump(),
+        # Never true here, and named rather than omitted: a UI has to be able to
+        # tell a person their edit is one restart away from being lost.
+        "saved_to_the_store": False,
+        "state_machine_config": config.name if config is not None else None,
     }
 
 

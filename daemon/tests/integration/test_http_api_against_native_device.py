@@ -20,10 +20,9 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
-
 from statemachined.api.application import create_application
-from statemachined.daemon_configuration import DaemonConfiguration
 from statemachined.model.graph_definition import GraphDefinition
+from statemachined.rig_configuration import RigConfiguration
 
 
 def timed_graph(name: str, milliseconds: int) -> dict:
@@ -42,27 +41,52 @@ def timed_graph(name: str, milliseconds: int) -> dict:
     }
 
 
-def configuration_for(native_device, tmp_path, **overrides) -> DaemonConfiguration:
-    """A daemon wired to this device, with an empty store and trace of its own."""
+#: The rig this fixture pretends to be, as a state-machine config. Written to
+#: the store below and named as the startup config, because that is how a real
+#: rig gets its line map now -- the rig config holds none, and a daemon with no
+#: config loaded has no lines at all.
+BENCH_LINE_MAP = {
+    "input_lines": [
+        {"name": "start_switch", "line_index": 0},
+        {"name": "lever", "line_index": 4},
+    ],
+    "output_lines": [
+        {"name": "ready_lamp", "line_index": 0},
+        {"name": "reward_valve", "line_index": 3, "safe_level_is_high": True},
+    ],
+}
+
+
+def write_state_machine_config(directory, name="bench", line_map=None, graphs=()):
+    """One config in the store, as the daemon would find it on disk."""
+    directory.mkdir(parents=True, exist_ok=True)
+    body = {
+        "name": name,
+        "line_map": BENCH_LINE_MAP if line_map is None else line_map,
+        "graphs": list(graphs),
+    }
+    (directory / f"{name}.config.json").write_text(json.dumps(body, indent=2) + "\n")
+    return name
+
+
+def configuration_for(native_device, tmp_path, **overrides) -> RigConfiguration:
+    """A daemon wired to this device, with stores and a trace of its own."""
+    config_directory = tmp_path / "configs"
+    # `line_map` names a state-machine config's contents, not a rig config's --
+    # the rig config has no such field any more -- so it is taken out of the
+    # overrides and written to the store the daemon will load from.
+    write_state_machine_config(config_directory, line_map=overrides.pop("line_map", None))
     settings = {
         "device_target": native_device.target_url,
         "device_timeout_seconds": 5.0,
         "graph_store_directory": tmp_path / "graphs",
+        "state_machine_config_directory": config_directory,
         "trace_directory": tmp_path / "trace",
         "heartbeat_seconds": 0.5,
-        "line_map": {
-            "input_lines": [
-                {"name": "start_switch", "line_index": 0},
-                {"name": "lever", "line_index": 4},
-            ],
-            "output_lines": [
-                {"name": "ready_lamp", "line_index": 0},
-                {"name": "reward_valve", "line_index": 3, "safe_level_is_high": True},
-            ],
-        },
+        "startup_state_machine_config": "bench",
     }
     settings.update(overrides)
-    return DaemonConfiguration(**settings)
+    return RigConfiguration(**settings)
 
 
 @pytest.fixture
@@ -534,10 +558,202 @@ def test_the_trace_stream_sends_every_entry(api):
 # ---------------------------------------------------------------- config ---
 
 
-def test_the_configuration_is_readable_and_the_line_map_is_in_it(api):
+def test_the_rig_config_says_what_the_box_is_and_not_how_it_is_wired(api):
+    """The split, over HTTP. `/api/config` is the box; the lines are not in it.
+
+    A line map here would be a line map in `/etc/braemons`, which is a conffile
+    the daemon would then have to write -- and a conffile the daemon writes is
+    one that fights dpkg on every upgrade.
+    """
     configuration = api.get("/api/config").json()
     assert configuration["graph_mode"] == "set"
-    assert [line["name"] for line in configuration["line_map"]["input_lines"]] == [
+    assert "line_map" not in configuration
+    assert configuration["startup_state_machine_config"] == "bench"
+
+
+def test_the_loaded_state_machine_config_is_what_names_the_lines(api):
+    session = api.get("/api/session").json()
+    assert session["state_machine_config"]["name"] == "bench"
+    assert session["state_machine_config"]["is_still_in_the_store"] is True
+    # Loaded is not open: the map is pushed, the graphs are not up, and nothing
+    # will run until somebody says so.
+    assert session["is_open"] is False
+    assert [line["name"] for line in api.get("/api/device/lines").json()["input_lines"]] == [
         "start_switch",
         "lever",
     ]
+
+
+# ------------------------------------------------ the state-machine configs ---
+#
+# The half of the configuration a person owns: the line map and the graphs, in
+# one self-contained file under /var/lib. These tests are against a real device
+# because the interesting part is the boundary -- a config is only accepted once
+# its map has been resolved against a board that answered `pins`.
+
+
+def test_a_config_is_saved_without_touching_the_rig(api):
+    """Saving is not loading. A UI that could only save by also arming the rig
+    is a UI nobody edits during a session."""
+    body = {
+        "name": "second",
+        "description": "another rig's wiring",
+        "line_map": {
+            "input_lines": [{"name": "paw", "pin_label": "sim2"}],
+            "output_lines": [{"name": "tone", "pin_label": "sim7"}],
+        },
+        "graphs": [timed_graph("blink", 5)],
+    }
+    saved = api.put("/api/state-machine-configs/second", json=body)
+    assert saved.status_code == 200
+    assert saved.json()["is_the_loaded_config"] is False
+
+    listed = api.get("/api/state-machine-configs").json()
+    assert listed["loaded"] == "bench"
+    assert {config["name"] for config in listed["configs"]} == {"bench", "second"}
+    # The rig is still wired the way it was: the save reached the disk, and
+    # nothing else.
+    assert [line["name"] for line in api.get("/api/device/lines").json()["input_lines"]] == [
+        "start_switch",
+        "lever",
+    ]
+
+
+def test_loading_a_config_renames_the_lines_and_pushes_the_wiring(api):
+    api.put(
+        "/api/state-machine-configs/second",
+        json={
+            "name": "second",
+            "line_map": {
+                "input_lines": [{"name": "paw", "pin_label": "sim2"}],
+                "output_lines": [{"name": "tone", "pin_label": "sim7"}],
+            },
+            "graphs": [],
+        },
+    )
+    loaded = api.post("/api/state-machine-configs/second/load")
+    assert loaded.status_code == 200
+    assert loaded.json()["wiring_pushed"] is True
+
+    lines = api.get("/api/device/lines").json()
+    assert [line["name"] for line in lines["input_lines"]] == ["paw"]
+    # Resolved from the pin by asking the board, which is the whole point of a
+    # config naming pins: sim2 is line 2 because this device said so.
+    assert [line["line_index"] for line in lines["input_lines"]] == [2]
+    assert api.get("/api/session").json()["state_machine_config"]["name"] == "second"
+
+
+def test_a_config_naming_a_pin_this_board_does_not_have_is_refused_at_load(api):
+    """The case a self-contained config makes possible: one written for another
+    rig, carried here, naming a hole this board does not have."""
+    api.put(
+        "/api/state-machine-configs/elsewhere",
+        json={
+            "name": "elsewhere",
+            "board": "uno_r4_minima",
+            "line_map": {"input_lines": [{"name": "lever", "pin_label": "D6"}], "output_lines": []},
+            "graphs": [],
+        },
+    )
+    refused = api.post("/api/state-machine-configs/elsewhere/load")
+    assert refused.status_code == 422
+    assert refused.json()["detail"]["error"] == "state_machine_config_does_not_match_the_board"
+    assert "D6" in refused.json()["detail"]["detail"]
+    # Still running what it had, which is the difference between a refusal and
+    # a rig that has been half-reconfigured.
+    assert api.get("/api/session").json()["state_machine_config"]["name"] == "bench"
+    assert [line["name"] for line in api.get("/api/device/lines").json()["input_lines"]] == [
+        "start_switch",
+        "lever",
+    ]
+
+
+def test_a_line_map_edit_reaches_the_board_but_not_the_disk(api):
+    """Where an edit in the Lines panel lands, and where it does not.
+
+    It has to reach the board to be checked against the wire at all -- that is
+    what the live dots are for -- and it must not reach the disk on every
+    keystroke, or `revert` would mean nothing.
+    """
+    edited = api.patch(
+        "/api/device/lines",
+        json={
+            "input_lines": [{"name": "left_lever", "line_index": 0, "debounce_milliseconds": 12}],
+            "output_lines": [{"name": "ready_lamp", "line_index": 0}],
+        },
+    )
+    assert edited.status_code == 200
+    assert edited.json()["pushed_to_device"] is True
+    assert edited.json()["saved_to_the_store"] is False
+    assert edited.json()["state_machine_config"] == "bench"
+
+    # In the loaded config, in memory...
+    assert [line["name"] for line in api.get("/api/device/lines").json()["input_lines"]] == [
+        "left_lever"
+    ]
+    # ...and not in the stored one, until somebody saves it.
+    stored = api.get("/api/state-machine-configs/bench").json()
+    assert [line["name"] for line in stored["line_map"]["input_lines"]] == [
+        "start_switch",
+        "lever",
+    ]
+
+
+# ------------------------------------------------------------- the session ---
+
+
+def test_a_session_opens_from_the_loaded_config_and_closes(api):
+    """What triald does at the top of a session, and what the bench button does.
+
+    The same call, which is the point: a bench that exercised a different path
+    would be a bench that proves nothing about the rig.
+    """
+    api.put(
+        "/api/state-machine-configs/loaded",
+        json={
+            "name": "loaded",
+            "line_map": BENCH_LINE_MAP,
+            "graphs": [timed_graph("quick", 5)],
+        },
+    )
+    api.post("/api/state-machine-configs/loaded/load")
+
+    opened = api.post("/api/session/open")
+    assert opened.status_code == 200
+    assert opened.json()["slots"] == {"quick": 0}
+
+    session = api.get("/api/session").json()
+    assert session["is_open"] is True
+    assert session["committed_set"]["graph_names"] == ["quick"]
+
+    # A trial runs without triald: the graphs are up, so it names one and goes.
+    api.post("/api/trial/configure", json={"trial_id": 1, "graph": "quick"})
+    api.post("/api/trial/start", json={"trial_id": 1})
+    result = wait_until(
+        lambda: api.get("/api/trial/result").json()
+        if api.get("/api/trial/result").status_code == 200
+        else None
+    )
+    assert result is not None
+    assert result["trial_id"] == 1
+
+    closed = api.post("/api/session/close").json()
+    assert closed["was_open"] is True
+    after = api.get("/api/session").json()
+    assert after["is_open"] is False
+    # The board still holds its set, which is what makes a reconnect cheap.
+    assert after["committed_set"]["graph_names"] == ["quick"]
+
+
+def test_opening_a_session_with_no_config_loaded_is_refused_by_name(native_device, tmp_path):
+    configuration = configuration_for(
+        native_device, tmp_path, startup_state_machine_config=""
+    )
+    with TestClient(create_application(configuration)) as api:
+        assert api.get("/api/session").json()["state_machine_config"] is None
+        refused = api.post("/api/session/open")
+        assert refused.status_code == 409
+        assert refused.json()["detail"]["error"] == "no_state_machine_config_loaded"
+        # And it says what there is to load, because "nothing is loaded" without
+        # "here is what you have" is a dead end at two in the morning.
+        assert "bench" in refused.json()["detail"]["detail"]

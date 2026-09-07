@@ -225,7 +225,7 @@ daemon does.
 | `PUT /api/graphs/{name}` | write one. Validated on the way in, so the store never holds a graph that could not be run |
 | `DELETE /api/graphs/{name}` | remove one. Refused with `409` if it is in the committed set |
 
-The store is `/var/lib/statemachined/graphs/`, one JSON file per graph, and that
+The store is `/var/lib/braemons/statemachined/graphs/`, one JSON file per graph, and that
 is deliberate: it is greppable, it is diffable, and a rig at 2 a.m. with no
 network can be fixed with an editor.
 
@@ -461,14 +461,60 @@ record; this is finer grained, one line per state visit, and it **joins to the
 
 ## 8. Configuration
 
+Two configurations, in two places, and which is which is decided by one
+question: **may the daemon write it?**
+
+| | the rig config | a state-machine config |
+|---|---|---|
+| what it says | what the box is | what the box is doing today |
+| where | `/etc/braemons/statemachined-rig-config.toml` | `/var/lib/braemons/statemachined/configs/*.config.json` |
+| holds | device target, expected board, triald URL, directories, timeouts | the line map, and the graphs |
+| edited by | a person with an editor | the web UI |
+| written by the daemon | **never** | on save |
+| API | `/api/config` | `/api/state-machine-configs` |
+
+The split is the one vstimd makes between its rig-config and its scene-configs,
+and the reason is mechanical: a conffile a daemon rewrites is a file that fights
+the package manager on every upgrade, and the line map is exactly the thing
+somebody adjusts at the bench on a Tuesday.
+
 ### `GET·PATCH /api/config`
 
-The device target URL, the triald base URL, the seed policy, the line map,
-whether to arm automatically on connect, `graph_mode` (DAEMON.md §3.2) and
-`trace_ring`. Backed by `/etc/braemons/statemachined.toml`.
+The device target URL, the expected board, the triald base URL, the seed policy,
+whether to connect on startup, which state-machine config to load at startup,
+`graph_mode` (DAEMON.md §3.2) and `trace_ring`. **No line map**: that is a
+state-machine config.
 
-A `PATCH` that changes the device target reconnects; one that changes the line
-map pushes the wiring. Both are refused while a trial is armed.
+A `PATCH` that changes the device target or the expected board reconnects, and
+is refused while a trial is armed. It changes the running daemon and **not the
+file** — the reply says `until_restart` — because `/etc/braemons` is a conffile
+this daemon does not write.
+
+### `GET /api/state-machine-configs`
+
+Every saved config, as summaries — name, description, board, graph names, line
+counts — plus `loaded`, the name of the one this rig is running. A config that
+will not parse is listed with the reason rather than omitted: a file you cannot
+see is a file you cannot fix.
+
+### `GET·PUT·DELETE /api/state-machine-configs/{name}`
+
+Read, save and remove one. A `PUT` writes a file and **touches no hardware**;
+the name in the path and the name in the body must agree. Deleting the loaded
+config is allowed and does not stop the rig — deleting a file is not a request
+to stop an experiment — and `GET /api/session` then reports
+`is_still_in_the_store: false`.
+
+### `POST /api/state-machine-configs/{name}/load`
+
+Make one the rig's: resolve its line map against the board, and push the wiring.
+Refused `422 state_machine_config_does_not_match_the_board` if this board does
+not have those pins — **before anything is kept**, so the rig carries on with
+the map it had. Refused `409 busy` while a trial is armed or running.
+
+The graphs are *not* uploaded here. Loading says what this rig is; opening a
+session is what puts it on the device, and keeping them apart is what lets
+somebody load a config to look at it without disturbing a board.
 
 ---
 

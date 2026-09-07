@@ -117,9 +117,14 @@ The API is [`dev/API.md`](../dev/API.md), the generated schema is at
 bench instrument; `serve` is the daemon, and the difference is that a bench
 command borrows a board somebody is holding while a daemon takes it.
 
-Configuration is `/etc/braemons/statemachined.toml` (`--config` to point
-elsewhere, and its absence means the built-in defaults, which is what a bench
-run wants).
+Configuration is in two files, and which is which is decided by whether the
+daemon may write it. The **rig config** is
+`/etc/braemons/statemachined-rig-config.toml` (`--config` to point elsewhere,
+and its absence means the built-in defaults, which is what a bench run wants):
+the device, the expected board, the directories, where triald is. Hand-edited,
+and never written back. A **state-machine config** is the line map and the
+graphs, one file per config under `/var/lib/braemons/statemachined/configs/`,
+saved and loaded from the web UI. See `dev/API.md` §8.
 
 ## Tests that need no board
 

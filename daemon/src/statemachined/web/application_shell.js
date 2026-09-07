@@ -48,6 +48,15 @@ const VIEWS = [
       "Authored against line names, so a graph outlives the box it was written on.",
   },
   {
+    id: "configs",
+    label: "Configs",
+    tag: "statemachined-configs",
+    description:
+      "What this rig is wired like and what it can run, saved as files you can load, keep " +
+      "and hand to somebody else. Loading one names the lines and pushes the wiring; " +
+      "opening a session puts its graphs on the board.",
+  },
+  {
     id: "session",
     label: "Session",
     tag: "statemachined-session",

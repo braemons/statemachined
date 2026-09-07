@@ -36,6 +36,15 @@
 // are on D7. So a taken pin is offered, marked with what has it, and the panel
 // refuses to save until it is resolved. Loud and reversible beats forbidden.
 //
+// **Where a save lands.** On the board, immediately, and in the loaded
+// state-machine config *in memory* -- not on disk. That is deliberate on both
+// halves: a wiring change has to reach the board at once or the live dots
+// cannot check it against the wire, and an edit that reached the disk on every
+// save would make `revert` a lie and would rewrite a file somebody may be
+// running a session from. The Configs panel is where a map becomes permanent,
+// under whatever name the person chooses, which is also how a rig's wiring is
+// saved as a *new* config rather than over the one it came from.
+//
 // `is_high_now` keeps updating while you edit, and that is the point of the
 // panel: there is no read-back path from a pin, so watching a lamp move when
 // somebody presses a lever is the only way to confirm a graph's line numbers
@@ -105,7 +114,9 @@ export class LineMapPanelElement extends BasePanelElement {
             "the signal before the graph sees it. Names are this daemon's alone and never " +
             "reach the board, so renaming is free; everything else is pushed to the board on " +
             "save. The dot beside each line is its level right now -- pressing the thing you " +
-            "wired and watching the dot is the only way to confirm a wire from outside.",
+            "wired and watching the dot is the only way to confirm a wire from outside. " +
+            "Saving here reaches the board and the loaded config in memory, not the disk: " +
+            "keep it past a restart with \u201csave what is running\u201d in Configs.",
         }),
         this.failureSlot,
         this.body,

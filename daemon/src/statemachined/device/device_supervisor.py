@@ -41,6 +41,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from ..board_pin_labels import PIN_MAPS
 from ..graph_set_compiler import (
     CompiledGraphSet,
     DeviceCapabilities,
@@ -49,14 +50,21 @@ from ..graph_set_compiler import (
 from ..model.graph_definition import GraphDefinition
 from ..model.line_map import LineMap
 from ..model.trial_outcome import TrialCancelReason, TrialOutcome
-from ..model.trial_record import StateVisitRecord, TrialResultRecord, decode_state_visit_row
-from ..board_pin_labels import PIN_MAPS
+from ..model.trial_record import (
+    StateVisitRecord,
+    TrialResultRecord,
+    decode_state_visit_row,
+)
 from .device_clock_correlation import DeviceClockCorrelation, HostTimeEstimate
 from .device_pin_map import DevicePinMap
 from .graph_set_upload import send_compiled_upload_messages
 from .message_framing import DeviceRefusedTheCommand
 from .message_vocabulary import Field, MsgType
-from .request_response_session import PROTOCOL_VERSION, RequestResponseSession, random_seed
+from .request_response_session import (
+    PROTOCOL_VERSION,
+    RequestResponseSession,
+    random_seed,
+)
 from .serial_link import DEFAULT_BAUD, DEFAULT_TARGET, DEFAULT_TIMEOUT, SerialLink
 from .trial_result_reassembly import (
     ReassembledTrialResult,
@@ -102,6 +110,7 @@ class DeviceSupervisor:
         baud: int = DEFAULT_BAUD,
         timeout: float = DEFAULT_TIMEOUT,
         session_seed: str | None = None,
+        expected_board: str = "",
         on_state_visit: Callable[[ObservedStateVisit], None] | None = None,
         on_unsolicited_message: Callable[[dict], None] | None = None,
         on_trial_result: Callable[[TrialResultRecord], None] | None = None,
@@ -109,6 +118,10 @@ class DeviceSupervisor:
     ):
         self.target = target
         self.line_map = line_map if line_map is not None else LineMap()
+
+        #: What board this rig is supposed to have, or "" for "do not check".
+        #: See `_refuse_a_board_this_rig_is_not_wired_for`.
+        self.expected_board = expected_board
         self.baud = baud
         self.timeout = timeout
 
@@ -199,6 +212,14 @@ class DeviceSupervisor:
         self.armed_trial_id = None
         self.armed_graph_name = None
 
+        # Before the pin map, because the pin map is the thing that would
+        # otherwise make the wrong board look right.
+        try:
+            self._refuse_a_board_this_rig_is_not_wired_for(hello_ack)
+        except ValueError:
+            self.disconnect()
+            raise
+
         # Before the wiring, because the wiring is a set of masks over line
         # numbers and this is what says which number is which pin. A line map
         # that does not match the board is refused here -- with the link closed
@@ -213,6 +234,33 @@ class DeviceSupervisor:
 
         self.push_wiring()
         return hello_ack
+
+    def _refuse_a_board_this_rig_is_not_wired_for(self, hello_ack: dict) -> None:
+        """Stop here if this is not the board the rig config names.
+
+        A line map is checked against the pins the board reports, which catches
+        a pin that does not exist -- and misses the case that matters most,
+        because pin *names* repeat across boards. A Teensy 4.1 has an `A0` and
+        so does an R4 Minima, they are not the same hole, and a map written for
+        one resolves perfectly against the other. Nothing downstream would
+        notice: the indices are valid, the wiring pushes, the graphs upload, and
+        the first sign is an animal being rewarded by a lamp.
+
+        So the rig config says which board it is wired for and this refuses
+        anything else. Empty means the check is off, which is what a bench
+        wants when it swaps a board for the native device on a socket.
+        """
+        if not self.expected_board:
+            return
+        board = str(hello_ack.get("board") or "")
+        if board == self.expected_board:
+            return
+        raise ValueError(
+            f"this rig is configured for a {self.expected_board!r} board and the device on "
+            f"{self.target} says it is a {board or '(unnamed)'!r}. Its pin names may look "
+            f"right and mean different holes, so nothing is pushed to it. Change "
+            f"expected_board in the rig config, or plug in the board this rig is wired for"
+        )
 
     def disconnect(self) -> None:
         if self._link is not None:

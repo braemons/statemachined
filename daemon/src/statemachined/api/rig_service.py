@@ -25,14 +25,16 @@ from __future__ import annotations
 import threading
 import time
 
-from ..daemon_configuration import DaemonConfiguration
 from ..device.device_line_monitor import DeviceLineMonitor
 from ..device.device_supervisor import DeviceSupervisor, ObservedStateVisit
 from ..device.state_visit_trace import (
+    KIND_CONFIG_LOADED,
     KIND_GRAPH_SET_UPLOADED,
     KIND_LINK_CONNECTED,
     KIND_LINK_LOST,
     KIND_SEQUENCE_GAP,
+    KIND_SESSION_CLOSED,
+    KIND_SESSION_OPENED,
     KIND_STATE_VISIT,
     KIND_TRIAL_CANCELLED,
     KIND_TRIAL_CONFIGURED,
@@ -42,16 +44,46 @@ from ..device.state_visit_trace import (
 )
 from ..graph_set_compiler import CompiledGraphSet
 from ..graph_store import GraphStore
+from ..model.graph_definition import GraphDefinition
+from ..model.line_map import LineMap
+from ..model.state_machine_config import StateMachineConfig
 from ..model.trial_record import TrialResultRecord
+from ..rig_configuration import RigConfiguration
+from ..state_machine_config_store import StateMachineConfigStore
 from ..triald_client import TrialdClient
 
 
-class RigService:
-    """One rig: one device, one store, one trace."""
+class NoConfigLoaded(RuntimeError):
+    """A session was asked for and nothing says what this rig is wired like."""
 
-    def __init__(self, configuration: DaemonConfiguration):
+
+class RigService:
+    """One rig: one device, one store, one trace, and the config it is running.
+
+    **Two configurations, and the difference is which of them this object may
+    write.** `self.configuration` is the rig config -- the box, from
+    `/etc/braemons/statemachined-rig-config.toml` -- and nothing here ever
+    writes it back. `self.state_machine_config` is the line map and the graphs,
+    loaded from the store below, edited from the web UI and saved back to
+    `/var/lib/braemons/statemachined/configs/`.
+    """
+
+    def __init__(self, configuration: RigConfiguration):
         self.configuration = configuration
         self.graph_store = GraphStore(configuration.graph_store_directory)
+        self.state_machine_config_store = StateMachineConfigStore(
+            configuration.state_machine_config_directory
+        )
+        #: What this rig is wired like and what it can run, or None before
+        #: anybody has said. None is a real state and not a half-initialised
+        #: one: a daemon whose board is plugged in but whose experiment nobody
+        #: has chosen yet is exactly a rig on a bench in the morning.
+        self.state_machine_config: StateMachineConfig | None = None
+        #: When the graphs went up, as the session's own record of itself.
+        #: None means no session is open -- the board may still hold a
+        #: committed set from before, which `GET /api/session` says plainly
+        #: rather than pretending either way.
+        self.session_opened_at: float | None = None
         self.trace = StateVisitTrace(
             configuration.trace_ring_entries, configuration.trace_directory
         )
@@ -64,10 +96,15 @@ class RigService:
 
         self.supervisor = DeviceSupervisor(
             configuration.device_target,
-            configuration.line_map,
+            # Empty until a state-machine config is loaded. A rig with no
+            # config has no line map, and inventing one -- eight lines called
+            # `input_0` -- would be a guess at the one thing that cannot be
+            # guessed: which pin the lever is on.
+            LineMap(),
             baud=configuration.device_baud,
             timeout=configuration.device_timeout_seconds,
             session_seed=configuration.session_seed or None,
+            expected_board=configuration.expected_board,
             on_state_visit=self._record_state_visit,
             on_trial_result=self._record_trial_result,
             on_line_observed=self.line_monitor.record,
@@ -89,7 +126,13 @@ class RigService:
     # ------------------------------------------------------- the lifecycle ---
 
     def start(self) -> None:
-        """Connect if configured to, and start reading the link."""
+        """Load the configured config, connect if told to, read the link.
+
+        The config first, so the line map exists before the greeting: the
+        wiring is pushed as part of connecting, and a board greeted with no map
+        is a board holding every line at a default `safe` nobody chose.
+        """
+        self._load_the_startup_config()
         if self.configuration.connect_on_startup:
             try:
                 self.connect()
@@ -103,6 +146,24 @@ class RigService:
             target=self._read_the_link_forever, name="statemachined-link", daemon=True
         )
         self._background_thread.start()
+
+    def _load_the_startup_config(self) -> None:
+        """The config named in the rig config, if there is one and it loads.
+
+        Never fatal, for the same reason a missing board is not: a daemon that
+        refused to start because a config was deleted would take the API down
+        with it -- and the API is how somebody finds out that the config was
+        deleted.
+        """
+        config_name = self.configuration.startup_state_machine_config
+        if not config_name:
+            return
+        try:
+            self.load_state_machine_config(config_name)
+        except Exception as exc:  # noqa: BLE001 -- reported, not fatal
+            self.last_error_from_the_device = (
+                f"the startup state-machine config {config_name!r} did not load: {exc}"
+            )
 
     def stop(self) -> None:
         self._stop_background.set()
@@ -231,15 +292,139 @@ class RigService:
                 KIND_SEQUENCE_GAP, trial_id=result.trial_id, detail=f"triald: {exc}"
             )
 
+    # --------------------------------------------- the state-machine config ---
+
+    def load_state_machine_config(self, config_name: str) -> StateMachineConfig:
+        """Read one from the store and make it this rig's.
+
+        Reading and applying are one call because a half-applied config is the
+        state nobody can reason about: a line map from Tuesday and graphs from
+        Thursday, compiled against each other, with the names lining up by luck.
+        """
+        return self.apply_state_machine_config(
+            self.state_machine_config_store.load(config_name)
+        )
+
+    def apply_state_machine_config(self, config: StateMachineConfig) -> StateMachineConfig:
+        """Make this config the rig's, and push the wiring it implies.
+
+        Resolved against the board **before** anything is kept, so a config
+        naming a pin this board does not have is refused with the rig still
+        running on the one it had (`model/line_map.py`). That is also where a
+        config written for another board is caught, which is the case worth
+        catching: a config is self-contained and therefore portable, and the one
+        thing in it that is not portable is the map.
+
+        The graphs are *not* uploaded here. Loading says what this rig is and
+        can run; `open_session` is what puts it on the device, and keeping them
+        apart is what lets somebody load a config to look at it without
+        disturbing a board mid-experiment.
+        """
+        if self.supervisor.is_connected:
+            resolved = config.line_map.resolved_against(self.supervisor.pin_map)
+            self.supervisor.line_map = config.line_map
+            self.supervisor.resolved_line_map = resolved
+            with self.device_lock:
+                self.supervisor.push_wiring()
+        else:
+            self.supervisor.line_map = config.line_map
+            self.supervisor.resolved_line_map = config.line_map
+
+        self.state_machine_config = config
+        self.trace.append(
+            KIND_CONFIG_LOADED,
+            state_machine_config=config.name,
+            board=config.board or None,
+            graph_names=[graph.name for graph in config.graphs],
+            wiring_pushed=self.supervisor.is_connected,
+        )
+        return config
+
+    def save_state_machine_config(self, config: StateMachineConfig) -> StateMachineConfig:
+        """Write one to the store. Does not load it.
+
+        Saving and loading are separate for the same reason reading and
+        applying are one: "write this down" and "run this now" are different
+        intentions, and a UI that could only save by also arming the rig would
+        be a UI nobody edits during a session.
+        """
+        self.state_machine_config_store.save(config)
+        return config
+
+    def require_state_machine_config(self) -> StateMachineConfig:
+        if self.state_machine_config is None:
+            known = ", ".join(self.state_machine_config_store.stored_config_names()) or "(none)"
+            raise NoConfigLoaded(
+                f"this rig has no state-machine config loaded, so nothing says which pin is "
+                f"which line or what it can run. Load one: {known}"
+            )
+        return self.state_machine_config
+
+    # ---------------------------------------------------------- the session ---
+
+    def open_session(self) -> tuple[CompiledGraphSet, int]:
+        """Put the loaded config's graphs on the device. dev/DAEMON.md §3.2.
+
+        This is what triald does at the top of a session and what the web UI's
+        button does on a bench -- the same call, because a bench that exercised
+        a different path would be a bench that proves nothing about the rig.
+        """
+        config = self.require_state_machine_config()
+        compiled, elapsed_milliseconds = self._upload(config.graphs)
+        self.session_opened_at = time.time()
+        self.trace.append(
+            KIND_SESSION_OPENED,
+            state_machine_config=config.name,
+            set_version=compiled.set_version,
+            graph_names=[graph.name for graph in compiled.graphs_by_slot],
+        )
+        return compiled, elapsed_milliseconds
+
+    def close_session(self) -> dict:
+        """Say the session is over, and leave the device holding its set.
+
+        **What this does not do is unload the board**, and that is deliberate.
+        The committed set surviving is what makes a reconnect cheap (§3.2) and
+        what lets a session resume after a daemon restart. Closing is the
+        daemon's own bookkeeping plus one safety act: a trial still armed is
+        cancelled, because an armed trial with nobody driving it is a rig that
+        will run one more trial at whatever time somebody next touches a lever.
+        """
+        cancelled_trial_id = self.supervisor.armed_trial_id
+        if cancelled_trial_id is not None and self.supervisor.is_connected:
+            try:
+                self.cancel_trial(cancelled_trial_id)
+            except Exception as exc:  # noqa: BLE001 -- reported, never fatal
+                self.last_error_from_the_device = str(exc)
+        was_open = self.session_opened_at is not None
+        self.session_opened_at = None
+        self.trace.append(
+            KIND_SESSION_CLOSED,
+            state_machine_config=(
+                self.state_machine_config.name if self.state_machine_config else None
+            ),
+            cancelled_trial_id=cancelled_trial_id,
+            was_open=was_open,
+        )
+        return {"was_open": was_open, "cancelled_trial_id": cancelled_trial_id}
+
     # ----------------------------------------------------------- the graphs ---
 
     def upload_session_graph_set(self, graph_names: list[str]) -> tuple[CompiledGraphSet, int]:
         """Compile, check against this board's caps, upload, commit.
 
+        Graphs **from the store, by name**, which is the older half of this API
+        and the one triald has always used. `open_session` is the other half:
+        the same upload, over the graphs a state-machine config carries.
+        """
+        return self._upload(self.graph_store.load_all(graph_names))
+
+    def _upload(self, graphs: list[GraphDefinition]) -> tuple[CompiledGraphSet, int]:
+        """Compile, check against this board's caps, upload, commit.
+
         Returns the compiled set and what it cost in milliseconds -- the slowest
         call in the API, and the one a UI shows a progress bar for.
         """
-        graphs = self.graph_store.load_all(graph_names)
         started = time.monotonic()
         with self.device_lock:
             set_version = self._next_set_version()

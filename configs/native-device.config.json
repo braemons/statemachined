@@ -1,0 +1,339 @@
+{
+  "name": "native-device",
+  "description": "The same rig, on the native device's pins. `make bench-device` builds the firmware's own engine for this machine and puts it on a socket; it has no pins and says so, so a config naming D2 is refused against it. This one names sim0..sim7.",
+  "board": "native",
+  "line_map": {
+    "input_lines": [
+      {
+        "name": "start_switch",
+        "pin_label": "sim0",
+        "debounce_milliseconds": 20
+      },
+      {
+        "name": "abort",
+        "pin_label": "sim1",
+        "debounce_milliseconds": 20
+      },
+      {
+        "name": "lever_left",
+        "pin_label": "sim4",
+        "debounce_milliseconds": 5
+      },
+      {
+        "name": "lever_right",
+        "pin_label": "sim5",
+        "debounce_milliseconds": 5
+      },
+      {
+        "name": "lever",
+        "pin_label": "sim6",
+        "debounce_milliseconds": 5
+      }
+    ],
+    "output_lines": [
+      {
+        "name": "ready_lamp",
+        "pin_label": "sim0"
+      },
+      {
+        "name": "cue_lamp",
+        "pin_label": "sim1"
+      },
+      {
+        "name": "error_lamp",
+        "pin_label": "sim2"
+      },
+      {
+        "name": "reward_valve",
+        "pin_label": "sim3",
+        "safe_level_is_high": true
+      }
+    ]
+  },
+  "graphs": [
+    {
+      "name": "go-nogo",
+      "entry": "Ready",
+      "distributions": {
+        "foreperiod": {
+          "kind": "exponential",
+          "minimum_ms": 500,
+          "maximum_ms": 2500,
+          "mean_ms": 900
+        },
+        "response_window": {
+          "kind": "fixed",
+          "duration_ms": 1000
+        },
+        "outcome_lamp_hold": {
+          "kind": "fixed",
+          "duration_ms": 400
+        }
+      },
+      "states": [
+        {
+          "name": "Ready",
+          "on_entry": [
+            {
+              "line": "ready_lamp",
+              "kind": "high"
+            }
+          ],
+          "transitions": [
+            {
+              "when": {
+                "all": [
+                  "start_switch"
+                ],
+                "none": [
+                  "abort"
+                ]
+              },
+              "goto": "Foreperiod"
+            }
+          ]
+        },
+        {
+          "name": "Foreperiod",
+          "timeout": {
+            "after": "foreperiod",
+            "goto": "Cue"
+          },
+          "transitions": [
+            {
+              "when": {
+                "any": [
+                  "lever"
+                ]
+              },
+              "goto": "Early"
+            },
+            {
+              "when": {
+                "all": [
+                  "abort"
+                ]
+              },
+              "goto": "Aborted"
+            }
+          ]
+        },
+        {
+          "name": "Cue",
+          "on_entry": [
+            {
+              "line": "cue_lamp",
+              "kind": "high"
+            }
+          ],
+          "timeout": {
+            "after": "response_window",
+            "goto": "Late"
+          },
+          "transitions": [
+            {
+              "when": {
+                "all": [
+                  "lever"
+                ]
+              },
+              "goto": "Hit"
+            },
+            {
+              "when": {
+                "all": [
+                  "abort"
+                ]
+              },
+              "goto": "Aborted"
+            }
+          ]
+        },
+        {
+          "name": "Hit",
+          "outcome": "HIT",
+          "on_entry": [
+            {
+              "line": "reward_valve",
+              "kind": "pulse",
+              "pulse_ms": 40
+            },
+            {
+              "line": "ready_lamp",
+              "kind": "high"
+            }
+          ]
+        },
+        {
+          "name": "Early",
+          "outcome": "EARLY"
+        },
+        {
+          "name": "Late",
+          "outcome": "LATE"
+        },
+        {
+          "name": "Aborted",
+          "outcome": "CANCELLED"
+        }
+      ]
+    },
+    {
+      "name": "two-alternative-forced-choice",
+      "entry": "Ready",
+      "distributions": {
+        "foreperiod": {
+          "kind": "exponential",
+          "minimum_ms": 500,
+          "maximum_ms": 2500,
+          "mean_ms": 900
+        },
+        "hold_before_cue": {
+          "kind": "uniform",
+          "minimum_ms": 300,
+          "maximum_ms": 700
+        },
+        "response_window": {
+          "kind": "fixed",
+          "duration_ms": 1500
+        }
+      },
+      "states": [
+        {
+          "name": "Ready",
+          "on_entry": [
+            {
+              "line": "ready_lamp",
+              "kind": "high"
+            }
+          ],
+          "transitions": [
+            {
+              "when": {
+                "all": [
+                  "start_switch"
+                ],
+                "none": [
+                  "abort",
+                  "lever_left",
+                  "lever_right"
+                ]
+              },
+              "goto": "Foreperiod"
+            }
+          ]
+        },
+        {
+          "name": "Foreperiod",
+          "timeout": {
+            "after": "foreperiod",
+            "goto": "Cue"
+          },
+          "transitions": [
+            {
+              "when": {
+                "any": [
+                  "lever_left",
+                  "lever_right"
+                ]
+              },
+              "goto": "Early"
+            },
+            {
+              "when": {
+                "all": [
+                  "abort"
+                ]
+              },
+              "goto": "Aborted"
+            }
+          ]
+        },
+        {
+          "name": "Cue",
+          "on_entry": [
+            {
+              "line": "cue_lamp",
+              "kind": "high"
+            }
+          ],
+          "timeout": {
+            "after": "response_window",
+            "goto": "Late"
+          },
+          "transitions": [
+            {
+              "when": {
+                "all": [
+                  "lever_left"
+                ],
+                "none": [
+                  "lever_right"
+                ]
+              },
+              "hold": "hold_before_cue",
+              "goto": "ChoseLeft"
+            },
+            {
+              "when": {
+                "all": [
+                  "lever_right"
+                ],
+                "none": [
+                  "lever_left"
+                ]
+              },
+              "hold": "hold_before_cue",
+              "goto": "ChoseRight"
+            },
+            {
+              "when": {
+                "all": [
+                  "abort"
+                ]
+              },
+              "goto": "Aborted"
+            }
+          ]
+        },
+        {
+          "name": "ChoseLeft",
+          "outcome": "HIT",
+          "on_entry": [
+            {
+              "line": "reward_valve",
+              "kind": "pulse",
+              "pulse_ms": 40
+            },
+            {
+              "line": "ready_lamp",
+              "kind": "high"
+            }
+          ]
+        },
+        {
+          "name": "ChoseRight",
+          "outcome": "WRONG_RESPONSE",
+          "on_entry": [
+            {
+              "line": "error_lamp",
+              "kind": "high"
+            }
+          ]
+        },
+        {
+          "name": "Early",
+          "outcome": "EARLY"
+        },
+        {
+          "name": "Late",
+          "outcome": "LATE"
+        },
+        {
+          "name": "Aborted",
+          "outcome": "CANCELLED"
+        }
+      ]
+    }
+  ]
+}

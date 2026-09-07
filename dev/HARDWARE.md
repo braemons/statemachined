@@ -56,9 +56,9 @@ carries two separate words. Input line 3 is D5; output line 3 is A0. There is no
 line 3 in the sense of "one pin".
 
 **The line number is what a graph means — and the board is asked what the pin
-labels are, rather than told.** `line_index` in
-`/etc/braemons/statemachined.toml` is a bit position in those words and is the
-only part that reaches the device. `pin_label` beside it names the pin, and it
+labels are, rather than told.** `line_index` in a state-machine config
+(`/var/lib/braemons/statemachined/configs/`) is a bit position in those words
+and is the only part that reaches the device. `pin_label` beside it names the pin, and it
 used to be free text checked against nothing: writing `D9` next to input line 1
 did not move it — line 1 is D3 because `kInputPins[1]` is 3 — it only put a
 wrong label on the web UI for the next person.
@@ -72,6 +72,14 @@ table, out of the firmware that holds it, so:
   daemon connecting rather than being pushed;
 - a line naming a pin this board does not have — or naming an output's pin as an
   input — is refused, with the board's actual pins in the message.
+
+**The first of those three is the form to write, and it is what the files in
+this repository now use.** `graphs/uno-r4-minima-lines.json` and the bench
+conffile name a pin per line and no bit position at all. A `line_index` beside
+a pin is checked and adds nothing: it is the half of the pair that is written
+nowhere on the hardware, so nobody at the bench can confirm it — and it is the
+half that silently stops being true when this table is reordered. A map written
+in pins follows a reflash; one written in indices goes on naming the old holes.
 
 `make bringup ARGS="--hello pins"` prints exactly what the board answers.
 

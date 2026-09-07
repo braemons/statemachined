@@ -86,7 +86,7 @@ statemachined/
 │   ├── src/statemachined/
 │   │   ├── command_line_interface.py   `statemachined serve`, and the bench commands
 │   │   ├── board_pin_labels.py         pin labels per board, for what the CLI prints
-│   │   ├── daemon_configuration.py     /etc/braemons/statemachined.toml
+│   │   ├── rig_configuration.py        /etc/braemons/statemachined-rig-config.toml
 │   │   ├── device/                     everything that touches the wire
 │   │   │   ├── serial_link.py                pyserial transport   ← tools/bringup
 │   │   │   ├── message_framing.py            framing, CRC         ← tools/bringup
@@ -105,7 +105,8 @@ statemachined/
 │   │   │   ├── trial_record.py         a result and its path, read back into names
 │   │   │   └── trial_outcome.py        the eleven .tdr codes
 │   │   ├── graph_set_compiler.py       names → indices, and the caps check
-│   │   ├── graph_store.py              graphs on disk under /var/lib/statemachined
+│   │   ├── graph_store.py              graphs on disk under /var/lib/braemons/statemachined
+│   │   ├── state_machine_config_store.py  the line map + graphs, as saved files
 │   │   ├── triald_client.py            POST /api/trial/outcome
 │   │   ├── api/                        FastAPI routers — see §4
 │   │   ├── mdns_service_advertisement.py  NEW: _statemachined._tcp, and the stable id
@@ -236,7 +237,7 @@ not land cannot leave the device confidently running the old paradigm.
 
 > **And open question 1, "Where do graphs live in triald?"** — neither of the two
 > options offered. **They live in statemachined**, under
-> `/var/lib/statemachined/graphs/`, addressed by name. A triald `TrialType`
+> `/var/lib/braemons/statemachined/graphs/`, addressed by name. A triald `TrialType`
 > references one by name, the way sets are addressed by name. That keeps N trial
 > types from carrying N copies of a paradigm, and it puts the graph next to the
 > only process that can validate it against a real device's `caps`.
@@ -253,7 +254,7 @@ It is a **name**, not an index, and that too is triald's own conclusion about th
 field this replaces — `TrialType.time_sequence`, an integer today: *"edit
 sequence 3 and every trial type pointing at it silently changes meaning. Sets
 were cured by naming them; time sequences want the same cure."* A graph name is
-that cure, and the store in `/var/lib/statemachined/graphs/` is what it points
+that cure, and the store in `/var/lib/braemons/statemachined/graphs/` is what it points
 into.
 
 So three different things, and only the first is a real constraint:
@@ -832,7 +833,9 @@ record claiming a trial was cancelled when the animal had already responded.
 
 `GET·PATCH /api/config`: the device target URL, the triald base URL, the seed
 policy, the line map, whether to arm automatically on connect, `graph_mode`
-(§3.2) and `trace_ring` (§4.6). Backed by `/etc/braemons/statemachined.toml`.
+(§3.2) and `trace_ring` (§4.6). Backed by
+`/etc/braemons/statemachined-rig-config.toml` — the box, not the wiring. The
+line map and the graphs are a *state-machine config* under `/var/lib`; see §6.4.
 
 ### 4.5 The clock
 
@@ -871,7 +874,7 @@ Trace view's tail is the deque's right end.
 
 **Written as it arrives, not as it evicts.** The ring is volatile and a
 `systemctl restart` during a package upgrade must not silently cost the morning's
-traces, so each entry is also appended to `/var/lib/statemachined/trace/` as
+traces, so each entry is also appended to `/var/lib/braemons/statemachined/trace/` as
 NDJSON, one file per day, rotated by the logrotate config §6.2 already installs.
 The daemon **never reads it back**: it is the copy for the analysis that happens
 months later, not a second store with its own query path. Appending on arrival
@@ -1097,8 +1100,10 @@ inherits whatever this gets right.
 | | |
 |---|---|
 | `/opt/braemons/statemachined/` | the vendored interpreter and the package |
-| `/etc/braemons/statemachined.toml` | conffile: device target, triald URL, line map |
-| `/var/lib/statemachined/graphs/` | the graph store |
+| `/etc/braemons/statemachined-rig-config.toml` | conffile: the box — device target, expected board, triald URL, directories. Hand-edited, **never written by the daemon** |
+| `/var/lib/braemons/statemachined/configs/` | state-machine configs: the line map and the graphs, written by the web UI |
+| `/var/lib/braemons/statemachined/graphs/` | the graph store |
+| `/var/lib/braemons/statemachined/trace/` | the NDJSON tail of the trace |
 | `/var/log/statemachined/` | logs, rotated weekly |
 | `/usr/share/braemons/statemachined/firmware/` | the flashable images and `MANIFEST.txt` |
 

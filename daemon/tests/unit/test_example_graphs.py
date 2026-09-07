@@ -18,12 +18,18 @@ import json
 from pathlib import Path
 
 import pytest
-
-from statemachined.graph_set_compiler import DeviceCapabilities, compile_graph_set_for_device
+from statemachined.device.device_pin_map import DevicePinMap
+from statemachined.graph_set_compiler import (
+    DeviceCapabilities,
+    compile_graph_set_for_device,
+)
 from statemachined.model.graph_definition import GraphDefinition
 from statemachined.model.line_map import LineMap
+from statemachined.model.state_machine_config import StateMachineConfig
 
-EXAMPLE_GRAPH_DIRECTORY = Path(__file__).resolve().parents[3] / "graphs"
+REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
+EXAMPLE_GRAPH_DIRECTORY = REPOSITORY_ROOT / "graphs"
+EXAMPLE_CONFIG_DIRECTORY = REPOSITORY_ROOT / "configs"
 EXAMPLE_GRAPH_NAMES = ["go-nogo", "two-alternative-forced-choice"]
 
 #: The Uno R4 Minima rig image, as `hello_ack` declares it. Written out rather
@@ -43,9 +49,39 @@ UNO_R4_MINIMA_CAPABILITIES = DeviceCapabilities(
 )
 
 
+#: What the board answers to `pins` (dev/PROTOCOL.md §3.6), and the same table
+#: `pinMode()` is called over in firmware/hal/renesas_ra4m1.cpp. Written out
+#: here for the same reason the capacities above are: if the firmware's pinout
+#: moves, this is where an example authored against the old one should fail.
+UNO_R4_MINIMA_PINS = DevicePinMap(
+    input_pin_labels=["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"],
+    output_pin_labels=["D10", "D11", "D12", "A0", "A1", "A2", "A3", "A4"],
+    source="device",
+)
+
+
+def load_example_state_machine_config() -> StateMachineConfig:
+    """The shipped config: the reference rig's map, and both paradigms.
+
+    This is the file `make bench` seeds the store with and comes up loaded
+    with, so it is the one worth testing -- the graphs in `graphs/` are the
+    library it was assembled out of.
+    """
+    path = EXAMPLE_CONFIG_DIRECTORY / "uno-r4-minima-bench.config.json"
+    return StateMachineConfig.model_validate(json.loads(path.read_text()))
+
+
 def load_example_line_map() -> LineMap:
-    path = EXAMPLE_GRAPH_DIRECTORY / "uno-r4-minima-lines.json"
-    return LineMap.model_validate(json.loads(path.read_text()))
+    """The reference rig's map, numbered the way the daemon numbers it.
+
+    The config names pins and no line numbers at all, which is the form a rig
+    should be configured in -- so there is nothing to compile against until a
+    board has been asked. Resolving here is not test scaffolding around that:
+    it is the step `RigService.apply_state_machine_config` takes before it
+    pushes a single mask, and doing it makes these tests exercise the path a
+    session uses rather than a numbering no config carries any more.
+    """
+    return load_example_state_machine_config().line_map.resolved_against(UNO_R4_MINIMA_PINS)
 
 
 def load_example_graph(graph_name: str) -> GraphDefinition:
@@ -59,8 +95,41 @@ def test_an_example_graph_is_a_graph(graph_name: str):
     assert graph.name == graph_name
 
 
+def test_the_shipped_config_holds_the_graphs_it_names():
+    """A config is self-contained: the graphs are in it, not fetched by name.
+
+    Which is what makes one archivable beside a session's data and diffable
+    against the config that was running the week the numbers changed. The
+    copies in `graphs/` are the library it was assembled out of, and this
+    checks the assembly did not drift from it.
+    """
+    config = load_example_state_machine_config()
+    assert [graph.name for graph in config.graphs] == EXAMPLE_GRAPH_NAMES
+    for graph in config.graphs:
+        assert graph == load_example_graph(graph.name), (
+            f"{graph.name} in the config has drifted from graphs/{graph.name}.json"
+        )
+
+
+def test_the_example_line_map_says_pins_and_not_line_numbers():
+    """The map is written in what is silkscreened on the board.
+
+    A bit position is written nowhere on the hardware, and it is the half of
+    the pair that quietly stops being true when `kInputPins` is reordered. So
+    the file carries pins alone, and this is what stops a helpful edit putting
+    the numbers back.
+    """
+    as_written = load_example_state_machine_config().line_map
+    for definition in [*as_written.input_lines, *as_written.output_lines]:
+        assert definition.line_index is None, f"{definition.name} names a bit position"
+        assert definition.pin_label, f"{definition.name} names no pin"
+
+
 def test_the_example_line_map_is_a_line_map():
     line_map = load_example_line_map()
+    # Resolved from "D6" by asking the board, which is the whole point of the
+    # file naming a pin: 4 is a fact about firmware/hal/renesas_ra4m1.cpp, not
+    # something the config was in a position to assert.
     assert line_map.input_line_index_for_name("lever_left") == 4
     # The valve is held open by a low, so its safe level is high. It is the
     # concrete case the whole wiring move exists for: a board that came up

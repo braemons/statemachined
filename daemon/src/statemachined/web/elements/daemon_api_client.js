@@ -124,6 +124,42 @@ export class DaemonApiClient {
     return this.get("/api/state");
   }
 
+  // The state-machine configs: what this rig is wired like and what it can
+  // run, saved under /var/lib and owned by the person rather than the package.
+  // `/api/config` is the other half -- the box -- and this UI does not write it.
+
+  listStateMachineConfigs() {
+    return this.get("/api/state-machine-configs");
+  }
+
+  readStateMachineConfig(name) {
+    return this.get(`/api/state-machine-configs/${encodeURIComponent(name)}`);
+  }
+
+  writeStateMachineConfig(name, config) {
+    return this.put(`/api/state-machine-configs/${encodeURIComponent(name)}`, config);
+  }
+
+  deleteStateMachineConfig(name) {
+    return this.delete(`/api/state-machine-configs/${encodeURIComponent(name)}`);
+  }
+
+  loadStateMachineConfig(name) {
+    return this.post(`/api/state-machine-configs/${encodeURIComponent(name)}/load`);
+  }
+
+  readSession() {
+    return this.get("/api/session");
+  }
+
+  openSession() {
+    return this.post("/api/session/open");
+  }
+
+  closeSession() {
+    return this.post("/api/session/close");
+  }
+
   listStoredGraphs() {
     return this.get("/api/graphs");
   }

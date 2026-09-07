@@ -45,6 +45,15 @@ KIND_TRIAL_STARTED = "trial_started"
 KIND_TRIAL_CANCELLED = "trial_cancelled"
 KIND_TRIAL_RESULT = "trial_result"
 KIND_GRAPH_SET_UPLOADED = "graph_set_uploaded"
+#: A state-machine config was applied to this rig -- the line map changed, and
+#: with it what every graph's names mean. In the trace beside the trials because
+#: it is the same question a visit answers: what was this rig at that moment.
+KIND_CONFIG_LOADED = "state_machine_config_loaded"
+#: A session opened or closed. Not the device's business -- it holds a graph set
+#: and knows nothing about sessions -- but it is the boundary an analysis cuts
+#: on, and the trace is where the rig writes down what it did.
+KIND_SESSION_OPENED = "session_opened"
+KIND_SESSION_CLOSED = "session_closed"
 KIND_LINK_CONNECTED = "link_connected"
 KIND_LINK_LOST = "link_lost"
 KIND_SEQUENCE_GAP = "sequence_gap"

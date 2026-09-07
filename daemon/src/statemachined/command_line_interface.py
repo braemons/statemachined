@@ -355,10 +355,10 @@ def cmd_serve(args) -> int:
     import uvicorn
 
     from .api.application import create_application
-    from .daemon_configuration import DEFAULT_CONFIGURATION_PATH, DaemonConfiguration
+    from .rig_configuration import DEFAULT_CONFIGURATION_PATH, RigConfiguration
     from .mdns_service_advertisement import MdnsServiceAdvertisement
 
-    configuration = DaemonConfiguration.load_from_toml_file(
+    configuration = RigConfiguration.load_from_toml_file(
         Path(args.config) if args.config else DEFAULT_CONFIGURATION_PATH
     )
     # The command line wins over the file, so that a bench run can point at a

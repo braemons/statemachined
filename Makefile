@@ -96,19 +96,24 @@ integration-device:         ## build build/statemachined_native_device on its ow
 # a board on a cable, or `make bench-device` in another terminal and
 # TARGET=socket://127.0.0.1:5300. Greeting a board ends demo mode until reset.
 #
-# The store is seeded from graphs/ rather than pointed at it: deleting a graph
-# in the web UI must not delete an example from the repository.
-BENCH_CONFIG    ?= daemon/bench/statemachined_bench_configuration.toml
+# The stores are seeded from graphs/ and configs/ rather than pointed at them:
+# deleting a graph or a state-machine config in the web UI must not delete an
+# example from the repository. Copied only when absent, so an edit made on the
+# bench survives the next `make bench`.
+BENCH_CONFIG    ?= daemon/bench/statemachined_bench_rig_config.toml
 BENCH_STORE     := build/bench/graphs
+BENCH_CONFIGS   := build/bench/configs
 BENCH_HOST      ?= 127.0.0.1
 BENCH_PORT      ?= 8081
 
 .PHONY: bench
 bench:                      ## the daemon + web UI against a device: make bench TARGET=...
-	@mkdir -p $(BENCH_STORE) build/bench/trace
+	@mkdir -p $(BENCH_STORE) $(BENCH_CONFIGS) build/bench/trace
 	@for graph in graphs/*.json; do \
-	  case "$$graph" in *-lines.json) continue;; esac; \
 	  [ -f "$(BENCH_STORE)/$$(basename $$graph)" ] || cp "$$graph" $(BENCH_STORE)/; \
+	done
+	@for config in configs/*.config.json; do \
+	  [ -f "$(BENCH_CONFIGS)/$$(basename $$config)" ] || cp "$$config" $(BENCH_CONFIGS)/; \
 	done
 	uv run --project daemon statemachined -t $(TARGET) serve \
 	  --config $(BENCH_CONFIG) \

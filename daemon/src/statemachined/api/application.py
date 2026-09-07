@@ -14,15 +14,23 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from ..daemon_configuration import DaemonConfiguration
 from ..mdns_service_advertisement import MdnsServiceAdvertisement
-from . import configuration_routes, device_routes, graph_routes, state_and_trace_routes
-from . import trial_routes, web_user_interface_routes
+from ..rig_configuration import RigConfiguration
+from . import (
+    configuration_routes,
+    device_routes,
+    graph_routes,
+    session_routes,
+    state_and_trace_routes,
+    state_machine_config_routes,
+    trial_routes,
+    web_user_interface_routes,
+)
 from .rig_service import RigService
 
 
 def create_application(
-    configuration: DaemonConfiguration,
+    configuration: RigConfiguration,
     advertisement: MdnsServiceAdvertisement | None = None,
 ) -> FastAPI:
     """The whole surface: the API, the UI that uses only the API, and the record
@@ -73,6 +81,10 @@ def create_application(
     application.include_router(state_and_trace_routes.router)
     application.include_router(state_and_trace_routes.trace_router)
     application.include_router(configuration_routes.router)
+    # The two halves of the configuration, next to each other in the surface as
+    # they are on disk: the box, and what the box is doing today.
+    application.include_router(state_machine_config_routes.router)
+    application.include_router(session_routes.router)
     # Last, because its `/ui/{path}` and `/elements/{path}` are the only
     # catch-all routes in the app and a router that matched before them would be
     # shadowed. Nothing here is a private route: the UI uses only what is above.

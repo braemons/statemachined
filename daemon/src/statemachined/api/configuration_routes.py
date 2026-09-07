@@ -1,11 +1,20 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""Reading and changing what this rig differs by. dev/API.md §8."""
+"""Reading and changing what the box is. dev/API.md §8.
+
+The rig config only: the device, the directories, where triald is. **Not** the
+line map or the graphs -- those are a state-machine config
+(`state_machine_config_routes.py`), they live under `/var/lib`, and they are
+what the web UI writes. This file is backed by a package conffile in
+`/etc/braemons` that the daemon never writes back, so a change made here lasts
+until the daemon restarts and then the file wins. That is the honest behaviour
+for a conffile, and the UI says so rather than implying a change is permanent.
+"""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
-from ..daemon_configuration import DaemonConfiguration
+from ..rig_configuration import RigConfiguration
 from .http_errors import refusal
 from .rig_service import RigService
 
@@ -17,18 +26,20 @@ def service_of(request: Request) -> RigService:
 
 
 @router.get("")
-def read_configuration(request: Request) -> DaemonConfiguration:
+def read_configuration(request: Request) -> RigConfiguration:
     return service_of(request).configuration
 
 
 @router.patch("")
-def replace_configuration(request: Request, configuration: DaemonConfiguration) -> dict:
+def replace_configuration(request: Request, configuration: RigConfiguration) -> dict:
     """Change it, and do whatever the change implies.
 
-    Refused while a trial is armed or running. A target URL that changed means a
-    different device, a line map that changed means different wiring, and doing
-    either under a running trial would move something the trial is being
-    measured against.
+    Refused while a trial is armed or running: a target URL that changed means a
+    different device, and swapping the device under a running trial would move
+    the thing the trial is being measured against.
+
+    **Until the daemon restarts.** This does not write `/etc/braemons`, on
+    purpose -- see the note at the top of this file.
     """
     service = service_of(request)
     state_report = service.read_device_state()
@@ -36,30 +47,18 @@ def replace_configuration(request: Request, configuration: DaemonConfiguration) 
         raise refusal(409, "busy", "a trial is armed or running", "config")
 
     device_target_changed = configuration.device_target != service.configuration.device_target
-    line_map_changed = configuration.line_map != service.configuration.line_map
-
-    # As with PATCH /api/device/lines: a map that does not match the board is
-    # refused before it is kept, so the rig keeps running on the one it had.
-    if line_map_changed and service.supervisor.is_connected:
-        try:
-            resolved = configuration.line_map.resolved_against(service.supervisor.pin_map)
-        except ValueError as exc:
-            raise refusal(422, "line_map_does_not_match_the_board", str(exc), "line_map")
-        service.supervisor.resolved_line_map = resolved
+    expected_board_changed = configuration.expected_board != service.configuration.expected_board
 
     service.configuration = configuration
-    service.supervisor.line_map = configuration.line_map
     service.supervisor.target = configuration.device_target
+    service.supervisor.expected_board = configuration.expected_board
 
+    # A board that is no longer the expected one has to be found out about now
+    # rather than at the next reconnect, so a changed expectation re-greets the
+    # device and is refused there if it does not hold.
     reconnected = False
-    if device_target_changed and service.supervisor.is_connected:
+    if (device_target_changed or expected_board_changed) and service.supervisor.is_connected:
         service.connect()
         reconnected = True
-    elif line_map_changed and service.supervisor.is_connected:
-        with service.device_lock:
-            service.supervisor.push_wiring()
 
-    return {
-        "reconnected": reconnected,
-        "wiring_pushed": line_map_changed and not reconnected,
-    }
+    return {"reconnected": reconnected, "until_restart": True}
