@@ -28,10 +28,16 @@ import time
 from ..device.device_line_monitor import DeviceLineMonitor
 from ..device.device_supervisor import DeviceSupervisor, ObservedStateVisit
 from ..device.state_visit_trace import (
+    KIND_ACTIVE_GRAPH_SELECTED,
     KIND_CONFIG_LOADED,
     KIND_GRAPH_SET_UPLOADED,
     KIND_LINK_CONNECTED,
     KIND_LINK_LOST,
+    KIND_RECORDING_CLEARED,
+    KIND_RECORDING_PAUSED,
+    KIND_RECORDING_RESUMED,
+    KIND_RECORDING_STARTED,
+    KIND_RECORDING_STOPPED,
     KIND_SEQUENCE_GAP,
     KIND_SESSION_CLOSED,
     KIND_SESSION_OPENED,
@@ -42,6 +48,7 @@ from ..device.state_visit_trace import (
     KIND_TRIAL_STARTED,
     StateVisitTrace,
 )
+from ..event_recording import EventRecorder
 from ..graph_set_compiler import CompiledGraphSet
 from ..graph_store import GraphStore
 from ..model.graph_definition import GraphDefinition
@@ -55,6 +62,14 @@ from ..triald_client import TrialdClient
 
 class NoConfigLoaded(RuntimeError):
     """A session was asked for and nothing says what this rig is wired like."""
+
+
+class NoActiveGraph(RuntimeError):
+    """A trial named no graph and the rig has not been told which one to use."""
+
+
+class GraphNotInTheLoadedConfig(RuntimeError):
+    """A graph was selected that the loaded config does not carry."""
 
 
 class RigService:
@@ -87,6 +102,16 @@ class RigService:
         self.trace = StateVisitTrace(
             configuration.trace_ring_entries, configuration.trace_directory
         )
+        #: A named selection out of the trace, for a rig with no triald writing
+        #: a `.tdr`. A sink rather than a poller, so it cannot miss an entry the
+        #: ring evicted before anybody asked -- see `event_recording.py`.
+        self.recorder = EventRecorder(configuration.recording_directory)
+        self.trace.add_sink(self.recorder.record)
+        #: Which graph a trial gets when it does not name one. The web UI's
+        #: "run a trial" is the caller that needs this; triald names a graph per
+        #: trial and never touches it, which is why this is a default and not a
+        #: mode -- an explicit `graph` always wins.
+        self.active_graph_name: str | None = None
         self.triald = TrialdClient(configuration.triald_base_url)
         #: The wire itself, both directions, for as long as the ring holds it.
         #: Always on: a link fault that happens once an hour is not reproducible
@@ -377,6 +402,7 @@ class RigService:
             state_machine_config=config.name,
             set_version=compiled.set_version,
             graph_names=[graph.name for graph in compiled.graphs_by_slot],
+            opened_by="state_machine_config",
         )
         return compiled, elapsed_milliseconds
 
@@ -408,6 +434,103 @@ class RigService:
         )
         return {"was_open": was_open, "cancelled_trial_id": cancelled_trial_id}
 
+    # ------------------------------------------------------ the active graph ---
+
+    def select_active_graph(self, graph_name: str | None) -> str | None:
+        """Say which graph a trial gets when it does not name one.
+
+        A **default, not a mode**: an explicit `graph` on `POST
+        /api/trial/configure` always wins, so triald -- which names a graph per
+        trial and has no reason to know this exists -- is unaffected by whatever
+        somebody selected in a browser tab.
+
+        Checked against the loaded config, and against the committed set if
+        there is one, because the alternative is a selection that looks fine in
+        the UI and refuses at the moment somebody presses "run a trial".
+        """
+        if graph_name is None:
+            self.active_graph_name = None
+            self.trace.append(KIND_ACTIVE_GRAPH_SELECTED, graph=None)
+            return None
+
+        config = self.require_state_machine_config()
+        known = [graph.name for graph in config.graphs]
+        if graph_name not in known:
+            raise GraphNotInTheLoadedConfig(
+                f"the loaded config {config.name!r} has no graph called {graph_name!r}. "
+                f"Has: {', '.join(known) or '(none)'}"
+            )
+        committed = self.supervisor.committed_graph_set
+        if committed is not None:
+            on_the_board = [graph.name for graph in committed.graphs_by_slot]
+            if graph_name not in on_the_board:
+                raise GraphNotInTheLoadedConfig(
+                    f"{graph_name!r} is in the config but not in the set the board is holding "
+                    f"({', '.join(on_the_board)}). Open a session to put it there."
+                )
+        self.active_graph_name = graph_name
+        self.trace.append(KIND_ACTIVE_GRAPH_SELECTED, graph=graph_name)
+        return graph_name
+
+    def graph_for_a_trial(self, graph_name: str | None) -> str:
+        """The graph a trial names, or the active one, or a refusal saying so."""
+        if graph_name:
+            return graph_name
+        if self.active_graph_name:
+            return self.active_graph_name
+        raise NoActiveGraph(
+            "this trial named no graph and no graph is selected as the active one. Name one, "
+            "or select an active graph first."
+        )
+
+    # -------------------------------------------------------- the recording ---
+    #
+    # The order of each pair below is the only subtle thing here: the lifecycle
+    # entry is written so that it lands **inside** the recording it is about. A
+    # pause is traced before the segment closes and a resume after the next one
+    # opens, so a recording explains its own gaps rather than leaving a reader to
+    # infer them. See `event_recording.py` for why nothing here holds two locks.
+
+    def start_recording(
+        self, name: str | None = None, description: str = ""
+    ) -> dict:
+        chosen = name or self.recorder.suggest_a_name()
+        manifest = self.recorder.start(
+            chosen,
+            description=description,
+            state_machine_config=(
+                self.state_machine_config.name if self.state_machine_config else None
+            ),
+        )
+        self.trace.append(
+            KIND_RECORDING_STARTED,
+            recording=chosen,
+            state_machine_config=manifest["state_machine_config"],
+        )
+        return self.recorder.manifest_of(chosen)
+
+    def pause_recording(self) -> dict:
+        name = self.recorder.manifest_of_the_active_recording()["name"]
+        self.trace.append(KIND_RECORDING_PAUSED, recording=name)
+        return self.recorder.pause()
+
+    def resume_recording(self) -> dict:
+        manifest = self.recorder.resume()
+        self.trace.append(KIND_RECORDING_RESUMED, recording=manifest["name"])
+        return self.recorder.manifest_of(manifest["name"])
+
+    def stop_recording(self) -> dict:
+        name = self.recorder.manifest_of_the_active_recording()["name"]
+        self.trace.append(KIND_RECORDING_STOPPED, recording=name)
+        return self.recorder.stop()
+
+    def clear_recording(self) -> dict:
+        manifest = self.recorder.clear()
+        # After the clear, so a cleared recording's first line says what it is:
+        # an empty file with no explanation is one somebody has to guess at.
+        self.trace.append(KIND_RECORDING_CLEARED, recording=manifest["name"])
+        return self.recorder.manifest_of(manifest["name"])
+
     # ----------------------------------------------------------- the graphs ---
 
     def upload_session_graph_set(self, graph_names: list[str]) -> tuple[CompiledGraphSet, int]:
@@ -416,8 +539,26 @@ class RigService:
         Graphs **from the store, by name**, which is the older half of this API
         and the one triald has always used. `open_session` is the other half:
         the same upload, over the graphs a state-machine config carries.
+
+        A session is open afterwards either way. That matters for watching:
+        when triald drives a rig it calls *this*, and a web UI that only knew
+        about `open_session` would show "no session" beside a board running
+        trials -- which is the one thing somebody watching over triald's
+        shoulder must not be told.
         """
-        return self._upload(self.graph_store.load_all(graph_names))
+        uploaded = self._upload(self.graph_store.load_all(graph_names))
+        compiled, _ = uploaded
+        self.session_opened_at = time.time()
+        self.trace.append(
+            KIND_SESSION_OPENED,
+            state_machine_config=(
+                self.state_machine_config.name if self.state_machine_config else None
+            ),
+            set_version=compiled.set_version,
+            graph_names=[graph.name for graph in compiled.graphs_by_slot],
+            opened_by="graph_names",
+        )
+        return uploaded
 
     def _upload(self, graphs: list[GraphDefinition]) -> tuple[CompiledGraphSet, int]:
         """Compile, check against this board's caps, upload, commit.

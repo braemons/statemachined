@@ -8,11 +8,12 @@
 //     <statemachined-graph   base="http://rig.local:8081" name="go-nogo"></statemachined-graph>
 //     <statemachined-configs base="http://rig.local:8081"></statemachined-configs>
 //     <statemachined-session base="http://rig.local:8081"></statemachined-session>
+//     <statemachined-recording base="http://rig.local:8081"></statemachined-recording>
 //     <statemachined-trace   base="http://rig.local:8081" trial="193"></statemachined-trace>
 //     <statemachined-firmware base="http://rig.local:8081"></statemachined-firmware>
 //     <statemachined-monitor base="http://rig.local:8081"></statemachined-monitor>
 //
-// **This URL and these eight tag names are what the console repo depends on.**
+// **This URL and these nine tag names are what the console repo depends on.**
 // The console (`braemons-console`) is a static shell with no domain logic:
 // every panel it shows is one of these, served by the daemon that owns the
 // device it is about, which is what keeps a console from bundling a copy of
@@ -29,7 +30,7 @@
 //   * `base` is an attribute rather than an assumption, because a console is
 //     not served from the rig.
 //
-// Importing this module registers all eight. Importing one panel's module
+// Importing this module registers all nine. Importing one panel's module
 // directly registers only that one, and is also supported -- a console that
 // wants the trace and nothing else should not pay for the graph editor.
 
@@ -40,6 +41,7 @@ export { LineMapPanelElement } from "./line_map_panel_element.js";
 export { GraphStorePanelElement } from "./graph_store_panel_element.js";
 export { StateMachineConfigPanelElement } from "./state_machine_config_panel_element.js";
 export { SessionPanelElement } from "./session_panel_element.js";
+export { RecordingPanelElement } from "./recording_panel_element.js";
 export { TracePanelElement } from "./trace_panel_element.js";
 export { FirmwarePanelElement } from "./firmware_panel_element.js";
 export { SerialMonitorPanelElement } from "./serial_monitor_panel_element.js";
@@ -57,6 +59,7 @@ export const STATEMACHINED_ELEMENT_NAMES = [
   "statemachined-graph",
   "statemachined-configs",
   "statemachined-session",
+  "statemachined-recording",
   "statemachined-trace",
   "statemachined-firmware",
   "statemachined-monitor",

@@ -42,6 +42,7 @@ ELEMENT_TAG_NAMES = [
     "statemachined-graph",
     "statemachined-configs",
     "statemachined-session",
+    "statemachined-recording",
     "statemachined-trace",
     "statemachined-firmware",
     "statemachined-monitor",
@@ -159,22 +160,27 @@ def test_the_server_can_actually_speak_websocket() -> None:
 def test_every_view_says_what_it_is() -> None:
     """"Session" and "Trace" are words this system uses in a particular way, and
     a tab label cannot teach anybody either of them. So the shell carries a
-    sentence per view -- shown above the panel and as the tab's tooltip -- and
+    sentence per view -- shown above the panels and as the tab's tooltip -- and
     each panel carries its own, because the panels are used inside a console
     where this shell does not exist.
     """
     shell = (web_directory() / "application_shell.js").read_text()
-    described = re.findall(r'id: "([a-z]+)",\n\s+label: "[^"]+",\n\s+tag: "[^"]+",\n\s+description:', shell)
-    assert set(described) == {
-        "device",
-        "lines",
-        "graphs",
-        "configs",
-        "session",
-        "trace",
-        "monitor",
-        "firmware",
-    }
+    described = re.findall(r'id: "([a-z]+)",\n\s+label: "[^"]+",\n\s+tags: \[', shell)
+    assert set(described) == {"device", "setup", "run"}
+
+
+def test_every_panel_is_reachable_from_some_view() -> None:
+    """The consolidation's one real risk, asserted.
+
+    A view holds several panels now, which is what stopped "Configs", "Lines"
+    and "Paradigms" from being three tabs cutting the same material. The way
+    that goes wrong is silent: a panel dropped out of every `tags` list is still
+    served, still registered, still tested -- and unreachable from the rig's own
+    page, which nobody notices until they go looking for it.
+    """
+    shell = (web_directory() / "application_shell.js").read_text()
+    reachable = set(re.findall(r'"(statemachined-[a-z]+)"', shell))
+    assert reachable == set(ELEMENT_TAG_NAMES)
 
     # And the two words that prompted this are explained in their own panels,
     # not only in the shell.

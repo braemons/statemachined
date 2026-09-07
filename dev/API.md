@@ -319,7 +319,10 @@ triald drives; statemachined reports.
   "elapsed_milliseconds": 3 }
 ```
 
-**`graph` is a name.** The daemon resolves it to a slot in the committed set —
+**`graph` is a name, and it may be omitted.** Omitted, the trial gets the rig's
+active graph (§8) — which is what a person pressing a button on a bench means,
+and what triald never relies on, since it names one every trial. Given, it wins.
+The daemon resolves it to a slot in the committed set —
 it built the set, so it is the only process that knows. A name the store does
 not hold is refused rather than guessed at; a name outside the committed set is
 refused too, and the refusal says which name and which set, because a session
@@ -516,18 +519,108 @@ The graphs are *not* uploaded here. Loading says what this rig is; opening a
 session is what puts it on the device, and keeping them apart is what lets
 somebody load a config to look at it without disturbing a board.
 
+### `PUT·DELETE /api/session/active-graph`
+
+`{"graph": "go-nogo"}`. Which graph a trial gets **when it does not name one**.
+
+A default, not a mode. `POST /api/trial/configure` with an explicit `graph`
+always wins, so triald — which names a graph on every trial and has no reason to
+know this exists — is unaffected by whatever somebody selected in a browser tab.
+What it buys is the other caller: a person on a bench chose their paradigm once
+when they sat down, and making them re-name it per trial is how a manual rig
+becomes a rig nobody drives manually.
+
+Nothing is pushed and no board is touched: a session uploads a *set* and a graph
+is switched by index at `configure` time, which is exactly what makes this cheap
+and safe mid-session. Refused `409 graph_not_available` if the graph is not in
+the loaded config, or is in it but not in the set the board is holding — caught
+at selection rather than at the moment somebody presses run, which is the
+difference between a refusal and a rig that looks armed.
+
+`POST /api/trial/configure` then refuses `409 no_graph_named` when a trial names
+no graph and nothing is selected.
+
 ---
 
-## 9. The pages this daemon serves
+## 9. Recordings
+
+**The trace is always on. A recording is a name, a boundary somebody chose, and
+a file that is only this run.**
+
+§7's trace is a bounded ring plus a file per day, running whether or not anybody
+asked — which is right for a *diagnostic* and wrong for a *record of an
+experiment*. So a recording does not replace it and does not duplicate its
+rules: it is a sink on it, which means it sees every entry in order and none
+skipped, unlike a reader that polls `/api/trace` and can fall out of the ring
+between polls.
+
+This is for the rig with **no triald**: a bench, a pilot, a training box, where
+the daemon is the only thing that saw the session happen. On a rig with triald
+the `.tdr` is the record and this is the finer-grained thing beside it, joined
+on `trial_id`. Nothing in a recording is a verdict.
+
+| | |
+|---|---|
+| `GET /api/recordings` | every recording kept on this rig, and which one is being written |
+| `POST /api/recordings/start` | `{"name": "", "description": ""}` — a blank name is the time it started |
+| `POST /api/recordings/pause` | stop capturing; keep the recording open |
+| `POST /api/recordings/resume` | capture again, into a new stretch |
+| `POST /api/recordings/stop` | end it. The file stays and the recording is in the store |
+| `POST /api/recordings/clear` | throw away what is in it **and keep recording** |
+| `GET /api/recordings/{name}` | its manifest |
+| `GET /api/recordings/{name}/entries?offset&limit` | the entries, by position in the file |
+| `DELETE /api/recordings/{name}` | remove one. Refused `409` while it is the one being written |
+
+**Pausing does not blind the rig.** The trace keeps running, so what a pause
+leaves behind is a *gap that is written down*:
+
+```jsonc
+{ "name": "tuesday-pilot", "state": "recording",
+  "state_machine_config": "uno-r4-minima-bench",
+  "entry_count": 412, "kind_counts": {"visit": 380, "trial_result": 16},
+  "segments": [
+    {"from_entry_number": 90, "to_entry_number": 240, "entry_count": 151, "...": null},
+    {"from_entry_number": 519, "to_entry_number": 780, "entry_count": 261, "...": null}
+  ] }
+```
+
+Two stretches is one pause, and the jump in the entry numbers is where it was.
+A recording that renumbered its entries, or presented them as contiguous, would
+be claiming it saw everything — the one failure worse than not having recorded.
+The numbers are the **trace's own**, which is also what makes a recording join
+back to `/api/trace` and to a `.tdr` exactly rather than approximately.
+
+That is why entries are read by `offset` — a position in the file — rather than
+by entry number: a recording with a gap in it has no contiguous range to slice.
+
+**Four verbs, because they are four intentions.** `clear` is the one that is not
+a `stop`: "the last ten minutes were me testing a valve" is a different thing
+from "this recording is finished", and a UI with only `stop` would make somebody
+delete a file to say it. Clearing a paused recording leaves it paused.
+
+**Two files per recording**, under `recording_directory`: `<name>.ndjson` for
+the entries, appended on arrival for the same reason the trace's day file is,
+and `<name>.recording.json` for the manifest, rewritten only on a verb. A daemon
+killed mid-recording therefore leaves a complete entries file and a manifest
+whose last stretch has no end — which is a true description of what happened.
+
+`recording_started`, `_paused`, `_resumed`, `_stopped` and `_cleared` are also
+trace entry kinds, and they are written so as to land *inside* the recording
+they are about. A recording explains its own gaps rather than leaving a reader
+to infer them.
+
+---
+
+## 10. The pages this daemon serves
 
 Not part of the API, and listed here because they share its origin and its CORS
 rules. dev/DAEMON.md §5 is the design.
 
 | | |
 |---|---|
-| `GET /` | the rig's own page: nav, and seven panels, each saying what it is |
+| `GET /` | the rig's own page: three views — Device, Setup, Run — each holding the panels that answer one question, and each saying what it is |
 | `GET /ui/{path}` | that page's own shell assets. Not a contract; rearrange at will |
-| `GET /elements/{path}` | **a contract.** `/elements/statemachined.js` registers `<statemachined-device>`, `-lines`, `-graph`, `-session`, `-trace` and `-firmware`, each with a shadow root and a `base` attribute |
+| `GET /elements/{path}` | **a contract.** `/elements/statemachined.js` registers `<statemachined-device>`, `-lines`, `-graph`, `-configs`, `-session`, `-recording`, `-trace`, `-monitor` and `-firmware`, each with a shadow root and a `base` attribute |
 
 **The UI uses only the API above.** There is no private route, which is what
 makes the page an honest test of this document rather than a second, friendlier

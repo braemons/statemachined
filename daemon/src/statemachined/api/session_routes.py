@@ -22,11 +22,12 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, Request
+from pydantic import BaseModel, ConfigDict
 
 from ..device.message_framing import DeviceRefusedTheCommand
 from ..graph_set_compiler import GraphSetCompilationError
 from .http_errors import from_device_refusal, no_device_connected, refusal
-from .rig_service import NoConfigLoaded, RigService
+from .rig_service import GraphNotInTheLoadedConfig, NoConfigLoaded, RigService
 
 router = APIRouter(prefix="/api/session", tags=["session"])
 
@@ -65,6 +66,10 @@ def read_session(request: Request) -> dict:
             if config is not None
             else None
         ),
+        #: Which graph a trial gets when it does not name one. A default for the
+        #: caller that has no per-trial opinion -- the web UI's "run a trial" --
+        #: and invisible to triald, which names one every time.
+        "active_graph": service.active_graph_name,
         "is_open": service.session_opened_at is not None,
         "opened_at_unix_seconds": service.session_opened_at,
         "open_seconds": (
@@ -124,3 +129,36 @@ def close_session(request: Request) -> dict:
     would buy nothing but a slow start next time.
     """
     return service_of(request).close_session()
+
+
+class ActiveGraphRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    graph: str
+
+
+@router.put("/active-graph")
+def select_active_graph(request: Request, body: ActiveGraphRequest) -> dict:
+    """Choose which graph a trial gets when it does not name one.
+
+    Nothing is pushed and no board is touched: the set is already committed and
+    a graph is switched by index at `configure` time, which is the whole reason
+    a session uploads a *set*. So this is cheap, and it is safe mid-session.
+
+    A **default, not a mode.** triald names a graph on every `configure` and
+    that always wins, so a person switching graphs in a browser cannot change
+    what a driven rig is running.
+    """
+    service = service_of(request)
+    try:
+        chosen = service.select_active_graph(body.graph)
+    except NoConfigLoaded as exc:
+        raise refusal(409, "no_state_machine_config_loaded", str(exc), "state_machine_config")
+    except GraphNotInTheLoadedConfig as exc:
+        raise refusal(409, "graph_not_available", str(exc), "graph")
+    return {"active_graph": chosen}
+
+
+@router.delete("/active-graph")
+def clear_active_graph(request: Request) -> dict:
+    """Select nothing. A trial must then name its own graph, as triald does."""
+    return {"active_graph": service_of(request).select_active_graph(None)}

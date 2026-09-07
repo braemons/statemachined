@@ -33,12 +33,18 @@ export class SessionPanelElement extends BasePanelElement {
     this.state = null;
     this.lastResult = null;
     this.uploadNote = "";
+    this.session = null;
+    //: The next trial to arm by hand. A number a person can overwrite, because
+    //: on a rig triald owns trial ids and on a bench nobody does -- and two
+    //: trials sharing an id is how a trace stops being joinable.
+    this.nextTrialId = 1;
   }
 
   renderShell() {
     this.failureSlot = this.make("div", { class: "failure-slot" });
     // Three slots, filled independently. See the note at the top of this file.
     this.chooserSlot = this.make("div", { text: "reading the store..." });
+    this.manualSlot = this.make("div");
     this.liveSlot = this.make("div");
     this.lastTrialSlot = this.make("div");
     this.root.replaceChildren(
@@ -59,6 +65,8 @@ export class SessionPanelElement extends BasePanelElement {
         }),
         this.failureSlot,
         this.chooserSlot,
+        this.make("h3", { text: "Run a trial by hand" }),
+        this.manualSlot,
         this.make("h3", { text: "Now" }),
         this.liveSlot,
         this.make("h3", { text: "The last trial" }),
@@ -77,6 +85,7 @@ export class SessionPanelElement extends BasePanelElement {
     // arrives, so the panel does not open as two empty headings.
     this.paintLiveState();
     this.paintLastTrial();
+    this.paintManualControls();
     this.openStateStream();
     // The result is polled rather than streamed: it changes once per trial, and
     // a second socket per panel is a cost the rig pays for nothing.
@@ -88,6 +97,14 @@ export class SessionPanelElement extends BasePanelElement {
         this.lastResult = null;
       }
       this.paintLastTrial();
+    });
+    // Separate from the result poll because it repaints a <select> and a number
+    // field: the same discipline the chooser has, for the same reason. Two
+    // seconds, because what it shows changes when a person or triald acts and
+    // not several times a second.
+    this.pollEvery(2, async () => {
+      this.session = await this.api.readSession();
+      this.paintManualControls();
     });
   }
 
@@ -121,6 +138,106 @@ export class SessionPanelElement extends BasePanelElement {
           : this.make("div"),
       ),
     );
+  }
+
+  /// Arming one trial without triald. See the note at the top: on a rig this
+  /// loop is driven, and what a person needs these for is watching a valve open.
+  ///
+  /// The graph is chosen once and kept -- `PUT /api/session/active-graph` -- so
+  /// that pressing "arm and start" is one act rather than two. It is a
+  /// **default and not a mode**: triald names a graph on every trial and that
+  /// always wins, so a person switching graphs here cannot change what a driven
+  /// rig is running.
+  paintManualControls() {
+    this.repaintPreservingFocus(() => this.manualSlot.replaceChildren(this.manualControls()));
+  }
+
+  manualControls() {
+    const session = this.session;
+    if (session === null) return this.make("p", { class: "muted", text: "reading the session..." });
+    const committed = session.committed_set;
+    if (committed === null) {
+      return this.make("p", {
+        class: "muted",
+        text:
+          "The board is holding no graphs, so there is nothing to arm. Upload a set above, or " +
+          "load a config and open a session.",
+      });
+    }
+    const chooser = this.make(
+      "select",
+      {
+        onChange: (event) => this.chooseActiveGraph(event.target.value),
+      },
+      [
+        this.make("option", { value: "", text: "(choose a graph)" }),
+        ...committed.graph_names.map((name) =>
+          this.make("option", { value: name, text: name, selected: name === session.active_graph }),
+        ),
+      ],
+    );
+    const trialField = this.make("input", {
+      type: "number",
+      min: "0",
+      value: String(this.nextTrialId),
+      style: "width:6rem",
+      onInput: (event) => {
+        this.nextTrialId = Number(event.target.value);
+      },
+    });
+    const armed = this.state !== null && this.state.running;
+    return this.make("div", {}, [
+      this.make("div", { class: "row" }, [
+        this.make("span", { class: "muted", text: "graph" }),
+        chooser,
+        this.make("span", { class: "muted", text: "trial" }),
+        trialField,
+        this.make("button", {
+          class: "primary",
+          text: "arm and start",
+          disabled: !session.active_graph,
+          onClick: () => this.armAndStartOneTrial(),
+        }),
+        this.make("button", {
+          text: "cancel",
+          disabled: !armed,
+          onClick: () => this.cancelTheTrial(),
+        }),
+      ]),
+      this.make("p", {
+        class: "muted",
+        text:
+          "The chosen graph is remembered by the daemon as the active one, so a trial that " +
+          "names none gets it. triald names a graph on every trial and is unaffected by what " +
+          "is chosen here.",
+      }),
+    ]);
+  }
+
+  async chooseActiveGraph(name) {
+    await this.attempt(() =>
+      name ? this.api.selectActiveGraph(name) : this.api.clearActiveGraph(),
+    );
+    this.session = await this.api.readSession();
+    this.paintManualControls();
+  }
+
+  async armAndStartOneTrial() {
+    // Armed and started as two calls because they are two calls on the wire:
+    // `configure` is the slow one and `start` is the one whose timestamp
+    // matters, and collapsing them here would hide which of the two refused.
+    const trialId = this.nextTrialId;
+    const armed = await this.attempt(() => this.api.configureTrial({ trial_id: trialId }));
+    if (armed === null) return;
+    const started = await this.attempt(() => this.api.startTrial(trialId));
+    if (started === null) return;
+    this.nextTrialId = trialId + 1;
+    this.paintManualControls();
+  }
+
+  async cancelTheTrial() {
+    const trialId = this.state && this.state.trial_id != null ? this.state.trial_id : this.nextTrialId;
+    await this.attempt(() => this.api.cancelTrial(trialId));
   }
 
   /// The rig's half. Several times a second, and nothing here is editable.
@@ -200,6 +317,7 @@ export class SessionPanelElement extends BasePanelElement {
           : this.make("span", { class: "pill", text: "idle" }),
       ],
       ["graph", state.graph ?? "-"],
+      ["active graph", (this.session && this.session.active_graph) ?? "-"],
       // By name where the daemon can say it: an index means nothing to
       // somebody watching a rig.
       ["state", state.state_name ?? (state.state_index ?? "-")],

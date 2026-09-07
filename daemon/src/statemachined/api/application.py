@@ -20,6 +20,7 @@ from . import (
     configuration_routes,
     device_routes,
     graph_routes,
+    recording_routes,
     session_routes,
     state_and_trace_routes,
     state_machine_config_routes,
@@ -85,6 +86,10 @@ def create_application(
     # they are on disk: the box, and what the box is doing today.
     application.include_router(state_machine_config_routes.router)
     application.include_router(session_routes.router)
+    # The trace is always on; this is what keeps a named piece of it. Beside the
+    # session routes because that is the pairing in practice: a session opens, a
+    # recording starts, and on a rig with no triald those are the two acts.
+    application.include_router(recording_routes.router)
     # Last, because its `/ui/{path}` and `/elements/{path}` are the only
     # catch-all routes in the app and a router that matched before them would be
     # shadowed. Nothing here is a private route: the UI uses only what is above.

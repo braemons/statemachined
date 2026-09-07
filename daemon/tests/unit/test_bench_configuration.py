@@ -53,6 +53,7 @@ def test_the_bench_writes_only_under_the_checkout() -> None:
         configuration.graph_store_directory,
         configuration.state_machine_config_directory,
         configuration.trace_directory,
+        configuration.recording_directory,
     ):
         assert not directory.is_absolute(), f"{directory} would escape the checkout"
         assert directory.parts[0] == "build"

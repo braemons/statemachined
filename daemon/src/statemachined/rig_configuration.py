@@ -113,6 +113,12 @@ class RigConfiguration(BaseModel):
     #: config is assembled out of, rather than what a session runs.
     graph_store_directory: Path = DEFAULT_STATE_DIRECTORY / "graphs"
 
+    #: Two files per recording -- the entries and the manifest. Separate from
+    #: `trace_directory` because the two have opposite lifetimes: the trace is
+    #: rotated by logrotate and is nobody's to keep, and a recording is somebody's
+    #: experiment and is deleted only when they say so.
+    recording_directory: Path = DEFAULT_STATE_DIRECTORY / "recordings"
+
     #: One JSON file per saved state-machine config: the line map and the
     #: graphs, written by the web UI. See `state_machine_config_store.py`.
     state_machine_config_directory: Path = DEFAULT_STATE_DIRECTORY / "configs"

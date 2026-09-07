@@ -1019,19 +1019,42 @@ consequences worth writing down:
 
 ### Views
 
-**Every view says what it is**, in a sentence, above the panel and again inside
-it. "Session" and "Trace" are words this system uses in a particular way — a
-session is the set of paradigms loaded on the board for one run, a trace is the
-daemon's own record of the states a machine entered — and a tab label teaches
-nobody either. The sentence is inside each panel as well as in the shell,
-because a console embeds the panels and has no tabs of its own.
+**Every view says what it is**, in a sentence, above the panels and again inside
+each of them. "Session", "trace" and "recording" are words this system uses in a
+particular way — a session is the set of paradigms loaded on the board for one
+run, the trace is the daemon's always-on record of the states a machine entered,
+a recording is a named piece of that trace kept in its own file — and a tab label
+teaches nobody any of them. The sentence is inside each panel as well as in the
+shell, because a console embeds the panels and has no tabs of its own.
+
+**A view is a question, not a panel.** There were eight tabs and they cut the
+same material twice: a state-machine config *is* a line map plus a set of
+paradigms, so editing one under **Lines** and then loading the file under
+**Configs** was two tabs for one thought — and **Session**, **Trace** and
+**Serial monitor** are three views of the single question *what is this rig
+doing*, which is why somebody watching a rig had to keep switching between them.
+
+So the rig's own page has three views, each a question somebody actually arrives
+with. The panels themselves did not change and are still nine separate custom
+elements: a console embedding one of them individually is unaffected, and the
+grouping below is the shell's opinion, not the contract.
+
+| | |
+|---|---|
+| **Device** | the two panels about the box: what is on the end of the cable, and the firmware on it against what this package ships |
+| **Setup** | what this rig is set up to do — the config on top, and under it the two things that are *in* the config: the wiring, and the paradigms |
+| **Run** | what it is doing and what it did — the session and a trial armed by hand, the recording, the trace, and the serial monitor for when those disagree |
+
+The panels those views are built from:
 
 | | |
 |---|---|
 | **Device** | board, link health, firmware, and the live `in`/`out` bit rows — the thing `statemachined-bringup state` prints today, but named and updating |
 | **Lines** | the map. Rename, invert, enable, safe level, debounce — and the live level of every line beside it, which is the only way to confirm from outside that a graph's line numbers reach the pins somebody wired. A rename is free and nothing is re-uploaded; the rest is the `wiring` command and is pushed on save. The pin column is a **chooser over the board's own pins**, not a text box: which pin a line is was compiled into the firmware, so what a person decides here is the assignment, and choosing a pin sets its line number with it. Where the board could not answer, it falls back to a text box and says the labels are assumed. A pin two lines both claim is offered with the name of whatever has it, and the save is held until that is resolved — marked rather than forbidden, because forbidding it makes swapping two pins impossible |
 | **Graphs** | the store, and the editor: states, timeouts, terminal outcomes, actions, and a predicate editor where the three masks are checkboxes over *named* lines — with the predicate written out in a sentence underneath, because the columns are independent and a line ticked in two of them means something the boxes cannot show. An SVG node diagram rendered from the graph, read-only in v1, drawing an edge that can never fire as one |
-| **Session** | the current trial, the state the machine is in, the last result's path |
+| **Configs** | which state-machine config this rig is running, saved to and loaded from files somebody can keep and hand over. Loading one resolves the map against the board and pushes the wiring; **saving is where an edit made in Lines or Graphs becomes permanent**, and until it is saved the change is on the board and in memory and a restart loses it |
+| **Session** | the current trial, the state the machine is in, the last result's path — and the controls that make the rig **operable by a person**: choose the active graph once, then arm and start a trial. On a rig triald drives this loop; the buttons are for the bench, and they are the same calls |
+| **Recording** | start, pause, resume, stop, clear. What the four verbs decide is which part of the always-on trace is kept under a name, in a file that is only this run. A pause does not blind the rig — it opens a gap, and the panel says where |
 | **Trace** | the live tail of §4.6, one row per state visit, filterable by `trial_id`. The one view that is useful with nobody in the room, because it is still there in the morning |
 | **Serial monitor** | every line in and out of the port, as it went, both directions, filterable — with the heartbeat hidden by default because it would otherwise be most of the table. The panel for when the layers stop agreeing: the record says the valve is line 3, the valve is shut, and the question is what crossed the wire. Reads nothing into anything, and sends nothing |
 | **Firmware** | running against available; the mismatch warning |
@@ -1104,6 +1127,7 @@ inherits whatever this gets right.
 | `/var/lib/braemons/statemachined/configs/` | state-machine configs: the line map and the graphs, written by the web UI |
 | `/var/lib/braemons/statemachined/graphs/` | the graph store |
 | `/var/lib/braemons/statemachined/trace/` | the NDJSON tail of the trace |
+| `/var/lib/braemons/statemachined/recordings/` | recordings: named pieces of the trace, kept until somebody deletes them. Separate from `trace/` because the two have opposite lifetimes — the trace is rotated by logrotate and is nobody's to keep |
 | `/var/log/statemachined/` | logs, rotated weekly |
 | `/usr/share/braemons/statemachined/firmware/` | the flashable images and `MANIFEST.txt` |
 

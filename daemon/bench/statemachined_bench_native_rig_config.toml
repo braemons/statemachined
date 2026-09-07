@@ -48,6 +48,7 @@ triald_base_url = ""
 graph_store_directory = "build/bench/graphs"
 state_machine_config_directory = "build/bench/configs"
 trace_directory = "build/bench/trace"
+recording_directory = "build/bench/recordings"
 
 # What the bench comes up wired as. The map is pushed as soon as the board is
 # greeted; the graphs do not go up until somebody opens a session, which on a

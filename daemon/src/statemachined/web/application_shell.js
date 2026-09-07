@@ -18,75 +18,60 @@ import { DaemonApiClient } from "/elements/daemon_api_client.js";
 const BASE_URL = "";
 
 // Each view says what it is, in a sentence, in the navigation and again at the
-// top of the panel. "Session" and "Trace" are words this system uses in a
-// particular way -- a session is the set of paradigms loaded on the board, a
-// trace is the daemon's own record of what the machine did -- and a person
-// opening this page for the first time has no way to know that from a tab
+// top of every panel in it. "Session", "trace" and "recording" are words this
+// system uses in a particular way -- a session is the set of paradigms loaded on
+// the board, the trace is the daemon's always-on record of what the machine did,
+// a recording is a named piece of that trace kept in its own file -- and a
+// person opening this page for the first time has no way to know that from a tab
 // label. The panels are used inside a console too, where there are no tabs at
 // all, so each one carries its own description rather than relying on this.
+//
+// **A view is a question, not a panel.** There were eight tabs and they cut the
+// same material twice: a config *is* a line map plus paradigms, so editing one
+// in "Lines" and then loading the file in "Configs" was two tabs for one
+// thought. And "Session", "Trace" and "Serial monitor" are three views of the
+// single question *what is this rig doing right now* -- what it is running, what
+// it recorded, and what actually crossed the wire when those two disagree.
+//
+// So there are three views, and each is a question somebody actually arrives
+// with: what is on the end of the cable, what is this rig set up to do, and
+// what is it doing. Nothing was removed -- every panel below is the same custom
+// element, unchanged, and a console that embeds one of them individually is
+// unaffected. What changed is only how this page groups them.
 const VIEWS = [
   {
     id: "device",
     label: "Device",
-    tag: "statemachined-device",
-    description: "The board on the other end of the cable: what it is, and whether it is well.",
-  },
-  {
-    id: "lines",
-    label: "Lines & wiring",
-    tag: "statemachined-lines",
+    tags: ["statemachined-device", "statemachined-firmware"],
     description:
-      "Which pin is the left lever, and what the rig does to each signal. Watch a line's " +
-      "level here while pressing the thing wired to it -- that is the only check there is.",
+      "The board on the other end of the cable: what it is, whether it is well, and what " +
+      "firmware it is running against what this package ships.",
   },
   {
-    id: "graphs",
-    label: "Paradigms",
-    tag: "statemachined-graph",
+    id: "setup",
+    label: "Setup",
+    tags: ["statemachined-configs", "statemachined-lines", "statemachined-graph"],
     description:
-      "The graphs this rig can run: states, timeouts, what ends a trial and as which outcome. " +
-      "Authored against line names, so a graph outlives the box it was written on.",
+      "What this rig is set up to do, in one place: the saved config that binds a line map " +
+      "and a set of paradigms together, the wiring that config names, and the paradigms " +
+      "themselves. The config on top is the file; the two panels under it are what is in it. " +
+      "Edit either one and save it back from the config panel -- until you do, the change is " +
+      "on the board and in memory and a restart loses it.",
   },
   {
-    id: "configs",
-    label: "Configs",
-    tag: "statemachined-configs",
+    id: "run",
+    label: "Run",
+    tags: [
+      "statemachined-session",
+      "statemachined-recording",
+      "statemachined-trace",
+      "statemachined-monitor",
+    ],
     description:
-      "What this rig is wired like and what it can run, saved as files you can load, keep " +
-      "and hand to somebody else. Loading one names the lines and pushes the wiring; " +
-      "opening a session puts its graphs on the board.",
-  },
-  {
-    id: "session",
-    label: "Session",
-    tag: "statemachined-session",
-    description:
-      "The graphs loaded onto the board for this run, and the trial happening now. Every " +
-      "paradigm a session will use is uploaded once, before an animal is in the booth; after " +
-      "that a trial names one and starts in milliseconds.",
-  },
-  {
-    id: "trace",
-    label: "Trace",
-    tag: "statemachined-trace",
-    description:
-      "The daemon's own record: one row per state the machine entered, timestamped, kept in " +
-      "memory and written to disk. It is what tells you what a trial actually did, and it is " +
-      "still there in the morning.",
-  },
-  {
-    id: "monitor",
-    label: "Serial monitor",
-    tag: "statemachined-monitor",
-    description:
-      "Every line in and out of the serial port, as it went. For the moment the layers stop " +
-      "agreeing and the question is what actually crossed the wire.",
-  },
-  {
-    id: "firmware",
-    label: "Firmware",
-    tag: "statemachined-firmware",
-    description: "What is running on the board against what this package ships.",
+      "What this rig is doing, and what it did. Open a session to put the paradigms on the " +
+      "board, arm a trial by hand or let triald drive it, keep a named recording of what " +
+      "happens, and read back the trace underneath. The serial monitor at the bottom is for " +
+      "the moment the layers stop agreeing and the question is what actually crossed the wire.",
   },
 ];
 
@@ -96,15 +81,20 @@ const summary = document.getElementById("rig-summary");
 
 function showView(viewId) {
   const view = VIEWS.find((each) => each.id === viewId) || VIEWS[0];
-  // Replaced rather than hidden, so the panel that leaves the screen stops
+  // Replaced rather than hidden, so the panels that leave the screen stop
   // polling the device: `disconnectedCallback` is where a panel gives back the
-  // rig's attention, and a hidden-but-connected panel would keep it.
-  const panel = document.createElement(view.tag);
-  panel.setAttribute("base", BASE_URL);
+  // rig's attention, and a hidden-but-connected one would keep it. That matters
+  // more now that a view holds several: four panels left connected behind a
+  // tab would be four pollers against a daemon holding one serial port.
+  const panels = view.tags.map((tag) => {
+    const panel = document.createElement(tag);
+    panel.setAttribute("base", BASE_URL);
+    return panel;
+  });
   const description = document.createElement("p");
   description.className = "view-description";
   description.textContent = view.description;
-  container.replaceChildren(description, panel);
+  container.replaceChildren(description, ...panels);
 
   for (const button of navigation.children) {
     button.classList.toggle("current", button.dataset.viewId === view.id);

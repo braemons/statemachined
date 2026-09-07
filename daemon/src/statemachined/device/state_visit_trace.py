@@ -54,6 +54,18 @@ KIND_CONFIG_LOADED = "state_machine_config_loaded"
 #: on, and the trace is where the rig writes down what it did.
 KIND_SESSION_OPENED = "session_opened"
 KIND_SESSION_CLOSED = "session_closed"
+#: Which graph a trial gets when nobody names one. A selection rather than an
+#: act on the device -- nothing is pushed -- but it changes what the next
+#: `POST /api/trial/configure` means, so it is written down.
+KIND_ACTIVE_GRAPH_SELECTED = "active_graph_selected"
+#: The recording's own lifecycle, in the trace it is a selection over. Circular
+#: on purpose: a recording that did not contain the moment it was paused would
+#: leave the gap in it unexplained.
+KIND_RECORDING_STARTED = "recording_started"
+KIND_RECORDING_PAUSED = "recording_paused"
+KIND_RECORDING_RESUMED = "recording_resumed"
+KIND_RECORDING_STOPPED = "recording_stopped"
+KIND_RECORDING_CLEARED = "recording_cleared"
 KIND_LINK_CONNECTED = "link_connected"
 KIND_LINK_LOST = "link_lost"
 KIND_SEQUENCE_GAP = "sequence_gap"
@@ -72,6 +84,11 @@ class StateVisitTrace:
         self._entries: deque[dict[str, Any]] = deque(maxlen=ring_entries)
         self._directory = Path(directory) if directory is not None else None
         self._lock = threading.Lock()
+        #: Called with every entry as it is appended. The recorder is one of
+        #: these. A sink sees entries **in order and none skipped**, which is
+        #: what the ring cannot promise a reader that fell behind -- and it is
+        #: the reason a recording is a sink rather than a poller of `/api/trace`.
+        self._sinks: list[Any] = []
         #: Monotonic for the life of the daemon. The device's `seq` counts
         #: visits within a *run* and restarts at zero every trial, so it cannot
         #: address a position in a log that spans a session -- which is what a
@@ -81,6 +98,15 @@ class StateVisitTrace:
     @property
     def ring_capacity(self) -> int:
         return self._entries.maxlen or 0
+
+    def add_sink(self, sink: Any) -> None:
+        """Send every future entry to `sink(entry)` as well as to the ring.
+
+        Called under the trace's lock, so a sink must be quick and must not call
+        back into the trace -- appending from inside a sink would deadlock.
+        """
+        with self._lock:
+            self._sinks.append(sink)
 
     def append(self, kind: str, **fields: Any) -> dict[str, Any]:
         """Add one entry, to the ring and to the day's file.
@@ -99,7 +125,18 @@ class StateVisitTrace:
             self._next_entry_number += 1
             self._entries.append(entry)
             self._append_to_todays_file(entry)
+            self._offer_to_the_sinks(entry)
             return entry
+
+    def _offer_to_the_sinks(self, entry: dict[str, Any]) -> None:
+        for sink in self._sinks:
+            try:
+                sink(entry)
+            except Exception:  # noqa: BLE001
+                # Same rule as the day's file: a sink that cannot write must not
+                # stop a session. The recorder reports its own trouble in its
+                # manifest, which is where somebody would look for it.
+                pass
 
     def _append_to_todays_file(self, entry: dict[str, Any]) -> None:
         if self._directory is None:

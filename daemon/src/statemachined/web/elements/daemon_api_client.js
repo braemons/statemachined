@@ -160,6 +160,47 @@ export class DaemonApiClient {
     return this.post("/api/session/close");
   }
 
+  selectActiveGraph(name) {
+    return this.put("/api/session/active-graph", { graph: name });
+  }
+
+  clearActiveGraph() {
+    return this.delete("/api/session/active-graph");
+  }
+
+  listRecordings() {
+    return this.get("/api/recordings");
+  }
+
+  startRecording(name, description) {
+    return this.post("/api/recordings/start", { name: name || "", description: description || "" });
+  }
+
+  pauseRecording() {
+    return this.post("/api/recordings/pause");
+  }
+
+  resumeRecording() {
+    return this.post("/api/recordings/resume");
+  }
+
+  stopRecording() {
+    return this.post("/api/recordings/stop");
+  }
+
+  clearRecording() {
+    return this.post("/api/recordings/clear");
+  }
+
+  readRecordingEntries(name, offset, limit) {
+    const query = new URLSearchParams({ offset: offset ?? 0, limit: limit ?? 500 });
+    return this.get(`/api/recordings/${encodeURIComponent(name)}/entries?${query}`);
+  }
+
+  deleteRecording(name) {
+    return this.delete(`/api/recordings/${encodeURIComponent(name)}`);
+  }
+
   listStoredGraphs() {
     return this.get("/api/graphs");
   }

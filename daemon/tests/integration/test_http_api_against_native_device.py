@@ -82,6 +82,7 @@ def configuration_for(native_device, tmp_path, **overrides) -> RigConfiguration:
         "graph_store_directory": tmp_path / "graphs",
         "state_machine_config_directory": config_directory,
         "trace_directory": tmp_path / "trace",
+        "recording_directory": tmp_path / "recordings",
         "heartbeat_seconds": 0.5,
         "startup_state_machine_config": "bench",
     }
@@ -757,3 +758,198 @@ def test_opening_a_session_with_no_config_loaded_is_refused_by_name(native_devic
         # And it says what there is to load, because "nothing is loaded" without
         # "here is what you have" is a dead end at two in the morning.
         assert "bench" in refused.json()["detail"]["detail"]
+
+
+# ---------------------------------------------------- driving it by hand ---
+
+
+def a_rig_loaded_with(api, *graph_names, milliseconds=5):
+    """Save a config, load it, open a session. What a bench does before a trial."""
+    api.put(
+        "/api/state-machine-configs/manual",
+        json={
+            "name": "manual",
+            "line_map": BENCH_LINE_MAP,
+            "graphs": [timed_graph(name, milliseconds) for name in graph_names],
+        },
+    )
+    api.post("/api/state-machine-configs/manual/load")
+    return api.post("/api/session/open").json()
+
+
+def test_a_trial_that_names_no_graph_gets_the_active_one(api):
+    """The one call that makes a rig operable by a person rather than by triald.
+
+    Without it every trial has to name a graph, which is right for triald --
+    it names one per trial -- and wrong for somebody pressing a button, who
+    chose the paradigm once when they sat down.
+    """
+    a_rig_loaded_with(api, "go", "nogo")
+    assert api.get("/api/session").json()["active_graph"] is None
+
+    selected = api.put("/api/session/active-graph", json={"graph": "nogo"})
+    assert selected.status_code == 200
+    assert api.get("/api/session").json()["active_graph"] == "nogo"
+
+    armed = api.post("/api/trial/configure", json={"trial_id": 7})
+    assert armed.status_code == 200
+    assert armed.json()["graph"] == "nogo", "the trial named none, so it got the active one"
+
+
+def test_a_named_graph_beats_the_active_one(api):
+    """A default, not a mode. triald names a graph on every trial and must be
+    unaffected by whatever somebody selected in a browser tab."""
+    a_rig_loaded_with(api, "go", "nogo")
+    api.put("/api/session/active-graph", json={"graph": "nogo"})
+    armed = api.post("/api/trial/configure", json={"trial_id": 8, "graph": "go"})
+    assert armed.json()["graph"] == "go"
+
+
+def test_a_trial_with_no_graph_and_no_selection_is_refused_by_name(api):
+    a_rig_loaded_with(api, "go")
+    refused = api.post("/api/trial/configure", json={"trial_id": 9})
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "no_graph_named"
+
+
+def test_selecting_a_graph_the_board_is_not_holding_is_refused(api):
+    """Caught at selection rather than at the moment somebody presses run,
+    which is the difference between a refusal and a rig that looks armed."""
+    a_rig_loaded_with(api, "go")
+    refused = api.put("/api/session/active-graph", json={"graph": "not-a-graph"})
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "graph_not_available"
+    assert "go" in refused.json()["detail"]["detail"], "it says what there is"
+
+
+def test_switching_the_active_graph_pushes_nothing(api):
+    """A set is uploaded once and a graph is switched by index, so this is cheap
+    and safe mid-session -- which is the whole reason a session uploads a set."""
+    opened = a_rig_loaded_with(api, "go", "nogo")
+    api.put("/api/session/active-graph", json={"graph": "go"})
+    api.put("/api/session/active-graph", json={"graph": "nogo"})
+    assert api.get("/api/session").json()["committed_set"]["set_version"] == opened["set_version"]
+
+
+# ----------------------------------------------------------- recordings ---
+
+
+def test_a_recording_keeps_the_trial_that_happened_while_it_ran(api):
+    a_rig_loaded_with(api, "quick")
+    api.put("/api/session/active-graph", json={"graph": "quick"})
+
+    api.post("/api/recordings/start", json={"name": "one-trial"})
+    api.post("/api/trial/configure", json={"trial_id": 1})
+    api.post("/api/trial/start", json={"trial_id": 1})
+    wait_until(
+        lambda: api.get("/api/trial/result").json()
+        if api.get("/api/trial/result").status_code == 200
+        else None
+    )
+    stopped = api.post("/api/recordings/stop").json()
+
+    entries = api.get("/api/recordings/one-trial/entries").json()["entries"]
+    kinds = [entry["kind"] for entry in entries]
+    assert "trial_configured" in kinds
+    assert "trial_started" in kinds
+    assert "visit" in kinds
+    assert stopped["entry_count"] == len(entries)
+
+
+def test_a_paused_recording_does_not_blind_the_rig(api):
+    """The trace is always on. Pausing chooses what is *kept*, and the recording
+    says where the gap is rather than looking continuous."""
+    a_rig_loaded_with(api, "quick")
+    api.put("/api/session/active-graph", json={"graph": "quick"})
+
+    api.post("/api/recordings/start", json={"name": "paused-in-the-middle"})
+    api.post("/api/recordings/pause")
+
+    before = api.get("/api/trace").json()["newest_entry_number"]
+    api.post("/api/trial/configure", json={"trial_id": 2})
+    api.post("/api/trial/start", json={"trial_id": 2})
+    wait_until(lambda: api.get("/api/trace").json()["newest_entry_number"] > before + 2)
+    api.post("/api/recordings/resume")
+    manifest = api.post("/api/recordings/stop").json()
+
+    kept = api.get("/api/recordings/paused-in-the-middle/entries").json()["entries"]
+    assert not any(entry["kind"] == "trial_started" for entry in kept), (
+        "the trial ran during the pause, so it is not in the recording"
+    )
+    # But the trace has it, and the recording's own gap is visible.
+    trace_kinds = [entry["kind"] for entry in api.get("/api/trace").json()["entries"]]
+    assert "trial_started" in trace_kinds
+    assert len(manifest["segments"]) == 2
+
+
+def test_a_recording_survives_the_ring_it_was_taken_from(native_device, tmp_path):
+    """The reason a recording is a sink and not a poller of `/api/trace`.
+
+    A ring of four evicts almost immediately; a recording that had polled would
+    have missed whatever fell out between polls, and would not have known.
+    """
+    configuration = configuration_for(native_device, tmp_path, trace_ring_entries=4)
+    with TestClient(create_application(configuration)) as api:
+        api.post("/api/recordings/start", json={"name": "longer-than-the-ring"})
+        for index in range(20):
+            api.get("/api/device")  # something the daemon traces nothing for
+            api.app.state.rig_service.trace.append("visit", state_name=f"state-{index}")
+        api.post("/api/recordings/stop")
+
+        kept = api.get("/api/recordings/longer-than-the-ring/entries?limit=100").json()
+        assert len(kept["entries"]) >= 20
+        assert api.get("/api/trace").json()["ring_capacity"] == 4
+
+
+def test_recordings_are_listed_kept_and_deleted(api):
+    api.post("/api/recordings/start", json={"name": "keep-me", "description": "a pilot"})
+    api.post("/api/recordings/stop")
+    listed = api.get("/api/recordings").json()
+    assert listed["active"] is None
+    assert [each["name"] for each in listed["recordings"]] == ["keep-me"]
+    assert listed["recordings"][0]["description"] == "a pilot"
+
+    assert api.delete("/api/recordings/keep-me").json() == {"deleted": "keep-me"}
+    assert api.get("/api/recordings").json()["recordings"] == []
+
+
+def test_a_second_recording_while_one_runs_is_refused(api):
+    api.post("/api/recordings/start", json={"name": "first"})
+    refused = api.post("/api/recordings/start", json={"name": "second"})
+    assert refused.status_code == 409
+    assert refused.json()["detail"]["error"] == "already_recording"
+    assert "first" in refused.json()["detail"]["detail"]
+
+
+def test_a_recording_is_on_disk_as_it_goes(api, tmp_path):
+    api.post("/api/recordings/start", json={"name": "on-disk"})
+    api.app.state.rig_service.trace.append("visit", state_name="mid-session")
+    written = (tmp_path / "recordings" / "on-disk.ndjson").read_text()
+    assert "mid-session" in written
+
+
+# --------------------------------- watching a rig somebody else is driving ---
+
+
+def test_the_session_is_open_when_triald_uploaded_the_set(api):
+    """triald calls `POST /api/session/graphs`, not `/api/session/open`.
+
+    A web UI that only knew about the second would show "no session" beside a
+    board running trials -- which is the one thing somebody watching over
+    triald's shoulder must not be told.
+    """
+    api.put("/api/graphs/driven", json=timed_graph("driven", 5))
+    api.post("/api/session/graphs", json={"graph_names": ["driven"]})
+
+    session = api.get("/api/session").json()
+    assert session["is_open"] is True
+    assert session["committed_set"]["graph_names"] == ["driven"]
+
+    opened = [
+        entry
+        for entry in api.get("/api/trace").json()["entries"]
+        if entry["kind"] == "session_opened"
+    ]
+    assert opened and opened[-1]["opened_by"] == "graph_names", (
+        "the trace says which of the two calls opened it"
+    )

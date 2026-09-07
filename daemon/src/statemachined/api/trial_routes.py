@@ -18,7 +18,7 @@ from ..device.message_framing import DeviceRefusedTheCommand
 from ..graph_set_compiler import GraphSetCompilationError
 from ..model.trial_record import TrialResultRecord
 from .http_errors import from_device_refusal, no_device_connected, refusal
-from .rig_service import RigService
+from .rig_service import NoActiveGraph, RigService
 
 router = APIRouter(prefix="/api/trial", tags=["trial"])
 
@@ -48,7 +48,12 @@ class ConfigureTrialRequest(BaseModel):
 
     trial_id: int = Field(ge=0)
     #: A name, never a slot. See dev/DAEMON.md §3.1.
-    graph: str = Field(min_length=1)
+    #:
+    #: Empty means "the active graph" (`PUT /api/session/active-graph`), which
+    #: is what a person pressing a button on a bench means and what triald never
+    #: relies on: triald names one every trial, and a name given here always
+    #: wins over the selection.
+    graph: str = ""
     #: A wall-clock cap on the whole trial. It stays regardless of the graph:
     #: validation cannot tell a ten-second foreperiod from a hang.
     cap_milliseconds: int = Field(default=0, ge=0)
@@ -73,14 +78,19 @@ def configure_trial(request: Request, body: ConfigureTrialRequest) -> dict:
     if not service.supervisor.is_connected:
         raise no_device_connected()
 
+    try:
+        graph_name = service.graph_for_a_trial(body.graph)
+    except NoActiveGraph as exc:
+        raise refusal(409, "no_graph_named", str(exc), "graph")
+
     started = time.monotonic()
     try:
         armed = service.configure_trial(
             trial_id=body.trial_id,
-            graph_name=body.graph,
+            graph_name=graph_name,
             cap_milliseconds=body.cap_milliseconds,
             start_source=body.start_source,
-            distribution_patches=_patches_as_wire_fields(service, body),
+            distribution_patches=_patches_as_wire_fields(service, body, graph_name),
         )
     except NoGraphSetCommitted as exc:
         raise refusal(409, "no_graph_set", str(exc), "graph")
@@ -94,14 +104,16 @@ def configure_trial(request: Request, body: ConfigureTrialRequest) -> dict:
 
     return {
         "trial_id": body.trial_id,
-        "graph": body.graph,
+        "graph": graph_name,
         "set_version": armed.get("set_version"),
         "graph_index": armed.get("graph_index"),
         "elapsed_milliseconds": int((time.monotonic() - started) * 1000),
     }
 
 
-def _patches_as_wire_fields(service: RigService, body: ConfigureTrialRequest) -> list[dict]:
+def _patches_as_wire_fields(
+    service: RigService, body: ConfigureTrialRequest, graph_name: str
+) -> list[dict]:
     """Named distributions into pool indices and the wire's `a`/`b`/`c`.
 
     The same translation `graph_set_compiler` does for an upload, and it has to
@@ -113,14 +125,14 @@ def _patches_as_wire_fields(service: RigService, body: ConfigureTrialRequest) ->
     compiled = service.supervisor.committed_graph_set
     if compiled is None:
         raise NoGraphSetCommitted("no graph set is committed, so no distribution has an index")
-    compiled_graph = compiled.graph_named(body.graph)
+    compiled_graph = compiled.graph_named(graph_name)
 
     wire_patches = []
     for patch in body.distribution_patches:
         if patch.name not in compiled_graph.distribution_pool_index_by_name:
             known = ", ".join(sorted(compiled_graph.distribution_pool_index_by_name))
             raise GraphSetCompilationError(
-                f"graph {body.graph!r} has no distribution called {patch.name!r}. Has: {known}"
+                f"graph {graph_name!r} has no distribution called {patch.name!r}. Has: {known}"
             )
         fields: dict[str, object] = {
             "i": compiled_graph.distribution_pool_index_by_name[patch.name]
