@@ -1,0 +1,80 @@
+# What this box is, as opposed to what it is doing today.
+#
+# A conffile: hand-edited, preserved across upgrades by dpkg, and **never
+# written by the daemon**. What a person edits from the web UI -- the line map
+# and the graphs -- is not here; that is a state-machine config under
+# /var/lib/braemons/statemachined/configs/. See
+# statemachined/rig_configuration.py for why the split is where it is: a
+# conffile the daemon rewrites is a file that fights dpkg on every upgrade.
+#
+# Every setting below is optional and shown at the value the daemon uses when
+# it is absent. Commented out means "the default", so deleting a line is always
+# safe.
+#
+# After editing:  sudo systemctl restart statemachined
+
+# The board this daemon owns. The default is the udev rule's stable symlink
+# rather than /dev/ttyACM0, which is assigned in enumeration order and is the
+# wrong port the moment a second USB device is plugged into a Pi. Any pyserial
+# URL works, so a board on a terminal server is `socket://10.0.0.7:5300`.
+#device_target = "/dev/braemons/statemachined0"
+#device_baud = 115200
+#device_timeout_seconds = 2.0
+
+# What board this rig is supposed to have, as the firmware's `hello_ack` names
+# it. Checked at connect and refused on a mismatch, because a different MCU on
+# the same cable is a different pinout wearing the same pin *names* -- a Teensy
+# and an R4 both have an A0, and a line map resolved against the wrong one of
+# them resolves cleanly and drives the wrong hole.
+#
+# Worth setting on a rig. Empty means "do not check", which is a bench's answer.
+expected_board = "uno_r4_minima"
+
+# Where to report an outcome. Empty means "report nowhere", which is what makes
+# this daemon usable on a box with no triald -- and what a board running its own
+# trials is doing anyway.
+#triald_base_url = "http://127.0.0.1:8080"
+
+# Fixed for the life of the daemon when set, so a whole session replays --
+# including one interrupted by a reconnect. Empty draws one per connection,
+# which is right for a rig and wrong for a reproduction.
+#session_seed = ""
+
+# Whether the daemon opens the port and greets on startup.
+#
+# Greeting takes the rig (dev/PROTOCOL.md §3.7): a board that was arming its own
+# trials stops doing so. That is the safety rule and not a side effect -- but it
+# does mean a box whose board is deliberately running unattended should come up
+# with this false and be connected by hand.
+#connect_on_startup = true
+
+# Which state-machine config to load at startup, by name, out of
+# /var/lib/braemons/statemachined/configs/. This is what lets a rig come back
+# from a power cut already wired: the map is pushed as soon as the board is
+# greeted, so the lines are named and at their safe levels before anybody opens
+# a browser.
+#
+# It does not open a session. Putting graphs on the device is an act somebody
+# takes, and a daemon that armed itself on boot would be a rig that came back
+# from a power cut ready to run trials nobody asked for.
+#startup_state_machine_config = ""
+
+# "set" uploads every graph a session uses once and switches by index;
+# "per_trial" uploads on configure and pays the inter-trial cost that mode
+# exists to avoid. An explicit choice, never a silent fallback.
+#graph_mode = "set"
+
+# Seconds between the heartbeat pings that arm the device's link-loss watchdog.
+#heartbeat_seconds = 2.0
+
+# How many trace entries the ring holds in memory. The tail on disk is not
+# bounded by this; logrotate is what bounds that.
+#trace_ring_entries = 100000
+
+# Where the daemon's files go. These are the package's paths and the unit's
+# StateDirectory= creates them; a checkout running `make bench` passes its own
+# config naming paths under build/ instead.
+#graph_store_directory = "/var/lib/braemons/statemachined/graphs"
+#state_machine_config_directory = "/var/lib/braemons/statemachined/configs"
+#trace_directory = "/var/lib/braemons/statemachined/trace"
+#recording_directory = "/var/lib/braemons/statemachined/recordings"

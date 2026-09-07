@@ -1,0 +1,62 @@
+# The daemon as a rig runs it: one unit, one device, started at boot.
+#
+# Not a template unit today. One device per daemon is the v1 shape
+# (dev/DAEMON.md §4), and a rig with two MCUs becomes `statemachined@.service`
+# with a config per instance -- which is a change to this file and to the
+# conffile's name, and nothing above them.
+
+[Unit]
+Description=statemachined: owns one state machine device, its graphs and its API
+Documentation=file:///usr/share/doc/statemachined/DAEMON.md
+# The API and mDNS both want an address to bind and advertise. Neither is fatal
+# without one, so this waits for the network rather than requiring it.
+After=network.target
+
+[Service]
+Type=exec
+User=statemachined
+Group=statemachined
+
+# --host and --port are command line only: they are properties of how this box
+# is reached rather than of the rig, so they are not in the rig config. An
+# override goes in /etc/braemons/statemachined.env as extra arguments -- argparse
+# takes the last of a repeated option, so `--port 9000` there wins over the one
+# here without this file being edited.
+EnvironmentFile=-/etc/braemons/statemachined.env
+ExecStart=/opt/braemons/statemachined/bin/statemachined serve \
+  --config /etc/braemons/statemachined-rig-config.toml \
+  --host 0.0.0.0 --port 8081 $STATEMACHINED_EXTRA_ARGS
+
+# A board that stops answering is the case this exists for: the daemon exits,
+# comes back, reopens the port and re-greets. On-failure rather than always, so
+# a deliberate stop stays stopped.
+Restart=on-failure
+RestartSec=2
+
+# Everything the daemon writes lives under one directory, created and owned by
+# systemd rather than by a postinstall script: the graph store, the configs, the
+# recordings and the NDJSON tail of the trace. dev/DAEMON.md §6.2.
+StateDirectory=braemons/statemachined
+LogsDirectory=statemachined
+
+# The same hardening triald's unit uses. What is deliberately *absent* is
+# PrivateDevices=yes: it would replace /dev with a minimal one, and the board on
+# /dev/braemons/statemachined0 is the entire job. The udev rule is what keeps
+# that from meaning "every serial device on the box" -- see
+# packaging/udev/60-statemachined.rules.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# AF_NETLINK is zeroconf's: it watches for interfaces appearing, which is how a
+# rig on DHCP advertises itself after the network comes up rather than before.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,28 @@
+# Which port, and who may open it.
+#
+# Two problems, one rule. Adding the daemon's user to `dialout` (Debian) or
+# `uucp` (Fedora) would grant it every serial device on the box, and the group
+# is not even the same one on both -- so the node is granted to the
+# `statemachined` user by name instead. And `/dev/ttyACM0` is not a name a Pi
+# with several USB devices can rely on, because it is assigned in enumeration
+# order, so the rule also makes a stable symlink for the rig config to point at.
+#
+# The reference board, as `platformio.ini` and the R4's own descriptor have it:
+#   2341:0069  Arduino Uno R4 Minima, running
+#   2341:0369  the same board in its bootloader
+#
+# Only the running board is claimed. A board in the bootloader is not a device
+# this daemon should be holding open, and flashing is a separate package
+# (dev/DAEMON.md §6.3).
+SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0069", \
+  OWNER="statemachined", MODE="0660", SYMLINK+="braemons/statemachined0", \
+  TAG+="systemd"
+
+# A rig with two of these boards has two candidates for that symlink, and which
+# one wins is enumeration order again. Pin them by the serial in the descriptor
+# instead -- `udevadm info -a -n /dev/ttyACM0 | grep serial` prints it -- and
+# name the resulting node in each instance's rig config:
+#
+# SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0069", \
+#   ATTRS{serial}=="A1B2C3D4", OWNER="statemachined", MODE="0660", \
+#   SYMLINK+="braemons/statemachined-left"

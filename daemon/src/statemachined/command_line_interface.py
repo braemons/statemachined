@@ -480,7 +480,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument(
         "--config",
         default="",
-        help="the TOML to read (default: /etc/braemons/statemachined.toml, and its "
+        help="the TOML to read (default: /etc/braemons/statemachined-rig-config.toml, and its "
         "absence means the built-in defaults)",
     )
     s.add_argument(

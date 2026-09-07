@@ -247,7 +247,7 @@ IMAGE_DIR ?= image
 IMAGE_SHA ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 
 .PHONY: image
-image:                      ## build both flashable images, with a manifest
+image:                      ## build the flashable image, with a manifest
 	rm -rf $(IMAGE_DIR)
 	mkdir -p $(IMAGE_DIR)
 	$(MAKE) firmware
@@ -275,6 +275,27 @@ image:                      ## build both flashable images, with a manifest
 	@cat $(IMAGE_DIR)/MANIFEST.txt
 
 # --------------------------------------------------------------------------
+# The installable package
+# --------------------------------------------------------------------------
+#
+# `.deb` and `.rpm` for a rig: a vendored interpreter under
+# /opt/braemons/statemachined, a systemd unit, a udev rule naming the board, and
+# a conffile describing the box. It lives in packaging/ rather than here because
+# it is a build of its own -- see packaging/README.md and dev/DAEMON.md §6 --
+# and these two lines exist so that nobody has to know that to build one.
+#
+# `make image` first if the package should carry the firmware; without it the
+# package installs a note saying why there is none.
+
+.PHONY: deb
+deb:                        ## the installable package for this machine
+	$(MAKE) -C packaging deb
+
+.PHONY: packages
+packages:                   ## .deb and .rpm, from the one staged tree
+	$(MAKE) -C packaging packages
+
+# --------------------------------------------------------------------------
 
 # Everything CI runs, in the order it runs it, minus the toolchain installs.
 # The point is that a red build can be reproduced with one command.
@@ -284,6 +305,7 @@ ci: check-core test sanitize golden format-check test-daemon firmware  ## everyt
 .PHONY: clean
 clean:
 	rm -rf build build-san build-O0 build-O3 .pio $(IMAGE_DIR)
+	$(MAKE) -C packaging clean
 
 .PHONY: help
 help:

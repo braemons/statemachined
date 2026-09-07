@@ -1129,9 +1129,25 @@ record, both above.
 ## 6. Packaging
 
 The braemons pattern for a Python daemon is already written down, in
-`triald/packaging/README.md`, and is a skeleton there too. **statemachined would
-be the first Python braemons daemon to actually build packages**, and triald
+`triald/packaging/README.md`, and is a skeleton there too. **statemachined is
+the first Python braemons daemon to actually build packages**, and triald
 inherits whatever this gets right.
+
+`packaging/` builds them now — `make deb`, or `make -C packaging packages` for
+both formats — and what is below describes what that produces rather than what
+it should. `packaging/README.md` is the operator's half of it. What is *not*
+done is the release side: no `release.yml`, no builder containers for the
+architectures this machine is not, and nothing installed on the Pi yet.
+
+One thing the shape below did not anticipate, and it is worth writing down
+because it is the only part of this repository that runs the artifact rather
+than the source: `make -C packaging check` starts the vendored interpreter,
+imports every runtime dependency out of it, builds the application, and asserts
+the web UI's files are in the wheel. Every package target depends on it. The
+failures peculiar to packaging — a `[standard]` extra that resolved differently,
+package data that never made it into the wheel, a launcher whose shebang names
+the build machine — are invisible to every other test here, because every other
+test runs the daemon out of a checkout.
 
 ### 6.1 Shape
 
@@ -1162,7 +1178,7 @@ inherits whatever this gets right.
 | `/var/lib/braemons/statemachined/graphs/` | the graph store |
 | `/var/lib/braemons/statemachined/trace/` | the NDJSON tail of the trace |
 | `/var/lib/braemons/statemachined/recordings/` | recordings: named pieces of the trace, kept until somebody deletes them. Separate from `trace/` because the two have opposite lifetimes — the trace is rotated by logrotate and is nobody's to keep |
-| `/var/log/statemachined/` | logs, rotated weekly |
+| `/var/log/statemachined/` | the unit's `LogsDirectory=`. The daemon's own output goes to the journal (`journalctl -u statemachined`); what logrotate actually rotates is the NDJSON trace tail, daily, thirty days |
 | `/usr/share/braemons/statemachined/firmware/` | the flashable images and `MANIFEST.txt` |
 
 Runs as its own unprivileged user via sysusers, with the same systemd hardening
@@ -1227,7 +1243,7 @@ milestones that used to be M5 and M6 are now M8 and M9.
 | **M4h** ▶️ | **The bench: this UI in front of a real board.** Promoted ahead of packaging, because until somebody has clicked through the six panels with a device on the other end, everything above is a set of tests agreeing with each other. `make bench` runs the daemon, the API and the UI against `TARGET` -- a board on a cable, or `make bench-device` and `socket://127.0.0.1:5300` for the same firmware built for this machine -- from `daemon/bench/statemachined_bench_configuration.toml`, whose store is seeded from `graphs/` under `build/` so deleting a graph in the browser never deletes an example. The bridge the integration tests use moved to `daemon/bench/native_device_on_a_socket.py` and is now shared rather than copied, and `make integration-device`, named by three docstrings and existing in none, exists. **Done against the R4**: reflashed to M4c firmware, wiring pushed, the set uploaded, and a whole configure → start → result through the HTTP API. **Left**: the browser. No panel of this UI has ever been rendered |
 | **M4i** ✅ | **The board says which pin each line is** (`PROTOCOL.md` §3.6). The daemon kept its own copy of the firmware's pin table, keyed by the board name — a hand-copied pin map, which is the thing the RA4M1 HAL refuses to keep of the Arduino core's table for exactly the reason it was wrong here: a host cannot otherwise know which pin a line is, or even which lines are inputs, because both are fixed when the firmware is compiled. `pins`/`pin_map` answers out of the same table `pinMode()` is called over, one direction per request so a 32-line board's labels cannot overflow a line. A config may now name a pin instead of a bit position; where it names both they are checked, and a disagreement stops the daemon connecting rather than driving the wrong line for a session. Firmware older than the command answers `no_pin_map`, the daemon falls back to its own table, and every label it shows is then marked `assumed` rather than passing as the board's word. 624 B of flash and 8 B of RAM |
 | **M4j** ✅ | **The serial monitor, and views that say what they are.** Two complaints from the first person to open the page who had not written it: what is a "session", what is a "trace". They are words this system uses in a particular way and a tab label teaches neither, so every view carries a sentence — in the nav, above the panel, and inside the panel, since a console embeds the panels and has no tabs. `Graphs` is `Paradigms` and `Lines` is `Lines & wiring` for the same reason. The monitor is the seventh element: `device_line_monitor.py` keeps the last 4 000 lines both directions, tapped in `SerialLink` so a line nothing could parse is in there too, served at `GET /api/device/monitor` and a stream that does not coalesce. Always recording, because a fault that happens once an hour is not reproducible on demand. It sends nothing: a terminal that could type at the board would be a second host on a one-command-in-flight link |
-| **M5** | Packaging: nfpm, systemd, sysusers, udev, logrotate, the builder containers, `release.yml`, one line in `packages/sources.txt`. **Installed on the Pi 5 alongside vstimd and triald** |
+| **M5** ▶️ | Packaging. **Done**: `packaging/`, and `make deb` builds an installable `.deb` (and `.rpm`) out of a vendored interpreter — nfpm, the systemd unit with triald's hardening, sysusers, the udev rule that names the board by VID/PID rather than granting `dialout`, logrotate for the trace tail, both conffiles, and a `check` that runs the staged tree before it is packed. **Left**: the builder containers for the architectures the build machine is not, `release.yml`, one line in `packages/sources.txt`, and **installing it on the Pi 5 alongside vstimd and triald** — which is the only part that can find out whether any of this is right |
 | **M6** | A whole session on the R4 with `triald sim`'s simulated subject replaced by the real board — which is what `PLAN.md`'s M4 actually asked for, and it needs everything above |
 | **M7** ✅ | **Data flash** (§3.4): five `hal::storage_*` entry points, the RA4M1 implementation over `DataFlashBlockDevice`, a file-backed `native.cpp` stand-in, a versioned CRC'd record with a write counter, the boot-time read, and `save` rather than `persist`. It carries the wiring, the graph set and the autorun setting — which is what lets a board run unattended, and what let demo mode be removed. **The RA4M1 path has not run on silicon**; everything above it is tested on the host and against the native device |
 

@@ -74,7 +74,8 @@ make firmware    # build for the Uno R4 Minima
 make upload      # flash it
 make emulate     # run the firmware under Renode
 make format      # clang-format in place
-make image       # both flashable images, with a manifest
+make image       # the flashable image, with a manifest
+make deb         # an installable package: the daemon, a unit, a udev rule
 make ci          # everything CI runs, except emulation
 make help        # the full list
 ```
@@ -143,6 +144,18 @@ Every CI run publishes that binary as an artifact
 toolchain, with a `MANIFEST.txt` recording the commit, sizes and checksums — a
 board in a rack cannot be asked which commit it is running. `make image` builds
 the same thing locally.
+
+## Install it on a rig
+
+`make deb` builds an installable package — the daemon and a vendored Python
+under `/opt/braemons/statemachined`, a systemd unit, a udev rule that names the
+board by VID/PID instead of granting the daemon every serial port on the box,
+and a conffile describing what the rig is. `make -C packaging packages` builds
+the `.rpm` too, from the same staged tree.
+
+It is deliberately **enabled but not started** on a first install: starting it
+greets the board, and greeting takes the rig — a board that was running trials
+on its own would stop. See [`packaging/README.md`](packaging/README.md).
 
 ## Target hardware
 
