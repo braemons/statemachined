@@ -471,7 +471,7 @@ test = [{ name = "pytest", specifier = ">=8.0" }]
 [[package]]
 name = "triald"
 version = "0.0.0"
-source = { git = "ssh://git@github.com/braemons/triald.git?rev=main#65d6676b01eae46b5dec70cc5d39fb1a656742a0" }
+source = { git = "ssh://git@github.com/braemons/triald.git?rev=main#883369a1f15be73c2cba25da7c27af7603541ea6" }
 
 [package.optional-dependencies]
 serve = [
