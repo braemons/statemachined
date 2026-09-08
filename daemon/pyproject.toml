@@ -95,6 +95,4 @@ build-backend = "hatchling.build"
 packages = ["src/statemachined"]
 
 [tool.uv.sources]
-# Pinned to a branch while the trial_id fix (contracts INTERACTIONS.md §5.1) is
-# in review; move to `main` when it merges.
-triald = { git = "ssh://git@github.com/braemons/triald.git", rev = "graph-by-name" }
+triald = { git = "ssh://git@github.com/braemons/triald.git", rev = "main" }
