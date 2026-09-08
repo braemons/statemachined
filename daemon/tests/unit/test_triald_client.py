@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -54,25 +56,30 @@ def test_the_veto_fields_are_left_at_their_defaults():
     assert report.simulated is False
 
 
+def a_capturing_client(sent: dict, status_code: int = 200) -> TrialdClient:
+    """A client whose far end records what it was sent and agrees to it.
+
+    **This proves nothing about triald.** A mock answers 200 to a body triald
+    would refuse, which is exactly how §5.1 of the contracts repo went unseen:
+    this file asserted `trial_id` was sent while triald's schema forbade the
+    field. What a mock can check is what this daemon *decides* to send. That
+    the far end accepts it is the end-to-end test's job, against a real triald.
+    """
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        sent.update(json.loads(request.content))
+        return httpx.Response(status_code)
+
+    return TrialdClient(
+        "http://triald.invalid", client=httpx.Client(transport=httpx.MockTransport(capture))
+    )
+
+
 def test_the_reaction_time_is_the_state_a_response_left():
     # Not an interpretation of what the response meant -- that is triald's --
     # only of how long the device measured the state a transition left.
-    client = TrialdClient("http://triald.invalid")
     sent: dict = {}
-
-    def capture(request: httpx.Request) -> httpx.Response:
-        sent.update(__import__("json").loads(request.content))
-        return httpx.Response(200)
-
-    transport = httpx.MockTransport(capture)
-    original_post = httpx.post
-    try:
-        httpx.post = lambda url, json, timeout: httpx.Client(transport=transport).post(
-            url, json=json, timeout=timeout
-        )
-        assert client.report_trial_outcome(a_result()) is True
-    finally:
-        httpx.post = original_post
+    assert a_capturing_client(sent).report_trial_outcome(a_result()) is True
 
     assert sent["trial_id"] == 193
     assert sent["outcome"] == "HIT"

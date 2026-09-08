@@ -132,6 +132,7 @@ saved and loaded from the web UI. See `dev/API.md` §8.
 ```sh
 make test-integration   # builds the native device, then drives whole sessions
 make test-daemon        # the same, skipping the integration half if unbuilt
+make test-e2e           # the trial loop with a real triald at the other end
 ```
 
 `tests/unit/` is arithmetic and translation: the framing, the compiler checked
@@ -143,6 +144,33 @@ which is `firmware/core`'s own session and engine built for this machine. The
 far end is therefore not a mock: a mock answers what the test author believed
 the protocol says, and this answers what the firmware says. The transport is a
 real `socket://` URL through the daemon's own `serial_link.py`.
+
+## The end-to-end suite, with triald
+
+`make test-e2e` runs one whole trial across both daemons: triald picks the
+trial and hands out its number, this daemon configures the firmware for that
+number and runs it, and the outcome goes back to triald and lands in its record.
+It is the only test of the *handover*, and the handover was broken with nothing
+to catch it — this daemon sent `trial_id`, triald's schema forbade unknown
+fields and had no such field, and every outcome came back 422 while
+`tests/unit/test_triald_client.py` asserted the field against a mock that
+answers 200 to anything. **A mock at the far end of a contract tests one side's
+opinion of the contract twice.**
+
+triald is a pip-installable FastAPI app, so it runs *in this process*: Starlette's
+`TestClient` is an `httpx.Client` over it, and `TrialdClient` takes one. No
+subprocess, no port, no teardown race — and what carries the bytes is the only
+thing replaced.
+
+It is a separate group and a separate target because triald is a private repo
+and fetching it needs credentials. Without them the tests skip themselves and
+say so, so `make test-daemon` on a fresh checkout never fails for want of
+another repo. The contract itself is also checked without a device, by
+`tests/unit/test_the_outcome_report_matches_trialds_schema.py`, which reads
+triald's published OpenAPI and asserts what this daemon sends is something that
+schema accepts.
+
+See the contracts repo, `INTERACTIONS.md` §5.1 and §8.
 
 ## The hardware test suite
 

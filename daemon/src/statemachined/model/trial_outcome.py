@@ -33,7 +33,17 @@ class TrialOutcome(IntEnum):
     EARLY = 5
     LATE = 6
     EYE_ERROR = 7
-    UNEXPECTED_START_SIGNAL = 8
+    INEXPECTED_START_SIGNAL = 8
+    """Spelled the way VStim spells it, typo and all.
+
+    `VStimLib/TDR.h` declares `InexpectedStartSignal` and
+    `GetTrialOutcomeString` writes that literal into every .tdr the lab has,
+    which makes the misspelling the wire contract rather than a mistake this
+    copy may quietly correct. Correcting it here spelled the name one way in
+    two of the five copies of this table, so triald refused the outcome with a
+    422 and `graph_definition.compile` refused any graph written from triald's
+    vocabulary."""
+
     WRONG_START_SIGNAL = 9
     CANCELLED = 10
 

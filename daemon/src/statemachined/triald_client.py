@@ -52,9 +52,36 @@ class TrialdClient:
     the first thing anybody does with this package the thing that fails.
     """
 
-    def __init__(self, base_url: str, timeout_seconds: float = 5.0):
+    def __init__(
+        self,
+        base_url: str,
+        timeout_seconds: float = 5.0,
+        client: httpx.Client | None = None,
+    ):
+        """
+        Args:
+            client: what carries the request. The default opens one on the
+                network. The end-to-end tests pass Starlette's `TestClient` for
+                a real triald, which is an `httpx.Client` over that app in this
+                process -- the only way this one call is checked against the
+                thing that actually answers it rather than against a mock that
+                agrees with whatever is sent. The unit tests pass one over an
+                `httpx.MockTransport`.
+
+                A client given here is the caller's to close; one made here is
+                closed by `close`.
+        """
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
+        # One client for the daemon's life rather than one per trial: `httpx.post`
+        # opens a connection each time, and this call happens once a trial for a
+        # session's length.
+        self._owns_client = client is None
+        self._client = client if client is not None else httpx.Client(timeout=timeout_seconds)
+
+    def close(self) -> None:
+        if self._owns_client:
+            self._client.close()
 
     @property
     def is_configured(self) -> bool:
@@ -80,10 +107,9 @@ class TrialdClient:
             # response to time and it stays zero.
             reaction_time_ms=_reaction_time_milliseconds(result),
         )
-        response = httpx.post(
+        response = self._client.post(
             f"{self.base_url}/api/trial/outcome",
             json=report.model_dump(),
-            timeout=self.timeout_seconds,
         )
         response.raise_for_status()
         return True

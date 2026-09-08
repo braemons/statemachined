@@ -52,6 +52,26 @@ statemachined = "statemachined.command_line_interface:main"
 # that just wants to talk to a board.
 [dependency-groups]
 test = ["pytest>=8.0"]
+# The end-to-end tests only, and never at runtime. Its own group rather than
+# part of `test` because triald lives in a private repo: the default `make
+# test-daemon` must not need credentials to fetch a *test* dependency, or the
+# first thing a new checkout does is fail on something that has nothing to do
+# with this daemon. Without it `tests/integration/test_a_whole_trial_with_triald.py`
+# and `tests/unit/test_the_outcome_report_matches_trialds_schema.py` skip
+# themselves, saying why. With it (`make test-e2e`) they run.
+#
+# The dependency points this way on purpose: this daemon already knows triald's
+# schema (triald_client.py transcribes it) and triald knows nothing of this one,
+# so testing the pair here is the direction that inverts nothing. triald is a
+# FastAPI app, so it mounts in-process through Starlette's TestClient -- no
+# subprocess, no port, no teardown race.
+#
+# Marked rather than folded into requires-python: triald needs 3.12 and this
+# daemon runs on 3.11, and raising a shipped daemon's floor for a test
+# dependency is the wrong trade.
+#
+# See the contracts repo, INTERACTIONS.md §8.
+e2e = ["triald[serve] ; python_full_version >= '3.12'"]
 
 [tool.pytest.ini_options]
 # tests/unit is host-only. tests/integration needs the native device built --
@@ -73,3 +93,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/statemachined"]
+
+[tool.uv.sources]
+# Pinned to a branch while the trial_id fix (contracts INTERACTIONS.md §5.1) is
+# in review; move to `main` when it merges.
+triald = { git = "ssh://git@github.com/braemons/triald.git", rev = "graph-by-name" }

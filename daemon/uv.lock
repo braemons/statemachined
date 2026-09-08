@@ -1,6 +1,10 @@
 version = 1
 revision = 3
 requires-python = ">=3.11"
+resolution-markers = [
+    "python_full_version >= '3.12'",
+    "python_full_version < '3.12'",
+]
 
 [[package]]
 name = "annotated-doc"
@@ -443,6 +447,9 @@ dependencies = [
 ]
 
 [package.dev-dependencies]
+e2e = [
+    { name = "triald", extra = ["serve"], marker = "python_full_version >= '3.12'" },
+]
 test = [
     { name = "pytest" },
 ]
@@ -458,7 +465,20 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
+e2e = [{ name = "triald", extras = ["serve"], marker = "python_full_version >= '3.12'", git = "ssh://git@github.com/braemons/triald.git?rev=graph-by-name" }]
 test = [{ name = "pytest", specifier = ">=8.0" }]
+
+[[package]]
+name = "triald"
+version = "0.0.0"
+source = { git = "ssh://git@github.com/braemons/triald.git?rev=graph-by-name#16e17fcbd29b1613354685e0573cfe592c4700d3" }
+
+[package.optional-dependencies]
+serve = [
+    { name = "fastapi", marker = "python_full_version >= '3.12'" },
+    { name = "pydantic", marker = "python_full_version >= '3.12'" },
+    { name = "uvicorn", extra = ["standard"], marker = "python_full_version >= '3.12'" },
+]
 
 [[package]]
 name = "typing-extensions"
