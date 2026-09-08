@@ -30,10 +30,12 @@
 # Worth setting on a rig. Empty means "do not check", which is a bench's answer.
 expected_board = "uno_r4_minima"
 
-# Where to report an outcome. Empty means "report nowhere", which is what makes
-# this daemon usable on a box with no triald -- and what a board running its own
-# trials is doing anyway.
-#triald_base_url = "http://127.0.0.1:8080"
+# There is no setting here naming another daemon, and there is not meant to be.
+# This one reports to nobody: it writes what it did to its trace, and whatever
+# wants it -- triald, a console, a browser tab -- opens `WS /api/trace/stream`
+# and reads. Nothing is registered, nothing is retried, and a rig with nobody
+# watching runs and records trials exactly the same. `GET /api/observers` says
+# who is reading right now, which is a debugging aid and not a contract.
 
 # Fixed for the life of the daemon when set, so a whole session replays --
 # including one interrupted by a reconnect. Empty draws one per connection,

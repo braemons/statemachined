@@ -1037,3 +1037,68 @@ def test_handing_the_rig_over_is_written_down_beside_the_trials(api):
     kinds = [entry["kind"] for entry in api.get("/api/trace").json()["entries"]]
     assert "autorun_changed" in kinds
     assert "settings_saved" in kinds
+
+
+# ----------------------------------------------------------- the observers ---
+#
+# This daemon reports to nobody: it publishes to its trace and whoever wants it
+# opens a stream. The list exists so a person can answer "is triald actually
+# listening?", which is the first question when trials stop being recorded.
+
+
+def test_nobody_is_watching_until_somebody_opens_a_stream(api):
+    assert api.get("/api/observers").json() == {"observers": [], "count": 0}
+
+
+def test_a_stream_appears_in_the_list_while_it_is_open_and_not_after(api):
+    with api.websocket_connect("/api/trace/stream?observer=triald"):
+        listed = wait_until(lambda: api.get("/api/observers").json()["observers"] or None)
+        assert listed is not None
+        assert listed[0]["name"] == "triald"
+        assert listed[0]["stream"] == "trace"
+
+    # Closing the socket is the whole of unsubscribing.
+    assert wait_until(lambda: api.get("/api/observers").json()["count"] == 0)
+
+
+def test_an_observer_that_does_not_say_what_it_is_is_still_listed(api):
+    # A browser tab is an observer too and has nothing useful to declare.
+    with api.websocket_connect("/api/stream"):
+        listed = wait_until(lambda: api.get("/api/observers").json()["observers"] or None)
+        assert listed is not None
+        assert listed[0]["name"] == "unnamed"
+        assert listed[0]["stream"] == "state"
+
+
+def test_the_list_says_how_much_an_observer_has_had(api):
+    """The diagnostic that matters: connected and receiving nothing is a
+    different fault from not connected."""
+    api.put("/api/graphs/watched", json=timed_graph("watched", 20))
+    api.post("/api/session/graphs", json={"graph_names": ["watched"]})
+
+    with api.websocket_connect("/api/trace/stream?observer=triald") as stream:
+        api.post("/api/trial/configure", json={"trial_id": 1, "graph": "watched"})
+        api.post("/api/trial/start", json={"trial_id": 1})
+        # Drain until the trial is over, so there is something to have counted.
+        while True:
+            entry = stream.receive_json()
+            if entry.get("kind") == "trial_result":
+                break
+
+        delivered = wait_until(
+            lambda: (api.get("/api/observers").json()["observers"] or [{}])[0].get("delivered")
+        )
+        assert delivered and delivered > 0
+
+
+def test_two_observers_are_both_listed(api):
+    with api.websocket_connect("/api/trace/stream?observer=triald"):
+        with api.websocket_connect("/api/trace/stream?observer=console"):
+            names = wait_until(
+                lambda: (
+                    sorted(o["name"] for o in api.get("/api/observers").json()["observers"])
+                    if api.get("/api/observers").json()["count"] == 2
+                    else None
+                )
+            )
+            assert names == ["console", "triald"]

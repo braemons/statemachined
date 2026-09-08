@@ -40,10 +40,6 @@ connect_on_startup = true
 # in rig_configuration.py for the failure it exists to catch.
 expected_board = ""
 
-# Nowhere: a bench box has no triald, and a daemon that could not run without
-# one would be untestable exactly here.
-triald_base_url = ""
-
 # Relative to the directory make runs in, which is the repository root.
 graph_store_directory = "build/bench/graphs"
 state_machine_config_directory = "build/bench/configs"

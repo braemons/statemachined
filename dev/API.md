@@ -476,7 +476,28 @@ anybody asked. DAEMON.md §4.6 is the design; this is its surface.
 |---|---|
 | `GET /api/trace` | the ring, newest last. `?since_entry_number=` and `?limit=` |
 | `GET /api/trace/trial/{trial_id}` | one trial's visits |
-| `WS /api/trace/stream` | every entry as it arrives, **not** coalesced |
+| `WS /api/trace/stream` | every entry as it arrives, **not** coalesced. `?observer=<name>` labels the connection |
+| `GET /api/observers` | who is reading a stream right now. A debugging aid |
+
+**This is how anything observes a rig, triald included.** The daemon publishes
+and assumes nobody read it: opening the socket is the whole of subscribing,
+closing it is the whole of leaving, nothing is registered and nothing is
+retried. There is no setting here naming a consumer and no outbound call — a rig
+with nobody watching runs and records trials exactly the same, which is what a
+bench box does every day.
+
+The stream **loses nothing, or says so**. A consumer too slow for the ring gets
+`{"error": "fell_out_of_the_ring", "lost_from_entry_number", "lost_to_entry_number"}`
+and is disconnected, rather than handed a shorter answer that looks complete —
+and it recovers with `GET /api/trace/trial/{id}`, which answers exactly whatever
+the stream did.
+
+`GET /api/observers` lists each live stream: its self-declared `name`, which
+`stream`, the peer `address`, `connected_seconds`, how many messages it has been
+`delivered`, and whether it `fell_behind`. **The daemon never acts on this
+list.** It exists for the question that is otherwise a packet capture: when
+trials stop reaching triald, is nothing connected, or is something connected and
+receiving nothing? A name grants nothing and there is nothing to forge.
 
 ```jsonc
 { "entry_number": 4172, "kind": "visit", "device_sequence_number": 2,

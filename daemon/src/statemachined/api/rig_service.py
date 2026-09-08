@@ -59,7 +59,7 @@ from ..model.state_machine_config import StateMachineConfig
 from ..model.trial_record import TrialResultRecord
 from ..rig_configuration import RigConfiguration
 from ..state_machine_config_store import StateMachineConfigStore
-from ..triald_client import TrialdClient
+from ..observer_registry import ObserverRegistry
 
 
 class NoConfigLoaded(RuntimeError):
@@ -87,6 +87,9 @@ class RigService:
 
     def __init__(self, configuration: RigConfiguration):
         self.configuration = configuration
+        #: Who is watching, while they are watching. Never read by this daemon:
+        #: it publishes and assumes nobody is there. See observer_registry.py.
+        self.observers = ObserverRegistry()
         self.graph_store = GraphStore(configuration.graph_store_directory)
         self.state_machine_config_store = StateMachineConfigStore(
             configuration.state_machine_config_directory
@@ -114,7 +117,6 @@ class RigService:
         #: trial and never touches it, which is why this is a default and not a
         #: mode -- an explicit `graph` always wins.
         self.active_graph_name: str | None = None
-        self.triald = TrialdClient(configuration.triald_base_url)
         #: The wire itself, both directions, for as long as the ring holds it.
         #: Always on: a link fault that happens once an hour is not reproducible
         #: on demand, and a monitor somebody has to switch on first is one that
@@ -304,20 +306,11 @@ class RigService:
             total_visit_count=result.total_visit_count,
             path_was_truncated=result.path_was_truncated,
         )
-        self._report_the_outcome_to_triald(result)
-
-    def _report_the_outcome_to_triald(self, result: TrialResultRecord) -> None:
-        if not self.triald.is_configured:
-            return
-        try:
-            self.triald.report_trial_outcome(result)
-        except Exception as exc:  # noqa: BLE001
-            # A trial whose outcome did not reach triald is a hole in the
-            # session's record. The daemon cannot fix it, so it writes down that
-            # it happened rather than letting the hole be silent.
-            self.trace.append(
-                KIND_SEQUENCE_GAP, trial_id=result.trial_id, detail=f"triald: {exc}"
-            )
+        # And that is the end of it. The result is in the trace, which is what
+        # anybody watching reads and what stays on the rig if nobody is. This
+        # daemon sends it nowhere and waits for nobody: it has no way to know
+        # whether a consumer exists, or should, or is running a session. Only a
+        # consumer can tell "not yet" from "never", so the deadline is theirs.
 
     # --------------------------------------------- the state-machine config ---
 

@@ -95,4 +95,4 @@ build-backend = "hatchling.build"
 packages = ["src/statemachined"]
 
 [tool.uv.sources]
-triald = { git = "ssh://git@github.com/braemons/triald.git", rev = "main" }
+triald = { git = "ssh://git@github.com/braemons/triald.git", rev = "observe-the-executor" }

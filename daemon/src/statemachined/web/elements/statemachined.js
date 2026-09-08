@@ -43,6 +43,7 @@ export { StateMachineConfigPanelElement } from "./state_machine_config_panel_ele
 export { SessionPanelElement } from "./session_panel_element.js";
 export { RecordingPanelElement } from "./recording_panel_element.js";
 export { TracePanelElement } from "./trace_panel_element.js";
+export { ObserversPanelElement } from "./observers_panel_element.js";
 export { FirmwarePanelElement } from "./firmware_panel_element.js";
 export { SerialMonitorPanelElement } from "./serial_monitor_panel_element.js";
 export { renderGraphNodeDiagram } from "./graph_node_diagram.js";
@@ -61,6 +62,7 @@ export const STATEMACHINED_ELEMENT_NAMES = [
   "statemachined-session",
   "statemachined-recording",
   "statemachined-trace",
+  "statemachined-observers",
   "statemachined-firmware",
   "statemachined-monitor",
 ];

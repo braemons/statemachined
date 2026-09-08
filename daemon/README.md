@@ -145,30 +145,49 @@ far end is therefore not a mock: a mock answers what the test author believed
 the protocol says, and this answers what the firmware says. The transport is a
 real `socket://` URL through the daemon's own `serial_link.py`.
 
+## This daemon reports to nobody
+
+There is no setting here naming another daemon and no outbound call of any kind.
+Every trial's result goes into the trace, and whatever wants it — triald, a
+console, a browser tab, a script — opens `WS /api/trace/stream` and reads.
+Opening the socket is the whole of subscribing; closing it is the whole of
+leaving. Nothing is registered, nothing is retried, and a rig with nobody
+watching runs and records trials exactly the same.
+
+That is not indifference, it is the only honest position: this daemon cannot
+know whether a consumer exists, or should, or is running a session. **Only a
+consumer can tell "not yet" from "never"**, so the deadline on a missing outcome
+belongs to whoever is waiting for one.
+
+`GET /api/observers` and the **Observers** panel say who is reading right now.
+It is a debugging aid and not a contract — the daemon never acts on that list —
+and it exists for one question: when trials stop reaching triald, is nothing
+connected, or is something connected and receiving nothing? Without it that is
+answered with a packet capture. `?observer=<name>` on the stream URL is a label
+for that screen, self-declared and unverified, because nothing is granted by it.
+
+The stream loses nothing. A consumer too slow for the ring is told exactly which
+entries are gone and disconnected, rather than handed a shorter answer that
+looks complete — and it can fetch any trial it missed with
+`GET /api/trace/trial/{id}`.
+
 ## The end-to-end suite, with triald
 
-`make test-e2e` runs one whole trial across both daemons: triald picks the
-trial and hands out its number, this daemon configures the firmware for that
-number and runs it, and the outcome goes back to triald and lands in its record.
-It is the only test of the *handover*, and the handover was broken with nothing
-to catch it — this daemon sent `trial_id`, triald's schema forbade unknown
-fields and had no such field, and every outcome came back 422 while
-`tests/unit/test_triald_client.py` asserted the field against a mock that
-answers 200 to anything. **A mock at the far end of a contract tests one side's
-opinion of the contract twice.**
+`make test-e2e` runs one whole trial across both daemons: triald picks the trial
+and hands out its number, arms this daemon for exactly that number, starts it,
+watches the trace go by, pulls that trial's events by id and turns them into an
+outcome in its own record. It is the only test that the two halves fit.
 
-triald is a pip-installable FastAPI app, so it runs *in this process*: Starlette's
-`TestClient` is an `httpx.Client` over it, and `TrialdClient` takes one. No
-subprocess, no port, no teardown race — and what carries the bytes is the only
-thing replaced.
+The dependency is test-only and one way: this daemon knows nothing about triald,
+and triald is imported here because the expensive fixture — the firmware built
+for this machine — is here. triald is a FastAPI app and so is this one, so both
+run in this process over Starlette's `TestClient`, which routes by path and
+ignores the host: no subprocess, no port, no teardown race, and each side builds
+exactly the URL it would build on a real network.
 
-It is a separate group and a separate target because triald is a private repo
-and fetching it needs credentials. Without them the tests skip themselves and
-say so, so `make test-daemon` on a fresh checkout never fails for want of
-another repo. The contract itself is also checked without a device, by
-`tests/unit/test_the_outcome_report_matches_trialds_schema.py`, which reads
-triald's published OpenAPI and asserts what this daemon sends is something that
-schema accepts.
+It is a separate group and a separate target because triald is a separate repo.
+Without it the tests skip themselves and say so, so `make test-daemon` on a
+fresh checkout never fails for want of another one.
 
 See the contracts repo, `INTERACTIONS.md` §5.1 and §8.
 

@@ -66,10 +66,6 @@ class RigConfiguration(BaseModel):
     #: wrong hole. Empty means "do not check", which is what a bench wants.
     expected_board: str = ""
 
-    #: Where to report an outcome. Empty means "report nowhere", which is what a
-    #: bench box wants and what makes the daemon usable without triald running.
-    triald_base_url: str = ""
-
     #: Fixed for the life of the daemon when set, so that a whole session --
     #: including one interrupted by a reconnect -- replays. Empty means one is
     #: drawn per connection, which is right for a rig and wrong for a

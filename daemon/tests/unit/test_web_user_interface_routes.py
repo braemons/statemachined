@@ -44,6 +44,7 @@ ELEMENT_TAG_NAMES = [
     "statemachined-session",
     "statemachined-recording",
     "statemachined-trace",
+    "statemachined-observers",
     "statemachined-firmware",
     "statemachined-monitor",
 ]
@@ -321,6 +322,35 @@ def test_the_diagram_puts_an_unreachable_state_where_it_can_be_seen() -> None:
     assert result["unreachable"] == ["Stranded"]
     # The predicate is drawn as the named lines, never as the wire's masks.
     assert result["edges"] == ["all lever"]
+
+
+def test_the_observers_panel_says_which_stream_and_for_how_long() -> None:
+    """The two pure helpers behind the panel a person reads at two in the
+    morning, when trials have stopped reaching triald.
+
+    The distinction the wording has to carry: the trace stream loses nothing and
+    says so if it ever does, while the state stream coalesces on purpose. An
+    observer on the wrong one would see a rig that looks alive and no trials.
+    """
+    module = (web_directory() / "elements" / "observers_panel_element.js").as_uri()
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ describeStream, describeDuration }} = await import({module!r});\n"
+        "console.log(JSON.stringify({\n"
+        "  trace: describeStream('trace'),\n"
+        "  state: describeStream('state'),\n"
+        "  unknown: describeStream(undefined),\n"
+        "  durations: [0, 41, 90, 3700, -1, undefined].map(describeDuration),\n"
+        "}));\n"
+    )
+    result = json.loads(printed)
+    assert "none skipped" in result["trace"]
+    assert "coalesced" in result["state"]
+    assert result["unknown"] == "(unknown)"
+    # A negative or missing duration is a clock artefact, not something to show
+    # somebody as "-1s".
+    assert result["durations"] == ["0s", "41s", "1m 30s", "1h 1m", "0s", "0s"]
 
 
 # ------------------------------------------------- the panels, in a fake DOM ---

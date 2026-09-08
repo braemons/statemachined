@@ -107,7 +107,7 @@ statemachined/
 │   │   ├── graph_set_compiler.py       names → indices, and the caps check
 │   │   ├── graph_store.py              graphs on disk under /var/lib/braemons/statemachined
 │   │   ├── state_machine_config_store.py  the line map + graphs, as saved files
-│   │   ├── triald_client.py            POST /api/trial/outcome
+│   │   ├── observer_registry.py       who is watching, for the UI to show
 │   │   ├── api/                        FastAPI routers — see §4
 │   │   ├── mdns_service_advertisement.py  NEW: _statemachined._tcp, and the stable id
 │   │   └── web/                        the UI, as package data — see §5
@@ -804,7 +804,7 @@ ends up inverted.
 
 ### 4.3 The trial loop
 
-triald drives; statemachined reports.
+triald drives; statemachined **publishes**, and reports to nobody.
 
 | | |
 |---|---|
@@ -842,11 +842,32 @@ states on a 32-state board, and losing the session to it. It is the slowest call
 in the API by a wide margin (§3.2: tens of seconds on a UART rig) and the one the
 UI should show a progress bar for.
 
-Outbound, one call: `POST {triald}/api/trial/outcome` with an `OutcomeReport`
-carrying `outcome`, `manipulandum`, `reaction_time_ms`, `terminating_interval`,
-`reward_ms`, `simulated: false`. **`precise_fixation` and `frame_loss` are left
-at their defaults** — the daemon has never heard of the eye monitor or vstimd,
-and acquiring an opinion about them would make it a second decision authority.
+**Outbound: nothing.** There is no client here, no setting naming another
+daemon, and no call this daemon makes to anybody. A trial's result goes into the
+trace with everything else it did, and whatever wants it opens
+`WS /api/trace/stream` — lossless, and it says so if a consumer ever falls out
+of the ring — or fetches one trial with `GET /api/trace/trial/{id}`. Opening the
+socket is the whole of subscribing.
+
+This is the same rule §4.3's `GET /api/trace/trial/{id}` already stated — *"the
+daemon never sends this anywhere and never assumes anybody read it"* — applied
+to the one message that was breaking it. It could not have been kept anyway:
+this daemon cannot know whether a consumer exists, or should, or is running a
+session, so **only a consumer can tell "not yet" from "never"** and the deadline
+on a missing outcome is theirs.
+
+**What the daemon does not put in the trace is the same as before.** It reports
+what the device measured; `precise_fixation` and `frame_loss` are never set,
+because the daemon has never heard of the eye monitor or of vstimd and either
+can veto acceptance on its own. Nor does it compute a reaction time: the visits
+carry each state's exit cause and measured duration, and *"the reaction time is
+the last state a response left"* is an interpretation of behaviour. It belongs
+to the decision authority, and it now lives there (`triald.executor`).
+
+`GET /api/observers` lists who is reading right now — a debugging aid, never a
+contract, and the daemon never acts on it. It answers the one question that is
+otherwise a packet capture: is nothing connected, or is something connected and
+receiving nothing?
 
 A cancel that races a terminal state comes back with the **real outcome**, not a
 fabricated `CANCELLED`. The daemon passes that through unchanged; asking to

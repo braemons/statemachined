@@ -40,9 +40,10 @@ def load_the_bench_state_machine_config() -> StateMachineConfig:
 def test_the_bench_rig_config_loads() -> None:
     configuration = load_the_bench_rig_config()
     assert configuration.device_target
-    # Nowhere to report to: a bench box has no triald, and a daemon that could
-    # not run without one would be untestable exactly here.
-    assert configuration.triald_base_url == ""
+    # And nothing about anybody else. This daemon reports to nobody and has no
+    # setting naming another daemon: it publishes to its trace and whoever wants
+    # it opens a stream. A bench box is therefore not a special case.
+    assert not any("triald" in name for name in vars(configuration))
 
 
 def test_the_bench_writes_only_under_the_checkout() -> None:

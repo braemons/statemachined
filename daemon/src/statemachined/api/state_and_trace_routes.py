@@ -22,6 +22,7 @@ import asyncio
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 
+from ..observer_registry import Observer
 from .http_errors import refusal
 from .rig_service import RigService
 
@@ -78,6 +79,7 @@ async def stream_state(websocket: WebSocket) -> None:
     """Coalesced frames: the current state, repeatedly, and never a backlog."""
     await websocket.accept()
     service: RigService = websocket.app.state.rig_service
+    observer_id = _register_observer(websocket, service, stream="state")
     previous_frame: dict | None = None
     try:
         while True:
@@ -86,10 +88,13 @@ async def stream_state(websocket: WebSocket) -> None:
             frame = await asyncio.to_thread(build_state_snapshot, service)
             if frame != previous_frame:
                 await websocket.send_json(frame)
+                service.observers.note_delivery(observer_id)
                 previous_frame = frame
             await asyncio.sleep(STREAM_POLL_SECONDS)
     except (WebSocketDisconnect, RuntimeError):
         return
+    finally:
+        service.observers.unregister(observer_id)
 
 
 # --------------------------------------------------------------- the trace ---
@@ -143,13 +148,24 @@ def read_trace_for_one_trial(request: Request, trial_id: int) -> dict:
 
 @trace_router.websocket("/stream")
 async def stream_trace(websocket: WebSocket) -> None:
-    """Every entry as it arrives, in order, none skipped."""
+    """Every entry as it arrives, in order, none skipped.
+
+    **This is how anything observes a rig**, triald included. There is nothing to
+    register and nothing to be granted: opening the socket is the whole of
+    subscribing, closing it is the whole of unsubscribing, and the daemon does
+    not act on who is here. `?observer=<name>` labels the connection for
+    `GET /api/observers` and the web UI, so a person can see that triald is
+    listening -- which is the first question anybody asks when trials stop being
+    recorded. Unnamed is fine.
+    """
     await websocket.accept()
     service: RigService = websocket.app.state.rig_service
+    observer_id = _register_observer(websocket, service, stream="trace")
     next_entry_number = service.trace.newest_entry_number() + 1
     try:
         while True:
             if service.trace.has_fallen_out_of_the_ring(next_entry_number):
+                service.observers.note_fell_behind(observer_id)
                 # Genuinely lost data. Say so and close, rather than silently
                 # resuming from whatever is left -- a consumer that believes it
                 # saw everything is worse than one that knows it did not.
@@ -168,6 +184,39 @@ async def stream_trace(websocket: WebSocket) -> None:
             for entry in entries:
                 await websocket.send_json(entry)
                 next_entry_number = entry["entry_number"] + 1
+            service.observers.note_delivery(observer_id, len(entries))
             await asyncio.sleep(STREAM_POLL_SECONDS)
     except (WebSocketDisconnect, RuntimeError):
         return
+    finally:
+        service.observers.unregister(observer_id)
+
+
+# ----------------------------------------------------------- the observers ---
+
+
+def _register_observer(websocket: WebSocket, service: RigService, *, stream: str) -> int:
+    """Note that this socket is watching, and say what to call it."""
+    client = websocket.client
+    return service.observers.register(
+        name=websocket.query_params.get("observer"),
+        stream=stream,
+        address=f"{client.host}:{client.port}" if client else None,
+    )
+
+
+@router.get("/api/observers")
+def read_observers(request: Request) -> dict:
+    """Who is watching this rig right now.
+
+    A diagnostic, not a contract. The daemon does not act on this list, does not
+    wait for anybody in it, and does not remember it across a restart -- it
+    publishes and assumes nobody read it. What the list is for is the question a
+    person asks when trials stop reaching triald, which is otherwise answered
+    with a packet capture.
+    """
+    observers: list[Observer] = service_of(request).observers.observers()
+    return {
+        "observers": [observer.as_dict() for observer in observers],
+        "count": len(observers),
+    }

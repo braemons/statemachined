@@ -184,6 +184,10 @@ export class DaemonApiClient {
     return this.delete("/api/session/active-graph");
   }
 
+  listObservers() {
+    return this.get("/api/observers");
+  }
+
   listRecordings() {
     return this.get("/api/recordings");
   }

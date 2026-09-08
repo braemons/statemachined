@@ -65,13 +65,17 @@ const VIEWS = [
       "statemachined-session",
       "statemachined-recording",
       "statemachined-trace",
+      "statemachined-observers",
       "statemachined-monitor",
     ],
     description:
       "What this rig is doing, and what it did. Open a session to put the paradigms on the " +
       "board, arm a trial by hand or let triald drive it, keep a named recording of what " +
-      "happens, and read back the trace underneath. The serial monitor at the bottom is for " +
-      "the moment the layers stop agreeing and the question is what actually crossed the wire.",
+      "happens, and read back the trace underneath. Observers says who is reading that trace " +
+      "over a stream -- nothing here waits for them, but it is how you tell 'triald is not " +
+      "connected' from 'triald is connected and getting nothing'. The serial monitor at the " +
+      "bottom is for the moment the layers stop agreeing and the question is what actually " +
+      "crossed the wire.",
   },
 ];
 
