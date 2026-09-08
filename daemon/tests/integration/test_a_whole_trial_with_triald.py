@@ -160,9 +160,9 @@ def test_an_outcome_the_device_named_is_the_one_triald_counts(rig, triald_client
     # The device treats the code as opaque and triald owns what it means. This
     # is the one assertion that the eleven .tdr codes are spelled the same on
     # both sides -- code 8 was not, and the wire carries the *name*.
-    record = run_one_trial(rig, triald_client, outcome="INEXPECTED_START_SIGNAL")
+    record = run_one_trial(rig, triald_client, outcome="UNEXPECTED_START_SIGNAL")
     assert record["outcome"]["code"] == 8
-    assert record["outcome"]["name"] == "INEXPECTED_START_SIGNAL"
+    assert record["outcome"]["name"] == "UNEXPECTED_START_SIGNAL"
 
 
 def test_the_veto_fields_the_device_cannot_know_are_left_for_others(rig, triald_client):

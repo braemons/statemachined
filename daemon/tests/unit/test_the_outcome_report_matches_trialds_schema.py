@@ -62,9 +62,10 @@ def test_every_field_triald_requires_is_one_this_daemon_sends():
 def test_the_outcome_names_this_daemon_can_send_are_names_triald_knows():
     # The outcome crosses as a name, not a code, so the two spellings of the
     # eleven .tdr outcomes have to agree exactly. They did not: code 8 is
-    # `InexpectedStartSignal` in VStim's TDR.h -- a typo, and the wire contract
-    # because `GetTrialOutcomeString` writes that literal into every .tdr the
-    # lab has -- and this daemon had corrected it to UNEXPECTED_.
+    # `InexpectedStartSignal` in VStim's TDR.h, and half this family had
+    # inherited the typo while half had corrected it. The value is the wire
+    # contract; the spelling only has to match itself, and now spells it
+    # UNEXPECTED_START_SIGNAL everywhere.
     from triald.outcomes import TrialOutcome as TrialdOutcome
 
     from statemachined.model.trial_outcome import TrialOutcome

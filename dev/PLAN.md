@@ -233,7 +233,7 @@ Terminal states carry `outcome` and nothing else. `outcome` is one of triald's
 eleven `.tdr` codes, by name or by number — **never renumbered**:
 
 ```
--1 UNDETERMINED   2 WRONG_RESPONSE        5 EARLY      8 INEXPECTED_START_SIGNAL
+-1 UNDETERMINED   2 WRONG_RESPONSE        5 EARLY      8 UNEXPECTED_START_SIGNAL
  0 NOT_STARTED    3 EARLY_HIT             6 LATE       9 WRONG_START_SIGNAL
  1 HIT            4 EARLY_WRONG_RESPONSE  7 EYE_ERROR 10 CANCELLED
 ```

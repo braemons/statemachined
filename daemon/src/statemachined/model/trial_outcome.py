@@ -33,15 +33,16 @@ class TrialOutcome(IntEnum):
     EARLY = 5
     LATE = 6
     EYE_ERROR = 7
-    INEXPECTED_START_SIGNAL = 8
-    """Spelled the way VStim spells it, typo and all.
+    UNEXPECTED_START_SIGNAL = 8
+    """Spelled correctly, unlike VStim's `InexpectedStartSignal`.
 
-    `VStimLib/TDR.h` declares `InexpectedStartSignal` and
-    `GetTrialOutcomeString` writes that literal into every .tdr the lab has,
-    which makes the misspelling the wire contract rather than a mistake this
-    copy may quietly correct. Correcting it here spelled the name one way in
-    two of the five copies of this table, so triald refused the outcome with a
-    422 and `graph_definition.compile` refused any graph written from triald's
+    The **value** is the wire contract, not the spelling: 8 is what a .tdr
+    holds and what an analysis script reads. Nothing in this family needs to
+    read a name VStim wrote, so the typo was not inherited -- but the name does
+    have to be spelled the same in all five copies of this table, because
+    `triald_client` sends `outcome.name` and a graph declares its outcome by
+    string. It was not, for a while, and the two symptoms were a 422 from triald
+    and `graph_definition.compile` refusing any graph written from the other
     vocabulary."""
 
     WRONG_START_SIGNAL = 9
