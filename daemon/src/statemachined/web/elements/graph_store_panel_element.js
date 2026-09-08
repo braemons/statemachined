@@ -61,6 +61,16 @@ const OUTCOME_NAMES = [
   "CANCELLED",
 ];
 
+/// How often the rig's line names are re-read.
+///
+/// They are not this panel's own data -- they are the line map next door, and
+/// on a rig being set up for the first time the usual order is *name the lines,
+/// push the wiring, then write a graph against it*. Read once at `start()`,
+/// this panel would hold the empty map it opened with and every line chooser in
+/// the editor would be empty until the page was reloaded. So it is a poll, at
+/// the same cost as any other panel's.
+const LINE_NAME_POLL_SECONDS = 2;
+
 const ACTION_KINDS = ["high", "low", "toggle", "pulse"];
 const DISTRIBUTION_KINDS = ["fixed", "uniform", "exponential", "choice"];
 
@@ -107,16 +117,41 @@ export class GraphStorePanelElement extends BasePanelElement {
     await this.attempt(async () => {
       const listing = await this.api.listStoredGraphs();
       this.storedGraphNames = listing.graphs.map((graph) => graph.name);
-      const lines = await this.api.readDeviceLines().catch(() => ({
-        input_lines: [],
-        output_lines: [],
-      }));
-      this.inputLineNames = lines.input_lines.map((line) => line.name);
-      this.outputLineNames = lines.output_lines.map((line) => line.name);
+      await this.readTheLineNames();
       const wanted = this.getAttribute("name") || this.storedGraphNames[0];
       if (wanted) await this.load(wanted);
       else this.paint();
     });
+    // A timer of its own rather than `pollEvery`, which reports what it finds
+    // in the panel's one failure slot -- and would therefore clear a refused
+    // save off the screen two seconds after somebody read half of it. This
+    // poll has nothing to say: no device means no names, which the editor
+    // shows where the names would be.
+    this.pollTimers.push(
+      setInterval(() => this.readTheLineNames({ repaint: true }), LINE_NAME_POLL_SECONDS * 1000),
+    );
+  }
+
+  /// The rig's named lines, which are the vocabulary the editor offers.
+  ///
+  /// A device that is not there is not a failure here -- it means no names yet,
+  /// which the editor says where it would otherwise show an empty menu. The
+  /// repaint is skipped unless the names actually changed, because this runs on
+  /// a timer over a form somebody is typing into.
+  async readTheLineNames({ repaint = false } = {}) {
+    const lines = await this.api.readDeviceLines().catch(() => ({
+      input_lines: [],
+      output_lines: [],
+    }));
+    const input = lines.input_lines.map((line) => line.name);
+    const output = lines.output_lines.map((line) => line.name);
+    const changed =
+      input.join("\u0000") !== this.inputLineNames.join("\u0000") ||
+      output.join("\u0000") !== this.outputLineNames.join("\u0000");
+    if (!changed) return;
+    this.inputLineNames = input;
+    this.outputLineNames = output;
+    if (repaint && this.graph !== null) this.repaintPreservingFocus(() => this.paint());
   }
 
   async load(name) {
@@ -495,6 +530,7 @@ export class GraphStorePanelElement extends BasePanelElement {
         this.make("span", { class: "muted", text: key === "on_entry" ? "on entry" : "on exit" }),
         this.make("button", {
           text: "+ action",
+          disabled: this.outputLineNames.length === 0,
           onClick: () => {
             state[key] = [
               ...(state[key] || []),
@@ -503,7 +539,18 @@ export class GraphStorePanelElement extends BasePanelElement {
             this.edited();
           },
         }),
-        actions.length === 0
+        // An action is a line and what to do to it, so with no named output
+        // lines there is nothing to add -- and a "+ action" that added a row
+        // whose line chooser was empty wrote `line: ""`, which the store then
+        // refused. Said here rather than discovered at the save, in the same
+        // words the predicate editor uses for the input side.
+        this.outputLineNames.length === 0
+          ? this.make("span", {
+              class: "warn",
+              text: "no line map -- connect a device or set one in the config",
+            })
+          : null,
+        actions.length === 0 && this.outputLineNames.length > 0
           ? this.make("span", { class: "muted", text: describeActions(actions) || "nothing" })
           : null,
       ]),
@@ -712,9 +759,22 @@ export class GraphStorePanelElement extends BasePanelElement {
     const select = this.make("select", {
       onChange: (event) => onChoose(event.target.value),
     });
-    for (const option of options) {
+    // A stored value the menu does not offer is still what the graph says, and
+    // a `select` with no matching option quietly shows its first one instead --
+    // so the graph would read as something it is not until somebody saved that
+    // lie back. It happens for real: a graph authored on a rig whose lines were
+    // named differently. Kept, and marked.
+    const missing = chosen !== undefined && chosen !== null && !options.includes(chosen);
+    const offered = missing ? [chosen, ...options] : options;
+    for (const option of offered) {
       select.append(
-        this.make("option", { value: option, text: option || "-", selected: option === chosen }),
+        this.make("option", {
+          value: option,
+          text: options.includes(option)
+            ? option || "-"
+            : `${option} (nothing here is called that)`,
+          selected: option === chosen,
+        }),
       );
     }
     return select;

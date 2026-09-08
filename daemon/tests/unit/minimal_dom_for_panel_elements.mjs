@@ -36,6 +36,11 @@ class MinimalNode {
     this.selected = false;
     this.disabled = false;
     this.title = "";
+    // What a real shadow root answers when nothing in it has the focus, which
+    // is always true here: nothing in this DOM can be focused. Declared
+    // because a panel repainting itself asks for it, and `undefined` is not
+    // the answer a browser gives.
+    this.activeElement = null;
   }
 
   append(...nodes) {

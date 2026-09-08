@@ -715,6 +715,69 @@ def test_the_editors_outcome_names_are_the_ones_the_store_accepts() -> None:
     assert offered == set(DECLARABLE_TERMINAL_OUTCOMES)
 
 
+def test_the_graph_editor_notices_a_line_map_that_arrived_after_it_opened() -> None:
+    """A rig being set up names its lines *after* the page is open.
+
+    The order on a new rig is: open the page, name the lines, push the wiring,
+    then write a graph against it -- and the graph editor is on the same view as
+    the line map. Reading the names once when the panel opened meant every line
+    chooser stayed empty until somebody reloaded the browser, with nothing on
+    screen saying why. So the names are polled, and until there are any, the
+    "+ action" button says what is missing instead of adding a row whose line is
+    the empty string -- which the store refuses.
+    """
+    module = (web_directory() / "elements" / "graph_store_panel_element.js").as_uri()
+    lines = {
+        "input_lines": [{"name": "lever", "line_index": 0}],
+        "output_lines": [{"name": "reward_valve", "line_index": 0}],
+    }
+    printed = run_in_node(
+        f"import {{ installMinimalDom }} from {MINIMAL_DOM!r};\n"
+        "installMinimalDom();\n"
+        f"const {{ GraphStorePanelElement }} = await import({module!r});\n"
+        f"const lines = {json_dumps(lines)};\n"
+        "const panel = new GraphStorePanelElement();\n"
+        "panel.renderShell();\n"
+        "panel.graph = { name: 'g', entry: 'Start', states: [{ name: 'Start', on_entry: [] }] };\n"
+        "// The board answers with nothing until the wiring is pushed next door.\n"
+        "let wired = false;\n"
+        "Object.defineProperty(panel, 'api', {\n"
+        "  value: { readDeviceLines: async () => (wired ? lines : { input_lines: [], output_lines: [] }) },\n"
+        "});\n"
+        "// The diagram is not what this is about, and it wants an SVG DOM.\n"
+        "let repaints = 0;\n"
+        "panel.paint = () => { repaints += 1; };\n"
+        "const addButton = () => panel.actionEditor(panel.graph.states[0], 'on_entry')\n"
+        "  .find((node) => node.textContent === '+ action');\n"
+        "const warning = () => panel.actionEditor(panel.graph.states[0], 'on_entry')\n"
+        "  .find((node) => node.className === 'warn');\n"
+        "await panel.readTheLineNames();\n"
+        "const before = { disabled: addButton().disabled, warned: warning() !== null, repaints };\n"
+        "wired = true;\n"
+        "await panel.readTheLineNames({ repaint: true });\n"
+        "const chooser = () => panel.actionEditor(panel.graph.states[0], 'on_entry')\n"
+        "  .find((node) => node.tagName === 'select');\n"
+        "const after = { disabled: addButton().disabled, warned: warning() !== null, repaints };\n"
+        "addButton().dispatch('click');\n"
+        "const added = panel.graph.states[0].on_entry;\n"
+        "// A poll that found the same names must not rebuild the form underneath.\n"
+        "const repaintsBeforeAnUnchangedPoll = repaints;\n"
+        "await panel.readTheLineNames({ repaint: true });\n"
+        "console.log(JSON.stringify({ before, after, added,\n"
+        "  offered: chooser().children.map((option) => option.value),\n"
+        "  repaintedByAnUnchangedPoll: repaints !== repaintsBeforeAnUnchangedPoll }));\n"
+    )
+    result = json.loads(printed)
+    assert result["before"] == {"disabled": True, "warned": True, "repaints": 0}
+    assert result["after"] == {"disabled": False, "warned": False, "repaints": 1}
+    # And the row it then adds names a line this rig has, rather than "".
+    assert result["added"] == [{"line": "reward_valve", "kind": "high", "pulse_ms": None}]
+    assert result["offered"] == ["reward_valve"]
+    assert not result["repaintedByAnUnchangedPoll"], (
+        "a poll that changed nothing rebuilt the editor under somebody's cursor"
+    )
+
+
 #: A small board: three inputs, two outputs, one of each already named. Small so
 #: that "every pin has a name" is reachable in a test, and consistent -- D6 is
 #: input line 0 because it is first in the board's own list, which is the only
