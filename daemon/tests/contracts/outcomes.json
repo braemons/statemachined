@@ -1,0 +1,148 @@
+{
+  "$comment": [
+    "The .tdr trial outcome taxonomy: the canonical copy, and the only one.",
+    "Every daemon in the family carries its own copy of this table because five",
+    "different languages and contexts need it, and nothing but this file says",
+    "they are the same table. See INTERACTIONS.md section 6.",
+    "",
+    "This is data, not an IDL, and it is VENDORED rather than depended on: each",
+    "repo holds a byte-identical copy and checks its own sources against it in",
+    "its own test suite. No build step, no generated files, no shared package,",
+    "and a repo that never syncs it simply keeps working.",
+    "",
+    "RULES. The value is the wire contract and is never renumbered: it is in",
+    "every .tdr the lab has written and every analysis script that reads one.",
+    "Extending is fine; a value once used is used for ever. The NAME is also a",
+    "wire contract, because outcomes cross between daemons by name -- so a new",
+    "code must land in every copy at once, and a rename is a breaking change to",
+    "the same degree a renumber would be.",
+    "",
+    "There is no backwards compatibility with VStim anywhere in braemons. Where",
+    "a VStim spelling was wrong it was corrected (code 8), and codes past 10 are",
+    "ours."
+  ],
+
+  "outcomes": [
+    {
+      "value": -1,
+      "name": "UNDETERMINED",
+      "vstim_name": "Undetermined",
+      "summary": "Nothing decided yet - the trial is still in flight.",
+      "declarable": false,
+      "why_not_declarable": "A state a trial passes through, not one it ends in. A graph naming it would produce a trial that reported 'still running' for ever.",
+      "accepted_by_default": false,
+      "assigned_by": "nobody"
+    },
+    {
+      "value": 0,
+      "name": "NOT_STARTED",
+      "vstim_name": "NotStarted",
+      "summary": "A start signal was required and never delivered.",
+      "declarable": true,
+      "accepted_by_default": false,
+      "assigned_by": "executor"
+    },
+    {
+      "value": 1,
+      "name": "HIT",
+      "vstim_name": "Hit",
+      "summary": "The correct response, in the window.",
+      "declarable": true,
+      "accepted_by_default": true,
+      "assigned_by": "executor"
+    },
+    {
+      "value": 2,
+      "name": "WRONG_RESPONSE",
+      "vstim_name": "WrongResponse",
+      "summary": "A response, in the window, and the wrong one.",
+      "declarable": true,
+      "accepted_by_default": true,
+      "assigned_by": "executor"
+    },
+    {
+      "value": 3,
+      "name": "EARLY_HIT",
+      "vstim_name": "EarlyHit",
+      "summary": "The correct response on an early-release occasion.",
+      "declarable": true,
+      "accepted_by_default": true,
+      "assigned_by": "executor"
+    },
+    {
+      "value": 4,
+      "name": "EARLY_WRONG_RESPONSE",
+      "vstim_name": "EarlyWrongResponse",
+      "summary": "The wrong response on an early-release occasion.",
+      "declarable": true,
+      "accepted_by_default": true,
+      "assigned_by": "executor"
+    },
+    {
+      "value": 5,
+      "name": "EARLY",
+      "vstim_name": "Early",
+      "summary": "Responded before the window opened.",
+      "declarable": true,
+      "accepted_by_default": true,
+      "assigned_by": "executor"
+    },
+    {
+      "value": 6,
+      "name": "LATE",
+      "vstim_name": "Late",
+      "summary": "Responded after the window closed.",
+      "declarable": true,
+      "accepted_by_default": true,
+      "assigned_by": "executor"
+    },
+    {
+      "value": 7,
+      "name": "EYE_ERROR",
+      "vstim_name": "EyeErr",
+      "summary": "Gaze left the fixation window.",
+      "declarable": true,
+      "accepted_by_default": true,
+      "assigned_by": "executor"
+    },
+    {
+      "value": 8,
+      "name": "UNEXPECTED_START_SIGNAL",
+      "vstim_name": "InexpectedStartSignal",
+      "summary": "A start signal arrived in an interval that is not a start interval.",
+      "declarable": true,
+      "accepted_by_default": false,
+      "assigned_by": "executor",
+      "note": "VStim misspells this 'Inexpected'. There is no compatibility to keep, so it is spelled correctly here and everywhere. The VALUE is the contract."
+    },
+    {
+      "value": 9,
+      "name": "WRONG_START_SIGNAL",
+      "vstim_name": "WrongStartSignal",
+      "summary": "The wrong start signal was given.",
+      "declarable": true,
+      "accepted_by_default": false,
+      "assigned_by": "executor"
+    },
+    {
+      "value": 10,
+      "name": "CANCELLED",
+      "vstim_name": "Cancelled",
+      "summary": "Aborted by the experimenter.",
+      "declarable": true,
+      "accepted_by_default": false,
+      "assigned_by": "executor"
+    },
+    {
+      "value": 11,
+      "name": "NEVER_FINISHED",
+      "vstim_name": null,
+      "summary": "The trial was started and nothing ever said how it ended.",
+      "declarable": false,
+      "why_not_declarable": "A statement about what the host heard, which no executor is in a position to make. A terminal state declaring 'nobody heard from me' is a contradiction.",
+      "accepted_by_default": false,
+      "assigned_by": "decision authority",
+      "note": "The first code that is not VStim's, and the only one triald assigns to itself. Nothing sends it. See INTERACTIONS.md section 9.7."
+    }
+  ]
+}
