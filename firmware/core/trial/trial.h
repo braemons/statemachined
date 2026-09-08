@@ -27,7 +27,7 @@ enum class TrialOutcome : int8_t {
   Early = 5,
   Late = 6,
   EyeError = 7,
-  InexpectedStartSignal = 8,
+  UnexpectedStartSignal = 8,
   WrongStartSignal = 9,
   Cancelled = 10,
 };

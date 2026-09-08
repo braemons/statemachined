@@ -34,6 +34,17 @@ class TrialOutcome(IntEnum):
     LATE = 6
     EYE_ERROR = 7
     UNEXPECTED_START_SIGNAL = 8
+    """Spelled correctly, unlike VStim's `InexpectedStartSignal`.
+
+    The **value** is the wire contract, not the spelling: 8 is what a .tdr
+    holds and what an analysis script reads. Nothing in this family needs to
+    read a name VStim wrote, so the typo was not inherited -- but the name does
+    have to be spelled the same in all five copies of this table, because
+    `triald_client` sends `outcome.name` and a graph declares its outcome by
+    string. It was not, for a while, and the two symptoms were a 422 from triald
+    and `graph_definition.compile` refusing any graph written from the other
+    vocabulary."""
+
     WRONG_START_SIGNAL = 9
     CANCELLED = 10
 

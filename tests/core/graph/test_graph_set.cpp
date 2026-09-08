@@ -255,7 +255,7 @@ TEST_CASE("outcome codes are the .tdr wire contract") {
   CHECK(static_cast<int>(TrialOutcome::Early) == 5);
   CHECK(static_cast<int>(TrialOutcome::Late) == 6);
   CHECK(static_cast<int>(TrialOutcome::EyeError) == 7);
-  CHECK(static_cast<int>(TrialOutcome::InexpectedStartSignal) == 8);
+  CHECK(static_cast<int>(TrialOutcome::UnexpectedStartSignal) == 8);
   CHECK(static_cast<int>(TrialOutcome::WrongStartSignal) == 9);
   CHECK(static_cast<int>(TrialOutcome::Cancelled) == 10);
 }
