@@ -256,6 +256,10 @@ TEST_CASE("outcome codes are the .tdr wire contract") {
   CHECK(static_cast<int>(TrialOutcome::Late) == 6);
   CHECK(static_cast<int>(TrialOutcome::EyeError) == 7);
   CHECK(static_cast<int>(TrialOutcome::UnexpectedStartSignal) == 8);
+  // The host's own, which this device can never produce and a graph may not
+  // declare. Pinned anyway: the .tdr code space is one space, and the next
+  // outcome added must not reuse 11.
+  CHECK(static_cast<int>(TrialOutcome::NeverFinished) == 11);
   CHECK(static_cast<int>(TrialOutcome::WrongStartSignal) == 9);
   CHECK(static_cast<int>(TrialOutcome::Cancelled) == 10);
 }

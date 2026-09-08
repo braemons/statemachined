@@ -64,7 +64,7 @@ the trial type.**
 - **Randomised timings are drawn on the device** from a host-seeded deterministic
   PRNG — uniform, truncated exponential, discrete choice — with every realised
   duration reported back. Seeded so it replays; reported so it is evidence.
-- **Terminal states name a `.tdr` outcome code** from triald's fixed eleven-code
+- **Terminal states name a `.tdr` outcome code** from triald's fixed
   taxonomy, which is a wire contract with years of recorded files behind it.
 - **Cancellation is a forced transition** through the ordinary exit path, so
   every output a state raised is lowered by the same code that lowers it on any

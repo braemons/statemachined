@@ -103,7 +103,7 @@ statemachined/
 │   │   │   ├── graph_definition.py     Graph, State, Transition, Action, Distribution
 │   │   │   ├── line_map.py             names, pins, invert/enable/safe/debounce
 │   │   │   ├── trial_record.py         a result and its path, read back into names
-│   │   │   └── trial_outcome.py        the eleven .tdr codes
+│   │   │   └── trial_outcome.py        the .tdr codes, and which a graph may name
 │   │   ├── graph_set_compiler.py       names → indices, and the caps check
 │   │   ├── graph_store.py              graphs on disk under /var/lib/braemons/statemachined
 │   │   ├── state_machine_config_store.py  the line map + graphs, as saved files

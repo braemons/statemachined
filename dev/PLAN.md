@@ -230,13 +230,21 @@ arrival, and held across trials.
 ```
 
 Terminal states carry `outcome` and nothing else. `outcome` is one of triald's
-eleven `.tdr` codes, by name or by number — **never renumbered**:
+`.tdr` codes, by name or by number — **never renumbered**:
 
 ```
 -1 UNDETERMINED   2 WRONG_RESPONSE        5 EARLY      8 UNEXPECTED_START_SIGNAL
  0 NOT_STARTED    3 EARLY_HIT             6 LATE       9 WRONG_START_SIGNAL
  1 HIT            4 EARLY_WRONG_RESPONSE  7 EYE_ERROR 10 CANCELLED
+                                                      11 NEVER_FINISHED
 ```
+
+**Two of them a graph may not declare.** `UNDETERMINED` is the value a trial
+holds *while* it runs. `NEVER_FINISHED` is triald recording that nothing ever
+said how a trial ended — a statement about what the host heard, which this
+device is in no position to make; a terminal state declaring "nobody heard from
+me" is a contradiction. Both are in the table because the code space is one
+space, and both are refused at compile.
 
 `"$reward_ms"` is a reference into the per-trial patch (below). Substitution is
 by name and resolved at arm time, not at parse time.

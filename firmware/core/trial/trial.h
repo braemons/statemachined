@@ -30,6 +30,13 @@ enum class TrialOutcome : int8_t {
   UnexpectedStartSignal = 8,
   WrongStartSignal = 9,
   Cancelled = 10,
+  /// The device can never produce this one, and a graph may not declare it:
+  /// it is triald recording that nothing ever said how a trial ended, which is
+  /// a statement about what the *host* heard. It is here so this table stays a
+  /// mirror of triald's -- the .tdr code space is one space -- and the daemon
+  /// keeps it out of the outcomes a graph may name, exactly as it does
+  /// Undetermined.
+  NeverFinished = 11,
 };
 
 /// The values line up by construction, so a terminal state stores a TrialOutcome

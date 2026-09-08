@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""The eleven .tdr outcome codes, and why a terminal state carries one.
+"""The .tdr outcome codes, and why a terminal state carries one.
 
 A wire contract. These values are in every .tdr the lab has written and every
 analysis script that reads one, so they are NEVER renumbered -- the same
@@ -20,8 +20,8 @@ from enum import IntEnum
 class TrialOutcome(IntEnum):
     """How a trial ended, as triald's `.tdr` records it.
 
-    `UNDETERMINED` is the value a trial has while it is still running; it is not
-    an outcome a graph may declare, and `compile` refuses a state that names it.
+    Two of these are not outcomes a graph may declare, and `compile` refuses a
+    state that names either: see `NOT_DECLARABLE` below.
     """
 
     UNDETERMINED = -1
@@ -48,6 +48,16 @@ class TrialOutcome(IntEnum):
     WRONG_START_SIGNAL = 9
     CANCELLED = 10
 
+    NEVER_FINISHED = 11
+    """triald's own verdict that nothing ever said how a trial ended.
+
+    **This device can never produce it**, and `compile` refuses a graph that
+    names it -- a terminal state declaring "nobody heard from me" is a
+    contradiction. It is in this table because the .tdr code space is one
+    space and this table mirrors triald's; keeping it out would mean the next
+    person adding an outcome picks 11 for something else.
+    """
+
 
 class TrialCancelReason(IntEnum):
     """Why a trial was cancelled, as `result_begin.cancel_reason` reports it.
@@ -63,12 +73,16 @@ class TrialCancelReason(IntEnum):
     TRIAL_TIMEOUT = 4
 
 
+#: The two codes a terminal state may *not* declare. UNDETERMINED is a state a
+#: trial passes through rather than one it can end in, and a graph naming it
+#: would produce a trial that reported "still running" for ever. NEVER_FINISHED
+#: is triald's verdict about its own silence: a terminal state declaring
+#: "nobody heard from me" is a contradiction, and only the host can assign it.
+NOT_DECLARABLE = frozenset({TrialOutcome.UNDETERMINED, TrialOutcome.NEVER_FINISHED})
+
 #: The outcomes a terminal state may declare, by the name a graph file uses.
-#: Deliberately not `TrialOutcome.__members__`: UNDETERMINED is a state a trial
-#: passes through rather than one it can end in, and a graph naming it would
-#: produce a trial that reported "still running" for ever.
 DECLARABLE_TERMINAL_OUTCOMES: dict[str, TrialOutcome] = {
-    outcome.name: outcome for outcome in TrialOutcome if outcome is not TrialOutcome.UNDETERMINED
+    outcome.name: outcome for outcome in TrialOutcome if outcome not in NOT_DECLARABLE
 }
 
 
