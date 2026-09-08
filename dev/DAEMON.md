@@ -1207,6 +1207,13 @@ test runs the daemon out of a checkout.
   depend on whatever Python the distribution ships and behaves like a compiled
   binary. This is why the packages are per-architecture despite being pure
   Python.
+- **Named `braemons-statemachined`,** like every package in the braemons
+  archive. The prefix belongs to the archive rather than to the daemon: it makes
+  `apt search braemons` the answer to "what is on this rig", and keeps a name as
+  generic as `statemachined` from colliding with something a distribution ships.
+  Nothing *inside* the package carries it — the binary, the unit, the user and
+  the logrotate entry are plain `statemachined`, because that is what an
+  operator types.
 - **One `nfpm` config → both formats.** `.deb` for amd64/arm64, `.rpm` for
   x86_64/aarch64. Simpler than vstimd's split, which needs `cargo-deb` for Debian
   and a hand-written `.spec` for RPM.
@@ -1231,6 +1238,7 @@ test runs the daemon out of a checkout.
 | `/var/lib/braemons/statemachined/recordings/` | recordings: named pieces of the trace, kept until somebody deletes them. Separate from `trace/` because the two have opposite lifetimes — the trace is rotated by logrotate and is nobody's to keep |
 | `/var/log/statemachined/` | the unit's `LogsDirectory=`. The daemon's own output goes to the journal (`journalctl -u statemachined`); what logrotate actually rotates is the NDJSON trace tail, daily, thirty days |
 | `/usr/share/braemons/statemachined/firmware/` | the flashable images and `MANIFEST.txt` |
+| `/usr/share/doc/braemons-statemachined/` | the documentation that ships with the package, named after the package rather than the daemon — dpkg and rpm both expect that |
 
 Runs as its own unprivileged user via sysusers, with the same systemd hardening
 triald's unit uses (`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,

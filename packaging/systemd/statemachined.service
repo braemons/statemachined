@@ -7,7 +7,7 @@
 
 [Unit]
 Description=statemachined: owns one state machine device, its graphs and its API
-Documentation=file:///usr/share/doc/statemachined/DAEMON.md
+Documentation=file:///usr/share/doc/braemons-statemachined/DAEMON.md
 # The API and mDNS both want an address to bind and advertise. Neither is fatal
 # without one, so this waits for the network rather than requiring it.
 After=network.target

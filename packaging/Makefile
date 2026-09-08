@@ -260,8 +260,8 @@ $(STAGE)/.stamp: $(shell find $(ROOT)/daemon/src -type f) $(ROOT)/daemon/pyproje
 	@touch $@
 
 stage-docs:
-	@mkdir -p $(STAGE)/usr/share/doc/statemachined
-	@for doc in $(DOCS); do cp $(ROOT)/$$doc $(STAGE)/usr/share/doc/statemachined/; done
+	@mkdir -p $(STAGE)/usr/share/doc/braemons-statemachined
+	@for doc in $(DOCS); do cp $(ROOT)/$$doc $(STAGE)/usr/share/doc/braemons-statemachined/; done
 
 # The images if they are there, and an honest note if they are not. nfpm has no
 # way to say "this file if it exists", so the directory is always populated with

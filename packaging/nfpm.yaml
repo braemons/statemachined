@@ -14,7 +14,13 @@
 # Run `make -C packaging deb` rather than nfpm by hand -- the tree these point
 # at is what that Makefile builds.
 
-name: statemachined
+# The `braemons-` prefix is the archive's, not the daemon's: every package in
+# the braemons apt archive carries it, so `apt search braemons` is the answer to
+# "what is on this rig", and a name as generic as `statemachined` cannot collide
+# with a distribution package. Everything *inside* the package keeps the bare
+# name -- the binary, the unit, the user, the logrotate entry -- because that is
+# what an operator types. Same split as braemons-vstimd.
+name: braemons-statemachined
 # Named _PKG_ rather than STATEMACHINED_VERSION because that one is the *input*
 # override packaging/scripts/git-version.sh short-circuits on; this is the
 # resolved output. Keeping them apart is what stops a build reading its own
@@ -45,6 +51,18 @@ license: LGPL-3.0-or-later
 section: science
 priority: optional
 
+# v0.1.0-alpha1 shipped as plain `statemachined`, so a rig that installed it
+# has a package apt will not otherwise replace. Provides/Conflicts/Replaces is
+# dpkg's rename idiom (nfpm maps them to Provides/Conflicts/Obsoletes for rpm):
+# installing this one takes the old one's files and removes it. Droppable once
+# no rig is still on an alpha.
+provides:
+  - statemachined
+conflicts:
+  - statemachined
+replaces:
+  - statemachined
+
 depends:
   - systemd
 recommends:
@@ -67,8 +85,8 @@ contents:
     dst: /usr/share/braemons/statemachined/firmware
     type: tree
 
-  - src: build/package/root/usr/share/doc/statemachined
-    dst: /usr/share/doc/statemachined
+  - src: build/package/root/usr/share/doc/braemons-statemachined
+    dst: /usr/share/doc/braemons-statemachined
     type: tree
 
   # One name on PATH for the operator, pointing into the vendored tree.

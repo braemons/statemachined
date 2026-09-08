@@ -28,6 +28,13 @@ docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 
 ## What the package is
 
+**`braemons-statemachined`,** like every package in the braemons archive — the
+prefix is the archive's, so `apt search braemons` answers "what is on this rig"
+and a name as generic as `statemachined` cannot collide with something a
+distribution ships. Inside the package nothing carries it: the binary, the unit,
+the user and the logrotate entry are all plain `statemachined`, because that is
+what an operator types. `sudo apt install ./braemons-statemachined_*_arm64.deb`.
+
 **A vendored interpreter, not a set of `python3-*` dependencies.** The whole
 tree — CPython from python-build-standalone, the daemon, and its five runtime
 dependencies — lands under `/opt/braemons/statemachined` and behaves like a
@@ -146,4 +153,4 @@ xdg-open http://localhost:8081/
 ```
 
 `journalctl -u statemachined -f` is the log. The rest is `dev/DAEMON.md`, which
-ships in `/usr/share/doc/statemachined/`.
+ships in `/usr/share/doc/braemons-statemachined/`.

@@ -142,9 +142,9 @@ jobs:
           ## Installing
 
           **Debian / Ubuntu / Raspberry Pi OS** —
-          `sudo apt install ./statemachined_*_<arch>.deb`
+          `sudo apt install ./braemons-statemachined_*_<arch>.deb`
 
-          **Fedora / RHEL** — `sudo dnf install ./statemachined-*.<arch>.rpm`
+          **Fedora / RHEL** — `sudo dnf install ./braemons-statemachined-*.<arch>.rpm`
 
           The package is enabled but **not started**: starting the daemon greets
           the board, and greeting takes the rig, so a board that was running
