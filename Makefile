@@ -118,9 +118,15 @@ bench:                      ## the daemon + web UI against a device: make bench 
 # built for this machine, on a TCP port the daemon can dial. Not a mock -- see
 # the file's docstring, and daemon/tests/integration/conftest.py, which is the
 # same bridge.
+#
+# `statemachined device` rather than a script under daemon/bench/, because the
+# bridge ships: an operator who has installed the package and has no board runs
+# the identical command. From here it finds $(BUILD)/statemachined_native_device;
+# from a package, the binary beside the vendored interpreter.
 .PHONY: bench-device
 bench-device: integration-device  ## the native device on socket://127.0.0.1:5300
-	python3 daemon/bench/native_device_on_a_socket.py $(ARGS)
+	STATEMACHINED_NATIVE_DEVICE=$(abspath $(BUILD))/statemachined_native_device \
+	  uv run --project daemon statemachined device $(ARGS)
 
 # The only tests in this repository that need hardware. Everything else -- the
 # core on the host, the HAL under Renode -- runs in CI with no board attached,

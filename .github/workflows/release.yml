@@ -156,6 +156,21 @@ jobs:
           `/var/lib/braemons/statemachined/`, which an upgrade or a removal
           never touches.
 
+          ## No board yet?
+
+          The package carries the firmware compiled for the host — the same
+          session, engine and result chunker the board runs, not a mock. Put it
+          on a port and point the daemon at it:
+
+          ```
+          statemachined device                              # socket://127.0.0.1:5300
+          statemachined -t socket://127.0.0.1:5300 serve    # then open :8081
+          ```
+
+          Good for everything but timing: the scan is a `nanosleep` on an
+          ordinary kernel, honest to about a millisecond. Real numbers come from
+          a board.
+
           ## Firmware
 
           `statemachined-uno_r4_minima.bin` is the image for the board, and is

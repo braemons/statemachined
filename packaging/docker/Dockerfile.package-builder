@@ -3,17 +3,18 @@
 #
 # vstimd's Dockerfile.deb-builder is the model, and one thing about it does not
 # carry over. vstimd is Rust: it *cross*-compiles, one image producing an arm64
-# binary on an amd64 host. There is nothing to cross-compile here -- the daemon
-# is Python -- but the interpreter that gets vendored into the package is a
-# native artifact of the architecture it is fetched for, so the arm64 package is
-# built by running this image *as* arm64 under qemu:
+# binary on an amd64 host. Almost nothing is cross-compiled here -- the daemon
+# is Python -- but two things in the package are native artifacts of the
+# architecture: the interpreter that gets vendored, and the firmware built for
+# the host that `statemachined device` runs. So the arm64 package is built by
+# running this image *as* arm64 under qemu:
 #
 #   docker build --platform linux/arm64 ...
 #
-# Slower than a cross-compile and much simpler, because nothing is compiled: uv
-# downloads a python-build-standalone interpreter and prebuilt wheels for the
-# platform it is running as. The emulation only has to run pip-shaped work and
-# the check at the end.
+# Slower than a cross-compile and much simpler. uv downloads a
+# python-build-standalone interpreter and prebuilt wheels for the platform it is
+# running as; the emulation compiles one small C++17 binary, runs pip-shaped
+# work, and runs the check at the end.
 #
 # One image produces both formats. vstimd needs a builder per format because
 # cargo-deb and rpmbuild are different tools; nfpm packs a .deb and a .rpm from
@@ -41,10 +42,13 @@ ARG NFPM_VERSION=2.43.1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Everything the build needs and nothing else: no compiler, because nothing
-# here is compiled. `file` earns its place in the check below.
+# Everything the build needs and nothing else. The compiler and cmake are here
+# for one target -- statemachined_native_device, the firmware built for the host
+# -- and they are here rather than optional because a released package must
+# always carry it: packaging/Makefile will happily pack a package without one,
+# which is right for a developer's machine and wrong for a release.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        make git curl ca-certificates xz-utils file \
+        make git curl ca-certificates xz-utils file cmake g++ \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=uv /uv /usr/local/bin/uv
@@ -72,6 +76,15 @@ COPY README.md LICENSE NOTICE ./
 COPY dev/                  dev/
 COPY packaging/            packaging/
 COPY daemon/               daemon/
+
+# The firmware's portable core, its host HAL, and the host entry point that
+# joins them -- the three things CMakeLists.txt needs to build
+# statemachined_native_device. tests/ comes with it because CMakeLists.txt calls
+# add_subdirectory(tests) unconditionally; configuring would fail without it,
+# and nothing here builds or runs them.
+COPY CMakeLists.txt        ./
+COPY firmware/             firmware/
+COPY tests/                tests/
 
 # The flashable firmware, when the caller has built it. `make image` needs
 # PlatformIO and an ARM toolchain, which this image deliberately does not carry

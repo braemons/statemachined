@@ -14,8 +14,8 @@ of a pty pair cannot both be reached that way -- the parent would have to bypass
 `SerialLink` and use the master file descriptor raw, which is precisely the code
 path a test should not be skipping.
 
-So a small bridge -- daemon/bench/native_device_on_a_socket.py, shared with the
-bench so there is only one of it -- pumps a TCP socket to the child's pipes, and
+So a small bridge -- `statemachined.device.native_device_on_a_socket`, shared
+with the bench so there is only one of it -- pumps a TCP socket to the pipes, and
 the daemon connects with `socket://127.0.0.1:<port>`. That is a URL a rig genuinely
 uses -- an ethernet-attached MCU, which serial_link.py exists to make
 indistinguishable -- and it means the transport under test is the transport the
@@ -25,27 +25,24 @@ daemon ships.
 from __future__ import annotations
 
 import json
-import sys
 import time
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 from statemachined.api.application import create_application
 from statemachined.rig_configuration import RigConfiguration
 
-# The bridge itself lives in daemon/bench/, because it is not a test: it is how
-# anybody runs this daemon with no board on the desk (`make bench-device`).
-# Keeping one implementation matters more here than keeping tests importable
-# only from packages -- two bridges that drift are two different devices.
-REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(REPOSITORY_ROOT / "daemon" / "bench"))
-
-from native_device_on_a_socket import (  # noqa: E402
-    REASON_WHEN_NOT_BUILT,
+# The bridge is part of the daemon, not part of these tests: it is how anybody
+# runs this daemon with no board on the desk, from a checkout (`make
+# bench-device`) or from a package (`statemachined device`). It was importable
+# only by path until it became a shipped artifact; now it imports like anything
+# else, and there is still only one of it -- two bridges that drift are two
+# different devices.
+from statemachined.device.native_device_on_a_socket import (
     NativeDeviceOnASocket,
     the_native_device_is_built,
 )
+from statemachined.device import native_device_on_a_socket
 
 
 @pytest.fixture
@@ -58,7 +55,7 @@ def native_device(tmp_path):
     test's saved settings the next test's boot.
     """
     if not the_native_device_is_built():
-        pytest.skip(REASON_WHEN_NOT_BUILT)
+        pytest.skip(native_device_on_a_socket.REASON_WHEN_NOT_BUILT)
     device = NativeDeviceOnASocket(store_path=str(tmp_path / "store.bin"))
     device.start()
     try:

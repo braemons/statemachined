@@ -18,8 +18,10 @@
 # -- which is what makes a CI build and a developer's build comparable.
 #
 # What it is **not** is a cross-compile. vstimd cross-compiles because it is
-# Rust; there is nothing to compile here, but the vendored interpreter is a
-# native artifact, so the arm64 package is built by running the builder image
+# Rust; the only thing compiled here is the native device -- the firmware built
+# for the host, which `statemachined device` runs so a box with no board still
+# has something real to talk to -- and the vendored interpreter is a native
+# artifact besides. So the arm64 package is built by running the builder image
 # as arm64 under qemu. Register the handler once per boot:
 #
 #     docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
@@ -120,7 +122,7 @@ IMAGE_DIR ?= $(ROOT)/image
 DOCS := README.md LICENSE NOTICE dev/DAEMON.md dev/API.md dev/PROTOCOL.md dev/HARDWARE.md dev/BRINGUP.md
 
 .PHONY: packages-amd64 packages-arm64 packages packages-here \
-        deb rpm stage stage-docs stage-firmware check inspect repro \
+        deb rpm stage stage-device stage-docs stage-firmware check inspect repro \
         print-version install-nfpm clean help
 
 # ── Built in the pinned container, one per architecture ─────────────────────
@@ -184,7 +186,9 @@ deb rpm: export STATEMACHINED_PKG_VERSION = $(VERSION)
 # ── The staged tree ─────────────────────────────────────────────────────────
 
 stage: $(STAGE)/.stamp      ## build the tree the package is cut from
-$(STAGE)/.stamp: $(shell find $(ROOT)/daemon/src -type f) $(ROOT)/daemon/pyproject.toml
+$(STAGE)/.stamp: $(shell find $(ROOT)/daemon/src $(ROOT)/firmware/core $(ROOT)/firmware/hal \
+                              $(ROOT)/firmware/native -type f) \
+                 $(ROOT)/daemon/pyproject.toml $(ROOT)/CMakeLists.txt
 	@test -n "$(ARCH)" || { \
 	  echo "error: no nfpm architecture known for $(UNAME_M)."; \
 	  echo "       Build on the target architecture, or add it above."; exit 1; }
@@ -256,8 +260,52 @@ $(STAGE)/.stamp: $(shell find $(ROOT)/daemon/src -type f) $(ROOT)/daemon/pyproje
 	  > $(STAGE)$(PREFIX)/bin/statemachined
 	chmod 0755 $(STAGE)$(PREFIX)/bin/statemachined
 
-	$(MAKE) --no-print-directory stage-docs stage-firmware stage-deterministic
+	$(MAKE) --no-print-directory stage-device stage-docs stage-firmware stage-deterministic
 	@touch $@
+
+# The firmware, compiled for the host, inside the package.
+#
+# It looks like a test fixture and is not one. A box that has just run
+# `apt install braemons-statemachined` has a daemon and no board, and the first
+# question anybody asks of it is whether it works -- `statemachined device` on
+# one terminal, `-t socket://127.0.0.1:5300` on the other, and the answer
+# involves the firmware's own session, engine and result chunker rather than a
+# mock of them. dev/DAEMON.md has called this "how anybody runs this daemon with
+# no board on the desk" since M4h; until now it was only true from a checkout.
+#
+# libexec/ rather than bin/: nothing types this name. `statemachined device`
+# finds it relative to the interpreter that is running (see
+# device/native_device_on_a_socket.py), which is why the path is not written
+# down anywhere but here.
+#
+# A build with no compiler still produces a package. It is not the release
+# path -- packaging/docker/Dockerfile.package-builder carries g++ and cmake
+# precisely so a released package always has this -- but a developer's
+# `make -C packaging deb` on a machine without them should say so and carry on
+# rather than fail at the last step.
+stage-device:
+	@mkdir -p $(STAGE)$(PREFIX)/libexec
+	@if command -v cmake >/dev/null 2>&1 && command -v c++ >/dev/null 2>&1; then \
+	  cmake -S $(ROOT) -B $(BUILD)/device -DCMAKE_BUILD_TYPE=Release >/dev/null && \
+	  cmake --build $(BUILD)/device -j --target statemachined_native_device >/dev/null && \
+	  install -m 0755 $(BUILD)/device/statemachined_native_device \
+	    $(STAGE)$(PREFIX)/libexec/statemachined-device && \
+	  echo "  device: statemachined-device, $$(du -h $(STAGE)$(PREFIX)/libexec/statemachined-device | cut -f1)"; \
+	else \
+	  printf '%s\n' \
+	    'No native device was built into this package.' \
+	    '' \
+	    'It is the firmware compiled for this machine, and `statemachined device`' \
+	    'runs it so that a daemon on a box with no board has something real to' \
+	    'talk to. Building it needs cmake and a C++17 compiler, which the machine' \
+	    'that packed this did not have.' \
+	    '' \
+	    'Released packages always carry it -- see' \
+	    'packaging/docker/Dockerfile.package-builder. Build one from a checkout' \
+	    'with `make -C packaging deb` on a machine with a compiler.' \
+	    > $(STAGE)$(PREFIX)/libexec/NO-DEVICE.txt; \
+	  echo "  device: none (cmake and a C++ compiler build it)"; \
+	fi
 
 stage-docs:
 	@mkdir -p $(STAGE)/usr/share/doc/braemons-statemachined

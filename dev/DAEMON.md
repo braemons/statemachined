@@ -98,7 +98,8 @@ statemachined/
 │   │   │   ├── device_pin_map.py             NEW: what the board calls its pins
 │   │   │   ├── device_supervisor.py          NEW: owns the port, reconnect, seed, watchdog
 │   │   │   ├── device_clock_correlation.py   NEW: device µs ⇄ host clock
-│   │   │   └── state_visit_trace.py          NEW: the visit ring, and the NDJSON tail
+│   │   │   ├── state_visit_trace.py          NEW: the visit ring, and the NDJSON tail
+│   │   │   └── native_device_on_a_socket.py  the firmware, on a TCP port: no board needed
 │   │   ├── model/                      pydantic — the graph as a person authors it
 │   │   │   ├── graph_definition.py     Graph, State, Transition, Action, Distribution
 │   │   │   ├── line_map.py             names, pins, invert/enable/safe/debounce
@@ -126,8 +127,7 @@ statemachined/
 │   │           ├── transition_predicate.js     what a predicate means, in words
 │   │           └── firmware_panel_element.js
 │   ├── bench/                 running this by hand, with or without a board
-│   │   ├── statemachined_bench_configuration.toml  what `make bench` reads
-│   │   └── native_device_on_a_socket.py            the firmware, on a TCP port
+│   │   └── statemachined_bench_configuration.toml  what `make bench` reads
 │   └── tests/
 │       ├── unit/                 host-only. Runs in `make ci`
 │       ├── integration/          whole sessions against the native device
@@ -890,7 +890,7 @@ record claiming a trial was cancelled when the animal had already responded.
 policy, the line map, whether to arm automatically on connect, `graph_mode`
 (§3.2) and `trace_ring` (§4.6). Backed by
 `/etc/braemons/statemachined-rig-config.toml` — the box, not the wiring. The
-line map and the graphs are a *state-machine config* under `/var/lib`; see §6.4.
+line map and the graphs are a *state-machine config* under `/var/lib`; see §6.2.
 
 ### 4.5 The clock
 
@@ -1231,6 +1231,7 @@ test runs the daemon out of a checkout.
 | | |
 |---|---|
 | `/opt/braemons/statemachined/` | the vendored interpreter and the package |
+| `/opt/braemons/statemachined/libexec/statemachined-device` | the firmware compiled for the host, which `statemachined device` runs. §6.4 |
 | `/etc/braemons/statemachined-rig-config.toml` | conffile: the box — device target, expected board, triald URL, directories. Hand-edited, **never written by the daemon** |
 | `/var/lib/braemons/statemachined/configs/` | state-machine configs: the line map and the graphs, written by the web UI |
 | `/var/lib/braemons/statemachined/graphs/` | the graph store |
@@ -1264,7 +1265,50 @@ pulling in `bossac`/`dfu-util`, because it means dropping the port, flashing, an
 waiting for re-enumeration mid-session — which is a different risk from anything
 else the daemon does.
 
-### 6.4 Release and the archive
+### 6.4 A device in the package, for the box that has no board yet
+
+A box that has just run `apt install braemons-statemachined` has a daemon and
+nothing to point it at, and the first question anybody asks is whether the thing
+works. Until now the answer needed a checkout, a compiler and `make
+bench-device`, which is a strange thing to require of somebody who installed a
+package.
+
+So the package carries the firmware built for the host —
+`firmware/native/statemachined_native_device.cpp`, the same session, engine and
+result chunker the board runs — at
+`/opt/braemons/statemachined/libexec/statemachined-device`, and
+`statemachined device` puts it on a TCP port:
+
+```
+statemachined device                      # one terminal: socket://127.0.0.1:5300
+statemachined -t socket://127.0.0.1:5300 serve   # the other
+```
+
+Three things about this are worth being explicit about.
+
+**It is not a mock.** A mock answers what its author believed the protocol says;
+this answers what `firmware/core/protocol` says, refuses what it refuses, and
+reassembles a result with the same chunker. That is why the daemon's integration
+suite has always talked to it, and why it is the same binary and the same bridge
+here rather than a second one — `statemachined.device.native_device_on_a_socket`
+is imported by `statemachined device`, by `make bench-device`, and by
+`daemon/tests/integration/conftest.py`. Two bridges that drift are two different
+devices.
+
+**It is not a timing test.** The scan is a `nanosleep` on a preemptible desktop
+kernel. Durations are honest to about a millisecond, which is what an
+integration test needs; `dev/HARDWARE.md`'s numbers come from a board and
+`make test-hardware`.
+
+**It is a compiled artifact, so it is per-architecture,** like the vendored
+interpreter beside it. `packaging/docker/Dockerfile.package-builder` carries
+`cmake` and `g++` for it. A `make -C packaging deb` on a machine without a
+compiler still produces a package, with a `libexec/NO-DEVICE.txt` saying so
+rather than silence — and `packaging/scripts/check-staged-tree.py` greets the
+device it staged, which is the only thing in the build that can catch a binary
+compiled against the wrong libstdc++ or for the wrong architecture.
+
+### 6.5 Release and the archive
 
 The tag-driven `release.yml` builds the packages *and* `make image`, and attaches
 both to the GitHub Release: `.deb` ×2, `.rpm` ×2, the bench and rig images, and

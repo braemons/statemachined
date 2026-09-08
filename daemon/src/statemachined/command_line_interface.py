@@ -341,6 +341,22 @@ def cmd_monitor(args, session: RequestResponseSession) -> int:
 # ------------------------------------------------------------------ serve ---
 
 
+def cmd_device(args) -> int:
+    """Run the firmware on this machine, on a TCP port, so a daemon can dial it.
+
+    The second subcommand that opens no link -- it is the other *end* of one.
+    A box that has just installed the package has a daemon and no board, and
+    this is what it points `-t socket://127.0.0.1:5300` at: not a mock, but the
+    firmware's own session, engine and result chunker compiled for the host.
+
+    What it is not is a timing test. See firmware/native/'s header: the scan is
+    a nanosleep on a preemptible kernel, honest to about a millisecond.
+    """
+    from .device.native_device_on_a_socket import main as run_the_bridge
+
+    return run_the_bridge(["statemachined device", str(args.port)])
+
+
 def cmd_serve(args) -> int:
     """Run the daemon: the API, the device, and the trace.
 
@@ -474,6 +490,19 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("monitor", help="read lines and check their CRCs, sending nothing")
     s.set_defaults(func=cmd_monitor)
 
+    s = sub.add_parser(
+        "device",
+        help="run the firmware on this machine, on a port, for a daemon with no board",
+    )
+    s.add_argument(
+        "--port",
+        type=int,
+        default=5300,
+        help="port to listen on (default: %(default)s). "
+        "Point a daemon at socket://127.0.0.1:<port>",
+    )
+    s.set_defaults(func=cmd_device)
+
     s = sub.add_parser("serve", help="run the daemon: the API, the device, and the trace")
     s.add_argument("--host", default="0.0.0.0", help="address to serve on (default: %(default)s)")
     s.add_argument("--port", type=int, default=8081, help="port (default: %(default)s)")
@@ -500,6 +529,12 @@ def main(argv: list[str] | None = None) -> int:
     # `serve` owns the port rather than borrowing it, so it does not go through
     # open_session below -- and it needs to know whether -t was actually typed,
     # since the config file is otherwise the authority.
+    # Neither of these opens a link to a board: `serve` owns the port rather
+    # than borrowing it, and `device` *is* the far end. Both would otherwise be
+    # handed a session by open_session below.
+    if getattr(args, "func", None) is cmd_device:
+        return cmd_device(args)
+
     if getattr(args, "func", None) is cmd_serve:
         args.target_was_given = "-t" in (argv or sys.argv[1:]) or "--target" in (
             argv or sys.argv[1:]

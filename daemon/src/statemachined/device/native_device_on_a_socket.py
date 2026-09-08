@@ -2,50 +2,131 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The firmware, on this machine, reachable at a TCP address.
 
-`build/statemachined_native_device` is the firmware's own session and engine
-built for the host (firmware/native/). It takes its link on stdin and stdout,
-and pyserial opens a *URL*, so something has to sit between the two. This is
-that something: a listening socket pumped to the child's pipes, so a daemon can
-be pointed at `socket://127.0.0.1:5300` and talk to a real protocol
-implementation with no board on the desk.
+`statemachined_native_device` is the firmware's own session and engine built for
+the host (firmware/native/). It takes its link on stdin and stdout, and pyserial
+opens a *URL*, so something has to sit between the two. This is that something:
+a listening socket pumped to the child's pipes, so a daemon can be pointed at
+`socket://127.0.0.1:5300` and talk to a real protocol implementation with no
+board on the desk.
 
 `socket://` is not a test-only contrivance -- it is how a daemon reaches an
 ethernet-attached MCU, which is the case `device/serial_link.py` exists to make
 indistinguishable from a cable. So the transport under the bench is the
 transport the daemon ships.
 
-Two users, one implementation:
+**This is in the package, not beside it.** It was `daemon/bench/` until the
+device became a shipped artifact, and the move is the point: a box that has
+only ever seen `apt install braemons-statemachined` can now answer "does this
+daemon work" without a board, which is the first question anybody asks of a rig
+they have just installed. `statemachined device` runs it; the binary it starts
+is installed at `libexec/statemachined-device` beside the vendored interpreter.
 
-  * `daemon/tests/integration/conftest.py` imports `NativeDeviceOnASocket`,
-    binds it to an ephemeral port, and drops the link on purpose;
-  * `make bench-device` runs this file, which binds a fixed port and waits, so
-    that `make bench TARGET=socket://127.0.0.1:5300` finds it.
+Three users, one implementation:
 
-    python3 daemon/bench/native_device_on_a_socket.py [port]
+  * `statemachined device` -- the operator, on a fresh install;
+  * `make bench-device` -- the same thing from a checkout, against `build/`;
+  * `daemon/tests/integration/conftest.py`, which binds an ephemeral port and
+    drops the link on purpose.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import subprocess
 import sys
 import threading
 from pathlib import Path
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-NATIVE_DEVICE_BINARY = REPOSITORY_ROOT / "build" / "statemachined_native_device"
+#: An explicit override, which is what a checkout with an unusual build
+#: directory has and what a test harness reaches for. Checked first because a
+#: person who has said where the binary is has already answered the question.
+BINARY_ENVIRONMENT_VARIABLE = "STATEMACHINED_NATIVE_DEVICE"
 
-REASON_WHEN_NOT_BUILT = (
-    f"{NATIVE_DEVICE_BINARY} is not built. Run `make test` or `make integration-device` first; "
-    "`make test-integration` does both."
-)
+#: The name the package installs, both under the vendored prefix and on PATH.
+INSTALLED_BINARY_NAME = "statemachined-device"
 
-DEFAULT_BENCH_PORT = 5300
+
+def _candidate_paths() -> list[Path]:
+    """Everywhere the device could be, nearest first.
+
+    The order is not a preference so much as a description of who is asking.
+    An installed daemon runs from a vendored interpreter and the binary is its
+    sibling; a checkout has `build/` and no installation at all; and a
+    developer who has built somewhere else says so in the environment. Each
+    case finds its own answer without knowing the others exist.
+    """
+    override = os.environ.get(BINARY_ENVIRONMENT_VARIABLE)
+    if override:
+        return [Path(override)]
+
+    candidates = []
+
+    # The installed tree: /opt/braemons/statemachined/{bin/python3,libexec/...}.
+    # Derived from the running interpreter rather than hard-coded, so a tree
+    # relocated or unpacked somewhere else still finds its own device.
+    interpreter_prefix = Path(sys.executable).resolve().parent.parent
+    candidates.append(interpreter_prefix / "libexec" / INSTALLED_BINARY_NAME)
+
+    # A checkout: this file is daemon/src/statemachined/device/..., so the
+    # repository root is four levels up, and `make integration-device` writes
+    # into build/ there.
+    repository_root = Path(__file__).resolve().parents[4]
+    candidates.append(repository_root / "build" / "statemachined_native_device")
+
+    on_path = shutil.which(INSTALLED_BINARY_NAME)
+    if on_path:
+        candidates.append(Path(on_path))
+
+    return candidates
+
+
+def the_native_device_binary() -> Path | None:
+    """The first candidate that exists and can be run, or None."""
+    for candidate in _candidate_paths():
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def the_native_device_is_built() -> bool:
-    return NATIVE_DEVICE_BINARY.exists() and os.access(NATIVE_DEVICE_BINARY, os.X_OK)
+    return the_native_device_binary() is not None
+
+
+def _reason_when_not_built() -> str:
+    looked_in = "\n".join(f"    {candidate}" for candidate in _candidate_paths())
+    return (
+        "The native device binary is not here. Looked in:\n"
+        f"{looked_in}\n"
+        "  From a checkout, build it with `make integration-device` "
+        "(`make test` and `make test-integration` both do).\n"
+        f"  From a package, it ships at <prefix>/libexec/{INSTALLED_BINARY_NAME}; "
+        "a package without it was built without a compiler.\n"
+        f"  Or name it in ${BINARY_ENVIRONMENT_VARIABLE}."
+    )
+
+
+#: Kept as a module-level name because two test modules import it. It is
+#: computed lazily through __getattr__ below rather than at import time: the
+#: message names the paths that were searched, and on an installed daemon that
+#: search touches the filesystem for a string almost nobody reads.
+__all__ = [
+    "DEFAULT_BENCH_PORT",
+    "NativeDeviceOnASocket",
+    "REASON_WHEN_NOT_BUILT",
+    "the_native_device_binary",
+    "the_native_device_is_built",
+]
+
+
+def __getattr__(name: str) -> object:
+    if name == "REASON_WHEN_NOT_BUILT":
+        return _reason_when_not_built()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+DEFAULT_BENCH_PORT = 5300
 
 
 class NativeDeviceOnASocket:
@@ -83,11 +164,14 @@ class NativeDeviceOnASocket:
         return f"socket://127.0.0.1:{self.port}"
 
     def start(self) -> None:
+        binary = the_native_device_binary()
+        if binary is None:
+            raise FileNotFoundError(_reason_when_not_built())
         environment = None
         if self._store_path is not None:
             environment = {**os.environ, "STATEMACHINED_STORE": self._store_path}
         self._process = subprocess.Popen(
-            [str(NATIVE_DEVICE_BINARY)],
+            [str(binary)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
@@ -185,7 +269,7 @@ class NativeDeviceOnASocket:
 
 def main(argv: list[str]) -> int:
     if not the_native_device_is_built():
-        print(REASON_WHEN_NOT_BUILT, file=sys.stderr)
+        print(_reason_when_not_built(), file=sys.stderr)
         return 1
 
     port = int(argv[1]) if len(argv) > 1 else DEFAULT_BENCH_PORT

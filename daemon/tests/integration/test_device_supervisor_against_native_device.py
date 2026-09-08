@@ -29,10 +29,10 @@ from statemachined.model.graph_definition import GraphDefinition
 from statemachined.model.line_map import LineMap
 from statemachined.model.trial_outcome import TrialCancelReason, TrialOutcome
 
-# conftest.py puts daemon/bench on sys.path: the socket bridge is shared with
-# the bench so there is only one of it. The power-cut test needs to start a
-# second device on the same store, which the one-per-test fixture cannot do.
-from native_device_on_a_socket import NativeDeviceOnASocket  # noqa: E402
+# The socket bridge is part of the daemon and shared with the bench, so there is
+# only one of it. The power-cut test needs to start a second device on the same
+# store, which the one-per-test fixture cannot do.
+from statemachined.device.native_device_on_a_socket import NativeDeviceOnASocket
 
 
 def bench_line_map() -> LineMap:
