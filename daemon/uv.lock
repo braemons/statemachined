@@ -465,13 +465,13 @@ requires-dist = [
 ]
 
 [package.metadata.requires-dev]
-e2e = [{ name = "triald", extras = ["serve"], marker = "python_full_version >= '3.12'", git = "ssh://git@github.com/braemons/triald.git?rev=observe-the-executor" }]
+e2e = [{ name = "triald", extras = ["serve"], marker = "python_full_version >= '3.12'", git = "ssh://git@github.com/braemons/triald.git?rev=main" }]
 test = [{ name = "pytest", specifier = ">=8.0" }]
 
 [[package]]
 name = "triald"
 version = "0.0.0"
-source = { git = "ssh://git@github.com/braemons/triald.git?rev=observe-the-executor#204353b87b87e6a6f64b9d9ef9d8e5c193be4f21" }
+source = { git = "ssh://git@github.com/braemons/triald.git?rev=main#65d6676b01eae46b5dec70cc5d39fb1a656742a0" }
 
 [package.optional-dependencies]
 serve = [

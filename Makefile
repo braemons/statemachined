@@ -158,14 +158,13 @@ test-daemon:                ## the daemon's tests that need no board
 test-integration: test      ## build the native device, then drive whole sessions against it
 	uv run --project daemon --group test pytest daemon/tests/integration $(ARGS)
 
-# The trial loop across both daemons: triald picks a trial, this one runs it on
-# the firmware, and the outcome goes back. Separate from test-daemon because it
-# is the one suite that needs credentials for another repo -- triald is private
-# and comes from git. Without the group the tests skip themselves and say so.
+# The trial loop across both daemons: triald picks a trial and arms this one,
+# the firmware runs it, and triald reads what this daemon published. Separate
+# from test-daemon because it is the one suite that needs another repo at all.
+# Without the group the tests skip themselves and say why.
 .PHONY: test-e2e
-test-e2e: test              ## the trial loop end to end, against a real triald
+test-e2e: test              ## the trial loop end to end, with a real triald observing
 	uv run --project daemon --group test --group e2e pytest \
-		daemon/tests/unit/test_the_outcome_report_matches_trialds_schema.py \
 		daemon/tests/integration/test_a_whole_trial_with_triald.py $(ARGS)
 
 # Pinned to match .github/workflows/ci.yml. clang-format's output changes

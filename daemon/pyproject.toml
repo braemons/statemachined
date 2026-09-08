@@ -52,19 +52,17 @@ statemachined = "statemachined.command_line_interface:main"
 # that just wants to talk to a board.
 [dependency-groups]
 test = ["pytest>=8.0"]
-# The end-to-end tests only, and never at runtime. Its own group rather than
-# part of `test` because triald lives in a private repo: the default `make
-# test-daemon` must not need credentials to fetch a *test* dependency, or the
-# first thing a new checkout does is fail on something that has nothing to do
-# with this daemon. Without it `tests/integration/test_a_whole_trial_with_triald.py`
-# and `tests/unit/test_the_outcome_report_matches_trialds_schema.py` skip
-# themselves, saying why. With it (`make test-e2e`) they run.
+# The end-to-end tests only, and never at runtime. **Nothing in this package
+# imports triald, and nothing in it knows triald exists** -- this daemon reports
+# to nobody and has no setting naming another one. The dependency is here
+# because the test needs both halves and the expensive half is here: the
+# firmware built for this machine. triald opens a stream, drives a trial and
+# reads what this daemon published, which is what a rig does.
 #
-# The dependency points this way on purpose: this daemon already knows triald's
-# schema (triald_client.py transcribes it) and triald knows nothing of this one,
-# so testing the pair here is the direction that inverts nothing. triald is a
-# FastAPI app, so it mounts in-process through Starlette's TestClient -- no
-# subprocess, no port, no teardown race.
+# Its own group rather than part of `test` so that `make test-daemon` on a fresh
+# checkout never reaches for another repository. Without it
+# `tests/integration/test_a_whole_trial_with_triald.py` skips itself and says
+# why; with it (`make test-e2e`) it runs.
 #
 # Marked rather than folded into requires-python: triald needs 3.12 and this
 # daemon runs on 3.11, and raising a shipped daemon's floor for a test
@@ -95,4 +93,4 @@ build-backend = "hatchling.build"
 packages = ["src/statemachined"]
 
 [tool.uv.sources]
-triald = { git = "ssh://git@github.com/braemons/triald.git", rev = "observe-the-executor" }
+triald = { git = "ssh://git@github.com/braemons/triald.git", rev = "main" }

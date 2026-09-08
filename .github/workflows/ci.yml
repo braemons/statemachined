@@ -65,23 +65,17 @@ jobs:
       - run: make test-integration
 
   # The trial loop across both daemons. Its own job because it is the only one
-  # that needs credentials for another repo: triald is private, and a missing
-  # key must skip this rather than fail every other job. `if` on the secret, so
-  # a fork -- which has no secrets -- gets a skipped job and not a red build.
+  # that needs another repo at all: triald drives this daemon and reads what it
+  # publishes, so the suite cannot run without it. A failure here is a failure
+  # of the handover and nothing else, which is worth being able to see alone.
   end-to-end-with-triald:
     name: one trial, end to end, with a real triald
     runs-on: ubuntu-latest
-    if: ${{ github.repository == 'braemons/statemachined' }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
-      # A deploy key for braemons/triald, read-only. Add it as the repository
-      # secret TRIALD_DEPLOY_KEY; without it this step fails and the job stops
-      # here, which is the honest outcome -- the suite cannot run without triald
-      # and pretending otherwise would make a green tick mean nothing.
-      - uses: webfactory/ssh-agent@v0.9.0
-        with:
-          ssh-private-key: ${{ secrets.TRIALD_DEPLOY_KEY }}
+      # triald is public, so it is fetched over https and needs no credentials.
+      - run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
       - run: make test-e2e
 
   reproducibility:
