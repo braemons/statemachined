@@ -10,7 +10,7 @@
 //
 // **Flashing is deliberately not here.** It means dropping the port
 // mid-session, which is a different risk from anything else this daemon does --
-// dev/DAEMON.md §6.3 and dev/API.md §3.
+// docs/developer/daemon.md §6.3 and docs/reference/api.md §3.
 
 import { BasePanelElement, defineElementOnce } from "./base_panel_element.js";
 

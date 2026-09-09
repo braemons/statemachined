@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """The graph as a person authors it, before any of it becomes an index.
 
-The wire speaks indices because the device has 32 KB (dev/PROTOCOL.md); a person
+The wire speaks indices because the device has 32 KB (docs/reference/protocol.md); a person
 speaks names. Everything in this package is the name-shaped side of that, and
 `statemachined.graph_set_compiler` is the translation. Nothing here knows what a message
 looks like, and nothing in `statemachined.device` knows what a name is.

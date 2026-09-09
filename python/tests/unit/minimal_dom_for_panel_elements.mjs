@@ -3,7 +3,7 @@
 // A DOM small enough to hold a panel, and no smaller.
 //
 // The web UI has no build step and no framework, which is a deliberate choice
-// (dev/DAEMON.md §5) and costs it a test runner: there is no jsdom here, and
+// (docs/developer/daemon.md §5) and costs it a test runner: there is no jsdom here, and
 // pulling one in would put a node toolchain between a rig and its own UI.
 //
 // What the panels actually use is a dozen DOM methods -- createElement,

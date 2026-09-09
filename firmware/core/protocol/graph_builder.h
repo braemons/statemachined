@@ -3,7 +3,7 @@
 //
 // The upload is chunked because the device has 32 KB and a whole set as JSON
 // does not fit -- peak parse buffer is one message, never the document. See
-// dev/PROTOCOL.md 3.2.
+// docs/reference/protocol.md 3.2.
 //
 // Three invariants live here rather than in the protocol document alone:
 //
@@ -61,7 +61,7 @@ class GraphBuilder {
 
   /// Open a set upload, discarding whatever the target held. `covered` is the
   /// CRC-covered prefix of the line, which is what the running checksum folds
-  /// in -- see dev/PROTOCOL.md 1.1.
+  /// in -- see docs/reference/protocol.md 1.1.
   UploadError begin_set(const JsonObject& m, JsonSpan covered);
 
   /// Open one graph within the set. Its `slot` must be the next one: a set

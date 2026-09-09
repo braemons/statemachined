@@ -262,7 +262,7 @@ export class BasePanelElement extends HTMLElement {
     banner.className = "failure";
     const error = this.failure;
     if (error instanceof DaemonRefusedTheRequest) {
-      // Every refusal names what to change (dev/API.md §2), so show it: a UI
+      // Every refusal names what to change (docs/reference/api.md §2), so show it: a UI
       // that renders only the status code throws away the useful half.
       banner.textContent = `${error.code}: ${error.detail}`;
       if (error.context) {

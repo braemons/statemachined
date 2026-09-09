@@ -7,7 +7,7 @@ the host (firmware/native/). These tests talk to it through the daemon's own
 framing, the session's one-command-in-flight rule, the device's parser, its
 validator, its scan loop, its result chunker.
 
-**Why a socket and not a pty.** dev/DAEMON.md said "over a pty", and a pty turns
+**Why a socket and not a pty.** docs/developer/daemon.md said "over a pty", and a pty turns
 out to be the awkward choice rather than the obvious one: the native device
 takes its link on stdin and stdout, and pyserial opens a *path*, so the two ends
 of a pty pair cannot both be reached that way -- the parent would have to bypass

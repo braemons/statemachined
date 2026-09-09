@@ -9,7 +9,7 @@
 [project]
 name = "statemachined"
 # The sentinel. packaging/scripts/git-version.sh stamps the real version from
-# the tag at build time (dev/DAEMON.md §6.1), so a 0.0.0 artifact in the wild
+# the tag at build time (docs/developer/daemon.md §6.1), so a 0.0.0 artifact in the wild
 # means the stamping was bypassed rather than that this number was forgotten.
 version = "0.0.0"
 description = "Owns one statemachined device: the wire, the graphs, and the API over both"
@@ -71,7 +71,7 @@ serve = [
     # all. Found by connecting to a running one.
     "uvicorn[standard]>=0.52.4",
     # A console discovers a rig instead of being hand-configured with URLs --
-    # dev/DAEMON.md §5, and the same record vstimd already publishes. Imported
+    # docs/developer/daemon.md §5, and the same record vstimd already publishes. Imported
     # lazily and never fatal: a daemon that cannot advertise still serves, and a
     # rig with no mDNS on its network is a rig, not an error.
     "zeroconf>=0.132",

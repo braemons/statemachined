@@ -1,6 +1,6 @@
 {
   "name": "uno-r4-minima-bench",
-  "description": "The reference rig: the Uno R4 Minima wired as dev/HARDWARE.md describes it, with the two example paradigms. What `make bench` comes up loaded with.",
+  "description": "The reference rig: the Uno R4 Minima wired as docs/operations/hardware.md describes it, with the two example paradigms. What `make bench` comes up loaded with.",
   "board": "uno_r4_minima",
   "line_map": {
     "input_lines": [

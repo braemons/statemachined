@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """Line number to pin label, for printing only.
 
-The map itself is a wire contract and it lives in dev/HARDWARE.md; this table
+The map itself is a wire contract and it lives in docs/operations/hardware.md; this table
 is a convenience so that `io.in` prints as something a person can hold against
 the wires in front of them. It is keyed by the `board` string in `hello_ack`,
 and a board that is not in it -- the next MCU, on the far end of an ethernet
@@ -12,7 +12,7 @@ else's pinout.
 from __future__ import annotations
 
 PIN_MAPS: dict[str, dict[str, list[str]]] = {
-    # dev/HARDWARE.md, "Uno R4 Minima -- line map". D0/D1 are the UART and D13
+    # docs/operations/hardware.md, "Uno R4 Minima -- line map". D0/D1 are the UART and D13
     # is the on-board LED, so neither is a line.
     "uno_r4_minima": {
         "in": ["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"],

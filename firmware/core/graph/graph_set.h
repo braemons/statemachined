@@ -7,7 +7,7 @@
 // picks one by index. That is what keeps an upload out of the inter-trial
 // interval, and out of the inter-trial interval of only those trials where the
 // type changed -- which would be a timing difference correlated with the
-// variable under study. See dev/DAEMON.md 3.2.
+// variable under study. See docs/developer/daemon.md 3.2.
 //
 // They share one set of pools, which is the mechanism this file already used
 // one level down: a State addresses its transitions and actions as a

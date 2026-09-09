@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The line layer. These tests are the promise dev/PROTOCOL.md section 1 makes:
+// The line layer. These tests are the promise docs/reference/protocol.md section 1 makes:
 // a corrupt line is refused whole, never acted on in part, and a link that is
 // dropping lines says so instead of producing trials that quietly did not
 // happen.

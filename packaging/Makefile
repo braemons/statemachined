@@ -4,7 +4,7 @@
 #
 # **Vendored.** A self-contained Python tree lands under
 # /opt/braemons/statemachined -- interpreter and all -- rather than a set of
-# `python3-*` dependencies. That is the braemons pattern (dev/DAEMON.md §6.1)
+# `python3-*` dependencies. That is the braemons pattern (docs/developer/daemon.md §6.1)
 # and the reason is a rig rather than taste: an OS upgrade that moves Python
 # must not be able to stop an experiment, and a box in a rack should not need a
 # working pip to be repaired. The price is that a pure-Python package is
@@ -119,7 +119,7 @@ IMAGE_DIR ?= $(ROOT)/image
 
 # Documentation that ships in the package, because the box in the rack is where
 # somebody is standing when they need it.
-DOCS := README.md LICENSE NOTICE dev/DAEMON.md dev/API.md dev/PROTOCOL.md dev/HARDWARE.md dev/BRINGUP.md
+DOCS := README.md LICENSE NOTICE docs/developer/daemon.md docs/reference/api.md docs/reference/protocol.md docs/operations/hardware.md docs/operations/bringup.md
 
 .PHONY: packages-amd64 packages-arm64 packages packages-here \
         deb rpm stage stage-device stage-docs stage-firmware check inspect repro \
@@ -278,7 +278,7 @@ $(STAGE)/.stamp: $(shell find $(ROOT)/python/src $(ROOT)/firmware/core $(ROOT)/f
 # question anybody asks of it is whether it works -- `statemachined device` on
 # one terminal, `-t socket://127.0.0.1:5300` on the other, and the answer
 # involves the firmware's own session, engine and result chunker rather than a
-# mock of them. dev/DAEMON.md has called this "how anybody runs this daemon with
+# mock of them. docs/developer/daemon.md has called this "how anybody runs this daemon with
 # no board on the desk" since M4h; until now it was only true from a checkout.
 #
 # libexec/ rather than bin/: nothing types this name. `statemachined device`

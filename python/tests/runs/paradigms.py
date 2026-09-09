@@ -8,7 +8,7 @@ differed between any two of those would make the comparison meaningless.
 
 **The board presses its own levers.** Every paradigm here that involves an input
 drives it from one of the board's own outputs, through the loopback harness of
-dev/HARDWARE.md: output line *n* is wired to input line *(n + 4) mod 8*, by
+docs/operations/hardware.md: output line *n* is wired to input line *(n + 4) mod 8*, by
 eight jumper wires on real hardware and by `set_native_loopback()` in software
 on the host. So `cue_lamp` (output 0) *is* `lever_left` (input 4), one scan
 later, and a graph that raises the lamp answers its own response window.

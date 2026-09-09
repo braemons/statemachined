@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A JSON reader and writer for exactly the shapes dev/PROTOCOL.md defines, and
+// A JSON reader and writer for exactly the shapes docs/reference/protocol.md defines, and
 // nothing else. No allocation, no floating point, one pass, and recursion
 // bounded to kJsonMaxDepth -- four frames, which the protocol never exceeds and
 // the parser refuses beyond.
@@ -53,7 +53,7 @@ enum class JsonError : uint8_t {
 
 const char* json_error_str(JsonError e);
 
-constexpr uint8_t kJsonMaxDepth = 4;     ///< dev/PROTOCOL.md 1: a conforming
+constexpr uint8_t kJsonMaxDepth = 4;     ///< docs/reference/protocol.md 1: a conforming
                                          ///< message never needs more
 constexpr uint8_t kJsonMaxMembers = 16;  ///< the largest message this protocol
                                          ///< defines has ten

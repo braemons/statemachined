@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """The trace: every state the machine entered, timestamped, kept regardless.
 
-dev/DAEMON.md §4.6. This is the one job that is *only* possible in a daemon: it
+docs/developer/daemon.md §4.6. This is the one job that is *only* possible in a daemon: it
 has to be running and listening at the moment a state is entered, which no
 library invoked per trial is.
 

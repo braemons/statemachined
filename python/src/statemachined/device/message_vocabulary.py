@@ -8,7 +8,7 @@ misspelling is an AttributeError at the call site instead of a command the
 device answers with `unknown_type`.
 
 Not shared with emulation/tests/statemachined_protocol.py, deliberately. That
-module is a second implementation written from dev/PROTOCOL.md so that a test
+module is a second implementation written from docs/reference/protocol.md so that a test
 asks the device an independent question; handing it this vocabulary would make
 both ends agree by construction, which is exactly the agreement the emulator
 test exists to not assume.
@@ -24,7 +24,7 @@ class Field(StrEnum):
 
     `MESSAGE_ID` is emphatically not a sequence number -- it orders nothing, a
     gap in it is not an error, and its whole job is letting a resend be
-    recognised as one. See dev/PROTOCOL.md §1.2.
+    recognised as one. See docs/reference/protocol.md §1.2.
     """
 
     MSG_TYPE = "msg_type"
@@ -110,7 +110,7 @@ class ErrorCode(StrEnum):
     UNKNOWN_TRIAL = "unknown_trial"
     BUSY = "busy"
     #: `pins` was asked of firmware that does not name its pins -- every board
-    #: flashed before dev/PROTOCOL.md §3.6 existed. Not a failure: the host
+    #: flashed before docs/reference/protocol.md §3.6 existed. Not a failure: the host
     #: keeps whatever it assumed, and knows that it assumed it.
     NO_PIN_MAP = "no_pin_map"
     BAD_FIELD = "bad_field"

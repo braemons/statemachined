@@ -7,7 +7,7 @@
 # for the one this bench comes up loaded with.
 #
 # This is NOT the installed conffile. The package's is
-# /etc/braemons/statemachined-rig-config.toml (dev/DAEMON.md §6.2), it is
+# /etc/braemons/statemachined-rig-config.toml (docs/developer/daemon.md §6.2), it is
 # written by M5, and it names /var/lib paths a developer's checkout does not
 # have. This one names paths under build/, which is ignored by git, so running
 # the bench never dirties the tree and deleting a graph from the web UI never

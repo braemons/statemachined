@@ -5,7 +5,7 @@ Deliberately a *second* implementation of the framing rules rather than a
 binding to the firmware's. If both ends were the same code, a test could only
 ever prove the device agreed with itself; the whole value of an emulator test is
 that something independent asks the device a question. This file is written from
-dev/PROTOCOL.md, not from firmware/core/protocol/.
+docs/reference/protocol.md, not from firmware/core/protocol/.
 """
 
 

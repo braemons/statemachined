@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """What the machine is doing now, and everything it has done.
 
-dev/API.md §6 and §7. Two streams with opposite rules, and the difference is the
+docs/reference/api.md §6 and §7. Two streams with opposite rules, and the difference is the
 only interesting thing here:
 
   * `WS /api/stream` is **coalesced**. A client that falls behind gets the
@@ -30,7 +30,7 @@ router = APIRouter(tags=["state"])
 
 #: How often a stream looks for something new. The device's own timing is
 #: nowhere near this -- a scan is 100 us -- and it does not need to be: these
-#: are for watching, and dev/PROTOCOL.md is explicit that a monitoring aid never
+#: are for watching, and docs/reference/protocol.md is explicit that a monitoring aid never
 #: sits in a trial's critical path.
 STREAM_POLL_SECONDS = 0.05
 

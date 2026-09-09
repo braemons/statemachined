@@ -1,12 +1,12 @@
 # statemachined — the wire protocol
 
-> **Status:** specification. The codec is milestone M2 in [`PLAN.md`](PLAN.md);
+> **Status:** specification. The codec is milestone M2 in [`PLAN.md`](../../dev/PLAN.md);
 > the firmware side of it is being written against this document, not the other
 > way round.
 
 The link between the **bridge** (a host process) and the **device** (firmware on
 a microcontroller). USB CDC, newline-delimited JSON, a per-line identifier and
-a CRC, as [`PLAN.md`](PLAN.md) specifies.
+a CRC, as [`PLAN.md`](../../dev/PLAN.md) specifies.
 
 Everything above the framing is a consequence of two constraints that are worth
 stating before the tables, because most of the odd-looking decisions below come
@@ -159,7 +159,7 @@ Answered with `hello_ack`, or `error` / `bad_proto`.
 
 **A session uploads every graph it will use, once, before its first trial**, and
 then switches between them with `configure`'s `graph_index` (§3.3). Nothing is
-uploaded between trials. See `dev/DAEMON.md` §3.2 for why: an upload that
+uploaded between trials. See `docs/developer/daemon.md` §3.2 for why: an upload that
 happens only when the trial type *changes* lengthens the ITI on exactly those
 trials, which is a timing difference correlated with the variable under study.
 

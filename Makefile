@@ -62,7 +62,7 @@ emulate:                    ## run the firmware under Renode, in Robot tests
 upload:                     ## flash the reference board
 	pio run -e $(BOARD) -t upload
 
-# The bench instrument dev/BRINGUP.md §4 and §5 ask for. Its one dependency
+# The bench instrument docs/operations/bringup.md §4 and §5 ask for. Its one dependency
 # (pyserial) lives in python/pyproject.toml's `device` extra rather than in whichever
 # python3 is on PATH, so `uv run --project` builds an environment for it on
 # first use and neither renode-test's interpreter nor the uv-tool sandboxes
@@ -149,7 +149,7 @@ test-hardware:              ## the suite that needs a board: make test-hardware 
 #
 # tests/unit is arithmetic and translation with nothing attached: the framing,
 # which exists three times in this tree and would otherwise drift silently; the
-# compiler, checked message by message against dev/PROTOCOL.md; and the client's
+# compiler, checked message by message against docs/reference/protocol.md; and the client's
 # own half of every call, against a mock transport.
 #
 # tests/integration drives whole sessions against build/statemachined_native_device,
@@ -194,7 +194,7 @@ test-runs: test             ## whole sessions, both API paths, against the host 
 # The same tests as `test-runs`, with a board on the other end instead of the
 # host build. Not part of `make ci` for the same reason `test-hardware` is not:
 # a target that fails on every machine without a board is one people learn to
-# ignore. Needs the eight-wire loopback harness -- dev/HARDWARE.md -- and skips
+# ignore. Needs the eight-wire loopback harness -- docs/operations/hardware.md -- and skips
 # the paradigms that wait on a line, with the wiring list, when it is not there.
 .PHONY: test-runs-hardware
 test-runs-hardware:         ## the same sessions against a board: make test-runs-hardware TARGET=...
@@ -334,7 +334,7 @@ image:                      ## build the flashable image, with a manifest
 	  echo; \
 	  echo "statemachined-$(BOARD).bin"; \
 	  echo "  Holds no graph until one is uploaded, and comes back up running"; \
-	  echo "  whatever it was last saved with. Wiring in dev/HARDWARE.md"; \
+	  echo "  whatever it was last saved with. Wiring in docs/operations/hardware.md"; \
 	  echo; \
 	  echo "flash with:  make upload   or   bossac -i -e -w -R <file>.bin"; \
 	  echo; \
@@ -354,7 +354,7 @@ image:                      ## build the flashable image, with a manifest
 # /opt/braemons/statemachined, a systemd unit, a udev rule naming the board, a
 # conffile describing the box, and the flashable firmware `make image` builds.
 # It lives in packaging/ rather than here because it is a build of its own --
-# see packaging/README.md and dev/DAEMON.md §6 -- and these lines exist so that
+# see packaging/README.md and docs/developer/daemon.md §6 -- and these lines exist so that
 # nobody has to know that to build one.
 #
 # `make packages` is what a release publishes: both architectures, each built

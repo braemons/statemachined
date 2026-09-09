@@ -15,11 +15,11 @@
 // **Not the Trace.** The trace is the record: one row per state visit, kept in
 // two clocks, written to disk and joined to triald's .tdr afterwards. This is a
 // log: bytes, thrown away when the ring wraps, and interesting for about as
-// long as somebody is watching it. See dev/DAEMON.md §5.
+// long as somebody is watching it. See docs/developer/daemon.md §5.
 //
 // It sends nothing. A serial terminal that could type at the board would be a
 // second host on a link whose whole design is one command in flight (see
-// dev/PROTOCOL.md §1.2), and the interesting commands all have API routes that
+// docs/reference/protocol.md §1.2), and the interesting commands all have API routes that
 // keep the daemon's idea of the device true. Every one of them shows up here.
 
 import { BasePanelElement, defineElementOnce } from "./base_panel_element.js";

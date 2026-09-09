@@ -34,7 +34,7 @@ the session passed it on.
 **Timing.** Renode runs on virtual time against a nominal MIPS figure, so a scan
 here takes exactly as long as we tell it to and the number means nothing. The
 10 kHz claim and the RAM high-water mark both need a board. See
-`dev/HARDWARE.md`.
+`docs/operations/hardware.md`.
 
 Nothing in this directory should ever grow an assertion about microseconds.
 
@@ -54,7 +54,7 @@ independently useful for a rig that wants a hardware serial bridge, so it is not
 a test-only artefact.
 
 `tests/statemachined_protocol.py` is deliberately a **second implementation** of the
-framing rules, written from `dev/PROTOCOL.md` rather than bound to
+framing rules, written from `docs/reference/protocol.md` rather than bound to
 `firmware/core/protocol/`. If both ends were the same code, these tests could
 only prove the device agreed with itself.
 

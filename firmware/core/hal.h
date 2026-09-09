@@ -14,7 +14,7 @@
 // anything else.
 //
 // Implementations: firmware/hal/native.cpp (host, for the simulator),
-// firmware/hal/renesas_ra4m1.cpp (Uno R4 Minima). See dev/HARDWARE.md for which
+// firmware/hal/renesas_ra4m1.cpp (Uno R4 Minima). See docs/operations/hardware.md for which
 // physical pin is which line.
 #pragma once
 #include <cstddef>
@@ -130,7 +130,7 @@ bool storage_write_commit();
 /// hand-copied pin map, which is what the RA4M1 HAL refuses to keep of the
 /// Arduino core's for exactly the reason it would be wrong here.
 ///
-/// Answered to the host by the `pins` command. See dev/PROTOCOL.md 3.6.
+/// Answered to the host by the `pins` command. See docs/reference/protocol.md 3.6.
 const char* const* input_pin_labels();
 const char* const* output_pin_labels();
 
@@ -148,7 +148,7 @@ void set_native_inputs(LineBitmask word);
 /// Wire every output line back to an input line, in software.
 ///
 /// Output line *n* appears on input line *(n + shift) mod width*, which is the
-/// loopback harness of dev/HARDWARE.md with the jumper wires taken out. It
+/// loopback harness of docs/operations/hardware.md with the jumper wires taken out. It
 /// exists so that the tests which drive a transition from a *predicate* --
 /// the pin -> conditioner -> matches() -> transition chain -- are the same
 /// tests with a board on the desk and without one. Before it, that chain could

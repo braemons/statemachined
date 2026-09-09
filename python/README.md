@@ -14,7 +14,7 @@ pip install 'statemachined[serve]'   # + be the daemon
 |---|---|---|
 | `model/` | base | a graph, a line map, a config and a record as a *person* writes and reads them. Pydantic, because this is the boundary where a file somebody edited arrives and "refuse it, naming the field" is the whole job. Knows nothing about messages |
 | `graph_set_compiler.py` | base | the translation, and the only place that knows both vocabularies. Names into indices, plus the check that the whole set fits the `caps` a board declared |
-| `client/` | base | `StatemachinedClient`: the HTTP and WebSocket API in [`dev/API.md`](../dev/API.md), for when something else owns the board |
+| `client/` | base | `StatemachinedClient`: the HTTP and WebSocket API in [`docs/reference/api.md`](../docs/reference/api.md), for when something else owns the board |
 | `device/` | `[device]` | the wire, and `StatemachinedDevice` on top of it: open the port, greet, push the wiring, upload a set, run trials. Needs pyserial |
 | `daemon/` | `[serve]` | the API, the web UI, the stores, the trace and the recordings. Needs fastapi and uvicorn |
 
@@ -90,10 +90,10 @@ does); without it the last three skip themselves and say how.
 
 ## The bench instrument
 
-`command_line_interface.py` is still what [`dev/BRINGUP.md`](../dev/BRINGUP.md)
+`command_line_interface.py` is still what [`docs/operations/bringup.md`](../docs/operations/bringup.md)
 §4 and §5 ask for: one command out, one reply back, and the numbers M3 is
 waiting on printed in a shape somebody can paste into
-[`dev/HARDWARE.md`](../dev/HARDWARE.md). It knows nothing about paradigms,
+[`docs/operations/hardware.md`](../docs/operations/hardware.md). It knows nothing about paradigms,
 trials or graphs, and nothing that runs an experiment belongs in it.
 
 ```sh
@@ -180,7 +180,7 @@ the file.
 uv run --project python statemachined serve --port 8081
 ```
 
-The API is [`dev/API.md`](../dev/API.md), the generated schema is at
+The API is [`docs/reference/api.md`](../docs/reference/api.md), the generated schema is at
 `/openapi.json`, and `/docs` is browsable. Everything else in this file is the
 bench instrument; `serve` is the daemon, and the difference is that a bench
 command borrows a board somebody is holding while a daemon takes it.
@@ -192,7 +192,7 @@ and its absence means the built-in defaults, which is what a bench run wants):
 the device, the expected board, the directories, where triald is. Hand-edited,
 and never written back. A **state-machine config** is the line map and the
 graphs, one file per config under `/var/lib/braemons/statemachined/configs/`,
-saved and loaded from the web UI. See `dev/API.md` §8.
+saved and loaded from the web UI. See `docs/reference/api.md` §8.
 
 ## Tests that need no board
 
@@ -203,7 +203,7 @@ make test-e2e           # the trial loop with a real triald at the other end
 ```
 
 `tests/unit/` is arithmetic and translation: the framing, the compiler checked
-message by message against `dev/PROTOCOL.md` §3.2, the clock's wrap.
+message by message against `docs/reference/protocol.md` §3.2, the clock's wrap.
 
 `tests/integration/` drives whole sessions -- greet, upload, configure, start,
 result, cancel races, link loss -- against `build/statemachined_native_device`,

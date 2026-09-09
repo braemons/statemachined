@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// A graph, drawn. Read-only in v1 (dev/DAEMON.md §5).
+// A graph, drawn. Read-only in v1 (docs/developer/daemon.md §5).
 //
 // The layout is breadth-first from the entry state, one column per depth. It is
 // the crudest thing that works and it is chosen deliberately: a paradigm graph

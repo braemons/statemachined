@@ -97,7 +97,7 @@ bridge checks a graph against them before uploading a byte of it.
 ### Demo mode — the bring-up wiring
 
 > The step-by-step procedure, including what to check at each stage and what to
-> write down afterwards, is [`BRINGUP.md`](BRINGUP.md). This section is the
+> write down afterwards, is [`bringup.md`](bringup.md). This section is the
 > wiring it refers to.
 
 The board holds no graph until one is uploaded, so a bench board wired up and
@@ -132,6 +132,65 @@ With `graphs/state-walk.json` uploaded and the board told to arm its own trials
 switch and one lamp walks D10 → D11 → D12 and round again, **500 ms each**, then
 the trial ends as `Hit` and D10 comes back on; 1.5 s later it goes again, which
 is the dwell that graph's terminal state declares.
+
+---
+
+## The loopback harness
+
+A second wiring, for testing rather than for a bench: **eight jumper wires,
+output line _n_ to input line _(n + 4) mod 8_**, so the board drives its own
+inputs.
+
+| Wire | Output line | From | | To | Input line |
+|---|---|---|---|---|---|
+| 1 | 0 | **D10** | → | **D6** | 4 |
+| 2 | 1 | **D11** | → | **D7** | 5 |
+| 3 | 2 | **D12** | → | **D8** | 6 |
+| 4 | 3 | **A0** | → | **D9** | 7 |
+| 5 | 4 | **A1** | → | **D2** | 0 |
+| 6 | 5 | **A2** | → | **D3** | 1 |
+| 7 | 6 | **A3** | → | **D4** | 2 |
+| 8 | 7 | **A4** | → | **D5** | 3 |
+
+No components; the inputs are high-impedance and the outputs drive both ways.
+
+**What it is for.** A graph's entry action raises an output, and one scan later
+that arrives as an input the same graph's transitions can wait on. Three things
+become testable that otherwise are not:
+
+- **Predicates on real silicon.** The chain pin → `InputConditioner` →
+  `Transition::matches()` → a transition firing is exercised nowhere else. Every
+  other trial in this repository ends on a timeout.
+- **Simultaneity.** Two lines released and pressed again inside one millisecond
+  is not something a person can do to a pair of switches, and it is exactly what
+  a rising-edge rule over a two-line predicate has to be tested against.
+- **Response latency.** The measured duration of a state that raises a line and
+  waits for it *is* the board's pin-to-transition time, which is the one timing
+  figure the device can honestly measure about itself.
+
+**Why the shift, rather than output _n_ to input _n_.** A straight-through
+harness cannot distinguish a correct board from one whose reported input word is
+secretly the output word: raise output 0, see bit 0 set, pass. Under the shift
+each output has a unique and non-obvious expected input bit, so that failure —
+and any rotation or off-by-one in either table above — fails rather than passing
+for the wrong reason. It also covers all sixteen lines; the three-wire harness
+this replaced left thirteen pins never once proven to be the pin the table
+claims.
+
+**It is not compatible with the bench switches.** Wires 5 and 6 land on D2 and
+D3, which the bench wiring above drives from a contact to 5 V, and an output
+pulling low against a closed switch is a short. Either take the switches off, or
+put **1 kΩ in series** in those two wires. The output pins may be shared with
+the bench lamps freely.
+
+**In software, with no board.** The host build implements the same rule —
+`hal::set_native_loopback(width, shift)`, switched on with
+`STATEMACHINED_LOOPBACK=8` — so a suite that drives transitions from predicates
+runs unchanged with a board and without one. That is what
+`python/tests/runs/` relies on: the far end is a fixture, and the same session
+runs against silicon and against the host build. The software half reproduces
+*which line a level arrives on and that it arrives a scan later*; it reproduces
+nothing about timing, and no timing assertion is made against it.
 
 Holding the start switch down does not re-trigger: a transition fires on its
 predicate's *rising edge*, so the switch has to be released and pressed again.
@@ -262,7 +321,7 @@ the 8 B buys is a host that no longer keeps its own copy of this pinout.
 
 ### The graph set, over the link — measured 2026-09-04
 
-`dev/DAEMON.md` §3.2 uploads every graph a session uses once and then switches
+`docs/developer/daemon.md` §3.2 uploads every graph a session uses once and then switches
 by index, and the whole argument for that is the second row of this table.
 
 | | |
@@ -295,14 +354,62 @@ entry action reached the pin — `io.out` read 4 mid-trial — and that the resu
 chunks, which the scan ISR pushes while the foreground drains them, arrive whole
 and in order with their rolling checksum intact.
 
-**Still not measured:** input-to-output latency and the step dwell as seen by a
-scope on D2 and D10. The figure above is the device's own clock reporting on
-itself, which is a different claim from a probe on a pin.
+**Still not measured:** the step dwell as seen by a scope on D2 and D10. The
+figure above is the device's own clock reporting on itself, which is a different
+claim from a probe on a pin. Input-to-output latency *has* since been measured —
+by the board against itself, through the loopback harness, and the number is
+surprising: see "Response latency and duration accuracy" below.
 
 **What *is* verified without a board:** the pin map above, the port-register
 reads and writes, the timer ISR, and a whole session over a real UART, all under
 Renode in CI. See `emulation/README.md` — and note that it proves the HAL
 correct and says nothing whatever about how long a scan takes.
+
+### Response latency and duration accuracy — measured 2026-09-09
+
+Through the loopback harness, on an Uno R4 Minima, asserted from now on by
+`python/tests/hardware/test_timing_accuracy.py`.
+
+**Duration accuracy.** A fixed dwell, ten trials at each of five scales:
+
+| Drawn | Error, min … max | Mean |
+|---|---|---|
+| 20 ms | +14 … +88 µs | +63 µs |
+| 50 ms | +13 … +81 µs | +46 µs |
+| 100 ms | +8 … +73 µs | +31 µs |
+| 500 ms | +7 … +85 µs | +39 µs |
+| 1000 ms | +19 … +87 µs | +66 µs |
+
+The error is **flat across fifty times the duration**, which is the part that
+matters: it is the fixed cost of entering and leaving a state, not a clock
+running fast. A rate error would have grown with the dwell, and at 1000 ms it is
+66 µs — 66 ppm — so the device's clock is good to well under a part in ten
+thousand over a trial. Jitter on a repeated 100 ms dwell is sd ≈ 25 µs.
+
+**Response latency — an open question, not a settled cost.** A state that raises
+one output and waits for the input its jumper drives, 300 trials:
+
+| | |
+|---|---|
+| Median | 1 196 µs |
+| p95 | 1 957 µs |
+| Max | 1 960 µs |
+| Distribution | **bimodal**: ≈1 150 µs (55%), ≈1 950 µs (38%), a thin tail between |
+
+**That is 12 to 20 scan periods for a chain that touches nothing but GPIO.** The
+scan timer is 10 kHz (`kScanHz`, `firmware/src/main.cpp`), the whole path is
+`write_outputs` → pin → jumper → `read_inputs` → `InputConditioner` →
+`Transition::matches()`, and all of it runs inside one ISR — so two periods is
+what it looks like it should cost. Debounce is not the explanation: these lines
+are configured with `debounce_ms` 0.
+
+The bimodality, with the two modes ~800 µs apart, suggests a beat against
+something periodic rather than a constant overhead. It has not been diagnosed.
+The budgets in the test are set above the measurement so the suite is a
+regression test today; **if this is explained and closed, they come down with
+it.** For a paradigm whose response window is tens of milliseconds this is
+comfortably inside the noise; for anything reasoning about single-millisecond
+response times it is not, and it should be understood before that is relied on.
 
 ### Flashing
 

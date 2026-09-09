@@ -2,7 +2,7 @@
 // CRC-16/CCITT-FALSE, the check on every protocol line and the accumulator
 // behind graph_end's and result_end's checksums.
 //
-// This is not security and is not claimed to be -- see dev/PROTOCOL.md, 1.1. It
+// This is not security and is not claimed to be -- see docs/reference/protocol.md, 1.1. It
 // catches the failure that actually happens on a USB CDC link: a truncated or
 // spliced line after a re-enumeration, caught early enough that a corrupt graph
 // is refused rather than run.

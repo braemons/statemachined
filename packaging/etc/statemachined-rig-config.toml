@@ -44,7 +44,7 @@ expected_board = "uno_r4_minima"
 
 # Whether the daemon opens the port and greets on startup.
 #
-# Greeting takes the rig (dev/PROTOCOL.md §3.7): a board that was arming its own
+# Greeting takes the rig (docs/reference/protocol.md §3.7): a board that was arming its own
 # trials stops doing so. That is the safety rule and not a side effect -- but it
 # does mean a box whose board is deliberately running unattended should come up
 # with this false and be connected by hand.

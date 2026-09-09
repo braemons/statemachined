@@ -262,7 +262,7 @@ def _the_harness_answer(wired: bool, a_board_is_attached: bool):
             "board's own outputs; without the jumpers half of them could only ever time "
             "out. Eight wires, output line n to input line (n+4) mod 8 -- D10->D6, "
             "D11->D7, D12->D8, A0->D9, A1->D2, A2->D3, A3->D4, A4->D5. "
-            "See dev/HARDWARE.md."
+            "See docs/operations/hardware.md."
         )
     raise AssertionError(
         "the host build's software harness is not on. It is switched on with "

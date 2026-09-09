@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """What came back from a trial, with the indices turned back into names.
 
-The device reports a path of six-element arrays (dev/PROTOCOL.md 4.3) and the
+The device reports a path of six-element arrays (docs/reference/protocol.md 4.3) and the
 `visit` stream reports the same rows as they happen (4.4). Both are indices,
 because the device has 32 KB. Both are decoded here, by the same code, into the
 names the graph was authored with -- so an analysis reads `Foreperiod` and not

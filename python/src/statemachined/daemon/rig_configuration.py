@@ -90,12 +90,12 @@ class RigConfiguration(BaseModel):
     #: and for a box whose experiment changes daily.
     startup_state_machine_config: str = ""
 
-    #: dev/DAEMON.md §3.2. "set" uploads every graph a session uses once and
+    #: docs/developer/daemon.md §3.2. "set" uploads every graph a session uses once and
     #: switches by index; "per_trial" uploads on configure and pays the ITI cost
     #: that mode exists to avoid. An explicit choice, never a silent fallback.
     graph_mode: Literal["set", "per_trial"] = "set"
 
-    #: How many trace entries the ring holds. dev/DAEMON.md §4.6: a normal
+    #: How many trace entries the ring holds. docs/developer/daemon.md §4.6: a normal
     #: session is a few thousand, and the pathological case is a looping
     #: paradigm at the device's 255-visit ceiling for a thousand trials.
     trace_ring_entries: int = Field(default=100_000, gt=0)

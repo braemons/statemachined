@@ -42,7 +42,7 @@ from hardware_test_harness import (
     wiring_instructions,
 )
 
-#: dev/PLAN.md M3, and what dev/BRINGUP.md §4 is waiting on.
+#: dev/PLAN.md M3, and what docs/operations/bringup.md §4 is waiting on.
 SCAN_HZ_TARGET = 10_000
 
 #: The output line `two_state_graph` raises, so that a test can watch a graph's

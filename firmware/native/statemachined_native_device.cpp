@@ -15,7 +15,7 @@
 // board attached.
 //
 // What it is NOT is a timing test. The scan here is a nanosleep in a loop on a
-// preemptible desktop kernel, and dev/HARDWARE.md's numbers come from a board.
+// preemptible desktop kernel, and docs/operations/hardware.md's numbers come from a board.
 // Durations are honest to a millisecond or so, which is what an integration
 // test needs and nothing more.
 #include <unistd.h>
@@ -134,7 +134,7 @@ class FileSettingsPort : public SettingsPort {
 /// The software loopback harness, if the environment asked for one.
 ///
 /// `STATEMACHINED_LOOPBACK=8` wires output line n back to input line
-/// (n + 4) mod 8 -- the eight jumper wires of dev/HARDWARE.md, in software, so
+/// (n + 4) mod 8 -- the eight jumper wires of docs/operations/hardware.md, in software, so
 /// that a suite driving transitions from predicates is the same suite with a
 /// board and without one. `<width>:<shift>` sets both; unset is off.
 ///

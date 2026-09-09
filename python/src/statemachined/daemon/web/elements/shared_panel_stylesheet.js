@@ -3,7 +3,7 @@
 // One stylesheet, adopted by every panel's shadow root.
 //
 // It is a JS module rather than a `.css` file because a shadow root cannot see
-// the page's stylesheet -- which is the whole point of using one (dev/DAEMON.md
+// the page's stylesheet -- which is the whole point of using one (docs/developer/daemon.md
 // §5: triald's ~600 lines of global selectors cannot reach in here, natively,
 // with no tooling) -- and because `@import` inside a shadow root is a second
 // network round trip before anything renders.

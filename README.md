@@ -125,7 +125,7 @@ into it — including after a power cut.
 make upload
 ```
 
-[`dev/BRINGUP.md`](dev/BRINGUP.md) is the step-by-step procedure, in the order
+[`docs/operations/bringup.md`](docs/operations/bringup.md) is the step-by-step procedure, in the order
 that makes each stage fail on its own before the next one depends on it.
 
 With **nothing wired**, the on-board LED on D13 blinks once a second — the board
@@ -135,7 +135,7 @@ because a device that runs a paradigm nobody uploaded is a hazard.
 
 To make it visible, give it one. With two switches and three LEDs (wiring,
 including the pull-downs you do need, in
-[`dev/HARDWARE.md`](dev/HARDWARE.md)), upload `graphs/state-walk.json`, tell the
+[`docs/operations/hardware.md`](docs/operations/hardware.md)), upload `graphs/state-walk.json`, tell the
 board to arm its own trials and save:
 
 ```sh

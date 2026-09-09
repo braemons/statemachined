@@ -52,7 +52,7 @@ UNO_R4_MINIMA_CAPABILITIES = DeviceCapabilities(
 )
 
 
-#: What the board answers to `pins` (dev/PROTOCOL.md §3.6), and the same table
+#: What the board answers to `pins` (docs/reference/protocol.md §3.6), and the same table
 #: `pinMode()` is called over in firmware/hal/renesas_ra4m1.cpp. Written out
 #: here for the same reason the capacities above are: if the firmware's pinout
 #: moves, this is where an example authored against the old one should fail.

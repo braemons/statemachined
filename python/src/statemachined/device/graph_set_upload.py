@@ -10,7 +10,7 @@ daemon's codec against real hardware rather than of a copy of it.
 
 A **set**, not a graph: a session uploads every graph it will use before its
 first trial and then switches between them with `configure`'s `graph_index`.
-See dev/PROTOCOL.md §3.2 and dev/DAEMON.md §3.2.
+See docs/reference/protocol.md §3.2 and docs/developer/daemon.md §3.2.
 
 The checksum is the point. `set_end` carries a CRC-16 over the covered bytes of
 every upload message before it (PROTOCOL.md §3.2), so a chunk that went missing

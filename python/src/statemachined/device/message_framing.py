@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """Framing: the CRC, the line, and reading one back.
 
-This is the *third* implementation of dev/PROTOCOL.md's framing in this
+This is the *third* implementation of docs/reference/protocol.md's framing in this
 repository, after the firmware's and the one under emulation/tests/. That is
 deliberate and it is a cost. The two that already existed are independent on
 purpose -- a test written from the document asks the device a question it did
@@ -30,7 +30,7 @@ from .message_vocabulary import Field
 
 #: Both rolling checksums in this protocol -- the graph upload's and the
 #: result's -- start here and fold the CRC-covered bytes of each line in order.
-#: See dev/PROTOCOL.md §3.2 and §4.3.
+#: See docs/reference/protocol.md §3.2 and §4.3.
 CRC_INIT = 0xFFFF
 
 _CRC_MEMBER = ',"crc":'

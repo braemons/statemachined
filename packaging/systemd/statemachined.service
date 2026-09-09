@@ -1,7 +1,7 @@
 # The daemon as a rig runs it: one unit, one device, started at boot.
 #
 # Not a template unit today. One device per daemon is the v1 shape
-# (dev/DAEMON.md §4), and a rig with two MCUs becomes `statemachined@.service`
+# (docs/developer/daemon.md §4), and a rig with two MCUs becomes `statemachined@.service`
 # with a config per instance -- which is a change to this file and to the
 # conffile's name, and nothing above them.
 
@@ -35,7 +35,7 @@ RestartSec=2
 
 # Everything the daemon writes lives under one directory, created and owned by
 # systemd rather than by a postinstall script: the graph store, the configs, the
-# recordings and the NDJSON tail of the trace. dev/DAEMON.md §6.2.
+# recordings and the NDJSON tail of the trace. docs/developer/daemon.md §6.2.
 StateDirectory=braemons/statemachined
 LogsDirectory=statemachined
 

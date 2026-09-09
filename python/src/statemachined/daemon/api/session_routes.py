@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""Opening and closing a session. dev/API.md §4.
+"""Opening and closing a session. docs/reference/api.md §4.
 
 A session is one run of an experiment: the graphs it will use, put on the device
 once, before an animal is in the booth. After that a trial names one of them and
 starts in milliseconds, which is the whole reason the upload happens here rather
-than per trial (dev/DAEMON.md §3.2).
+than per trial (docs/developer/daemon.md §3.2).
 
 **On a rig, triald opens the session. On a bench, a person does.** Same call,
 which is the point -- a bench that exercised a different path would be a bench

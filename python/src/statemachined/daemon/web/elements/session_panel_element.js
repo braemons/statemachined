@@ -57,7 +57,7 @@ export class SessionPanelElement extends BasePanelElement {
       this.make("section", {}, [
         this.make("h2", {}, [this.make("span", { text: "Session" })]),
         // What a "session" is, said once, where somebody who has never read
-        // dev/DAEMON.md is looking. The panel is used inside a console with no
+        // docs/developer/daemon.md is looking. The panel is used inside a console with no
         // tabs and no shell, so it cannot rely on anything around it.
         this.make("p", {
           class: "muted",
@@ -257,7 +257,7 @@ export class SessionPanelElement extends BasePanelElement {
     await this.attempt(() => this.api.cancelTrial(trialId));
   }
 
-  /// The board on its own: dev/PROTOCOL.md 3.7 and 3.8, as two controls.
+  /// The board on its own: docs/reference/protocol.md 3.7 and 3.8, as two controls.
   ///
   /// Deliberately below the manual controls and deliberately wordy. Everything
   /// else on this page is a rig this daemon is driving; this is the switch that

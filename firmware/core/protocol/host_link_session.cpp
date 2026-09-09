@@ -34,7 +34,7 @@ const char* cause_name(StateExitCause c) {
   return "terminal";
 }
 
-/// The protocol error code for an upload failure. dev/PROTOCOL.md 5 -- the
+/// The protocol error code for an upload failure. docs/reference/protocol.md 5 -- the
 /// bridge switches on this, so the mapping is here rather than improvised at
 /// each call site.
 const char* upload_error_code(UploadError e) {
@@ -301,7 +301,7 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id, Microse
 }
 
 void HostLinkSession::on_pins_request(const JsonObject& m, uint16_t message_id) {
-  // dev/PROTOCOL.md 3.6. One direction per request, and `dir` is required.
+  // docs/reference/protocol.md 3.6. One direction per request, and `dir` is required.
   //
   // Not both in one reply: the labels of a 32-line board do not fit in
   // `max_line`, and a reply that silently held half of them would be worse than
@@ -768,7 +768,7 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
 
   // This is the switch. Every graph the session uses is already here, so
   // changing paradigm between two trials costs one field on a message the
-  // device was going to receive anyway. See dev/DAEMON.md 3.2.
+  // device was going to receive anyway. See docs/developer/daemon.md 3.2.
   uint8_t graph_index = 0;
   if (m.type_of("graph_index") != JsonType::Missing) {
     if (!m.u8("graph_index", &graph_index)) {
@@ -1005,7 +1005,7 @@ void HostLinkSession::on_ping(uint16_t message_id, Microseconds now_us) {
   // The device clock itself, raw, wrapping every ~71 minutes. `up_us` counts
   // from the first time anything asked, which is a different origin on every
   // session and cannot be compared with the `entered_us` in a result. This is
-  // the value a host correlates against its own clock -- see dev/DAEMON.md 4.5,
+  // the value a host correlates against its own clock -- see docs/developer/daemon.md 4.5,
   // where that correlation is called load-bearing.
   w.key_u32("us", now_us);
   send(w, message_id);

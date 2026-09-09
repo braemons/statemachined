@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """The trial loop: triald drives, statemachined reports.
 
-dev/API.md §5. Three calls in the critical path of every trial, and they are
+docs/reference/api.md §5. Three calls in the critical path of every trial, and they are
 small on purpose -- everything that could have been done once per session was
 done once per session, in `POST /api/session/graphs`.
 """
@@ -47,7 +47,7 @@ class ConfigureTrialRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     trial_id: int = Field(ge=0)
-    #: A name, never a slot. See dev/DAEMON.md §3.1.
+    #: A name, never a slot. See docs/developer/daemon.md §3.1.
     #:
     #: Empty means "the active graph" (`PUT /api/session/active-graph`), which
     #: is what a person pressing a button on a bench means and what triald never

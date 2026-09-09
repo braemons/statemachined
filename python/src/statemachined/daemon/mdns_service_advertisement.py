@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""Telling the network this rig exists. dev/DAEMON.md §5.
+"""Telling the network this rig exists. docs/developer/daemon.md §5.
 
 vstimd advertises `_vstimd._tcp` with a stable `id=` TXT record *"so clients can
 match a device across name collisions"*. This is the same record for
@@ -67,7 +67,7 @@ def text_records_for(
     /api/device` away, and duplicating that here would give a browser two
     answers that disagree the moment a board is unplugged.
 
-    `path` is here because the elements contract (dev/DAEMON.md §5) is a URL a
+    `path` is here because the elements contract (docs/developer/daemon.md §5) is a URL a
     console has to construct, and constructing it from a convention rather than
     from the record is how a console breaks when the daemon is behind a proxy.
     """

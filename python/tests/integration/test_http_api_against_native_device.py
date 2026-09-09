@@ -51,7 +51,7 @@ def test_the_daemon_connects_on_startup_and_says_what_it_found(api):
 
 
 def test_the_wiring_was_pushed_before_anything_else(api):
-    # dev/DAEMON.md §3.4: the compile-time safe levels are a mitigation, and
+    # docs/developer/daemon.md §3.4: the compile-time safe levels are a mitigation, and
     # replacing them with this rig's is the daemon's first job on connecting.
     assert api.get("/api/device").json()["has_wiring"] is True
 
@@ -89,7 +89,7 @@ def test_renaming_a_line_is_free_and_changes_no_graph(api):
 
 # ------------------------------------------------------------ the pin map ---
 #
-# dev/PROTOCOL.md §3.6. The daemon asks the device which pins it has rather than
+# docs/reference/protocol.md §3.6. The daemon asks the device which pins it has rather than
 # keeping a copy of the firmware's table, and these are the three things that
 # buys: labels that are the board's own word, a config that can name a pin
 # instead of a bit position, and a disagreement that is refused loudly instead

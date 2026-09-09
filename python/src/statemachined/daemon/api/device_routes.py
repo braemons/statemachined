@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """What board is attached, what it can hold, and which pin is the left lever.
 
-dev/API.md §3. The half of this API that exists for a person rather than for
+docs/reference/api.md §3. The half of this API that exists for a person rather than for
 triald -- and the reason the daemon is a daemon rather than a library: a
 translator can be a library, a thing you can ask at two in the morning whether
 the valve is wired to A0 cannot.
@@ -53,7 +53,7 @@ def read_device(request: Request) -> dict:
         ),
         "has_wiring": state_report.get("has_wiring", hello_ack.get("has_wiring")),
         # Whether this daemon knows which pin each line is because the board
-        # said so, or because it assumed. dev/PROTOCOL.md §3.6, and the whole
+        # said so, or because it assumed. docs/reference/protocol.md §3.6, and the whole
         # reason that command exists: before it, there was no third answer to
         # "which pin is line 4" beyond a table copied out of the firmware.
         "pin_labels_came_from": supervisor.pin_map.source,
@@ -120,7 +120,7 @@ def read_autorun(request: Request) -> dict:
     Asked of the board rather than remembered here: the setting is stored on the
     device, outlives this daemon's session, and survives the greeting that took
     the rig away from it. `enabled` and `active` are not the same fact -- see
-    dev/PROTOCOL.md 3.7.
+    docs/reference/protocol.md 3.7.
     """
     service = service_of(request)
     if not service.supervisor.is_connected:
@@ -217,7 +217,7 @@ def read_lines(request: Request) -> dict:
         # `device` means the board answered `pins` and these labels are its own.
         # `assumed` means this daemon fell back to its own table for firmware
         # older than that command, and every label here is a belief rather than
-        # a fact. See dev/PROTOCOL.md §3.6.
+        # a fact. See docs/reference/protocol.md §3.6.
         "pin_labels_came_from": pin_map.source,
         "board_input_pins": pin_map.input_pin_labels,
         "board_output_pins": pin_map.output_pin_labels,
@@ -250,7 +250,7 @@ def replace_the_line_map(request: Request, line_map: LineMap) -> dict:
     if supervisor.is_connected:
         # Resolved against the board *before* anything is kept, so a map naming
         # a pin this board does not have is refused with the rig still running
-        # on the map it had. See dev/PROTOCOL.md §3.6.
+        # on the map it had. See docs/reference/protocol.md §3.6.
         try:
             resolved = line_map.resolved_against(supervisor.pin_map)
         except ValueError as exc:
@@ -285,7 +285,7 @@ def replace_the_line_map(request: Request, line_map: LineMap) -> dict:
 def read_the_line_monitor(request: Request, since_entry_number: int = 0, limit: int = 500) -> dict:
     """The last lines in and out of the port, in the protocol's own words.
 
-    dev/API.md §3. What this is for is the moment the layers stop agreeing: the
+    docs/reference/api.md §3. What this is for is the moment the layers stop agreeing: the
     line map says the valve is line 3, the valve is not opening, and the
     question is what actually went down the wire. Nothing here interprets
     anything -- these are the lines, in order, with the time they crossed.
@@ -350,7 +350,7 @@ def read_firmware_versions(request: Request) -> dict:
     commit it is running, so the package carries a manifest and this says
     whether the two agree. Flashing is deliberately not here -- it means
     dropping the port mid-session, which is a different risk from anything else
-    the daemon does. See dev/DAEMON.md §6.3.
+    the daemon does. See docs/developer/daemon.md §6.3.
     """
     service = service_of(request)
     running = (service.supervisor.hello_ack or {}).get("fw")

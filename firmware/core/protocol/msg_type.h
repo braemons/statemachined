@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The vocabulary of dev/PROTOCOL.md, as a type rather than as string literals
+// The vocabulary of docs/reference/protocol.md, as a type rather than as string literals
 // scattered through the session.
 //
 // Two things this buys that a `const char*` does not. Dispatch becomes a switch
@@ -83,7 +83,7 @@ MsgType msg_type_from(JsonSpan name);
 ///
 /// `msg_type` says which message this is, `message_id` identifies this line so
 /// that a resend of it can be recognised, and `in_reply_to` carries the
-/// `message_id` of the command a reply answers. See dev/PROTOCOL.md 1.2 for
+/// `message_id` of the command a reply answers. See docs/reference/protocol.md 1.2 for
 /// why `message_id` is emphatically not a sequence number: it orders nothing,
 /// a gap in it is not an error, and its whole job is making a blind retry
 /// safe.

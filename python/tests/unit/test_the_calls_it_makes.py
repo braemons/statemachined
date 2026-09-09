@@ -2,7 +2,7 @@
 """Which path, which body, which timeout: the client's own half of every call.
 
 Each test here is a claim about the wire that the daemon cannot make on this
-client's behalf. `dev/API.md` is the source for every path and field name, and
+client's behalf. `docs/reference/api.md` is the source for every path and field name, and
 where a test looks pedantic -- asserting that `configure` sends `graph` and not
 `statemachine_graph`, say -- it is because that field is renamed at exactly one
 boundary and this is the boundary.

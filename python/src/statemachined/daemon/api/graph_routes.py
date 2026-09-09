@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """The store, the validator, and the one call that uploads a session's set.
 
-dev/API.md §4. `POST /api/session/graphs` is the important one and the slow one:
+docs/reference/api.md §4. `POST /api/session/graphs` is the important one and the slow one:
 it is where a session is allowed to fail, minutes before an animal is in the
 booth, rather than at trial 40.
 """
@@ -162,7 +162,7 @@ def upload_the_sessions_graph_set(request: Request, body: SessionGraphNames) -> 
     """Every graph a session will use, uploaded once, before the first trial.
 
     The slowest call in this API by a wide margin, and the one where a session
-    is allowed to fail. See dev/API.md §4.
+    is allowed to fail. See docs/reference/api.md §4.
     """
     return _upload(service_of(request), body.graph_names)
 

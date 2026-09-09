@@ -169,7 +169,7 @@ def test_a_ping_puts_the_visit_stream_into_host_time(supervisor):
 
 
 def test_a_session_switches_graphs_by_naming_them(supervisor):
-    # The whole of dev/DAEMON.md 3.2, end to end: both graphs go up once, and
+    # The whole of docs/developer/daemon.md 3.2, end to end: both graphs go up once, and
     # then a trial names one. Nothing is uploaded between the two trials.
     supervisor.upload_graph_set(
         [timed_graph("go-nogo", 60), timed_graph("2afc", 120)], set_version=4
@@ -302,7 +302,7 @@ def self_driving_graph(name: str, milliseconds: int, dwell_ms: int) -> GraphDefi
 
 def test_a_board_told_to_drive_itself_runs_trial_after_trial(supervisor):
     """No configure, no start: the device is the authority because nothing else
-    is there to be one. dev/PROTOCOL.md 3.7."""
+    is there to be one. docs/reference/protocol.md 3.7."""
     supervisor.upload_graph_set([self_driving_graph("shaping", 40, 20)], set_version=1)
     reply = supervisor.set_autorun(True, graph_name="shaping", first_trial_id=500)
     assert reply["enabled"] is True

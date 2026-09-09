@@ -4,15 +4,19 @@ The procedure for putting this firmware on an Arduino Uno R4 Minima for the
 first time, in the order that makes each stage fail loudly on its own before
 anything below it depends on it.
 
-Wiring tables and the per-board line map live in [`HARDWARE.md`](HARDWARE.md);
-this page is the sequence. The wire protocol is [`PROTOCOL.md`](PROTOCOL.md).
+Wiring tables and the per-board line map live in [`hardware.md`](hardware.md);
+this page is the sequence. The wire protocol is [`protocol.md`](../reference/protocol.md).
 
 **What this is for.** Everything in this repository is either tested on the host
 or tested on an emulated board under Renode, and both are real tests of the
 *logic*. Neither says anything about timing: Renode runs on virtual time, so a
-scan there takes exactly as long as it is told to. The numbers this page
-collects are the ones no amount of testing without hardware can produce, and
-`PLAN.md` calls M3 the milestone that decides whether the design is right.
+scan there takes exactly as long as it is told to. This page is the sequence for
+putting the firmware on a board and confirming, by eye and with a meter, the
+things no amount of testing without hardware can confirm.
+
+The numbers themselves are no longer collected by hand — §5a is the suite that
+asserts them, and the measurements it holds are recorded in
+[`hardware.md`](hardware.md).
 
 ---
 
@@ -131,12 +135,12 @@ Erratic or self-starting chases are the pull-downs, not the firmware.
 
 ---
 
-## 4. Talk to it, and read the number this is all for
+## 4. Talk to it
 
 Every line carries a CRC-16/CCITT-FALSE, so typing JSON into a serial monitor
 gets no reply. Use the repository's own bench instrument, which frames commands
 with the same helper CI drives the emulated board with
-([`python/`](../python/README.md)):
+([`python/`](../../python/README.md)):
 
 ```sh
 make bringup ARGS="hello"
@@ -157,7 +161,7 @@ hello_ack
   caps           {"max_line": 512, ...}
 ```
 
-> **`scan_hz` in the `hello_ack` is the number M3 is waiting on.**
+> **`scan_hz` in the `hello_ack` is what the board actually achieves.**
 
 It is measured at boot rather than declared — 2000 repetitions of reading and
 conditioning the pins, timed — so it is what the board actually achieves, not
@@ -240,7 +244,7 @@ ISR and the foreground holds the engine only while it is parsing a command. What
 remains is that hold — about **3 periods per command** on an Uno R4 Minima,
 against 9.9 before — and it is bounded by our own parse rather than by whatever
 the USB stack is doing. The measurement, and the reasoning, are at the top of
-`firmware/src/main.cpp`; the numbers are in [`HARDWARE.md`](HARDWARE.md).
+`firmware/src/main.cpp`; the numbers are in [`hardware.md`](hardware.md).
 
 A board reporting *far* more than that, or a `worst_gap` in the hundreds, is
 still a finding. So is any non-zero `scan.tx_stalls`, which means a reply had to
@@ -266,30 +270,60 @@ while the scan runs in the timer ISR.
 It is **not** part of `make ci`. A target that fails on every machine without a
 board attached is a target people learn to ignore.
 
-What it cannot do without three jumper wires is drive the board's *inputs*.
-Add them and seven more tests run — the ones that fire a transition from a
-predicate over several lines, which is otherwise the one part of the engine no
-test in this repository exercises on real silicon:
+### The loopback harness
 
-| From | To | Drives |
-|---|---|---|
-| **D10** (output 0) | **D6** (input 4) | |
-| **D11** (output 1) | **D7** (input 5) | `all` over two lines, `any`, `none` |
-| **D12** (output 2) | **D8** (input 6) | the rising-edge rule, and `level` |
+What the suite cannot do without jumper wires is drive the board's *inputs*.
+Add them and two more things run: the predicate tests, which fire a transition
+from a condition over several lines, and the timing suite in
+`test_timing_accuracy.py`, which measures how long the board takes to answer a
+line it drove itself.
+
+**Eight wires, output line _n_ to input line _(n + 4) mod 8_:**
+
+| From | | To | | From | | To |
+|---|---|---|---|---|---|---|
+| **D10** (output 0) | → | **D6** (input 4) | | **A1** (output 4) | → | **D2** (input 0) |
+| **D11** (output 1) | → | **D7** (input 5) | | **A2** (output 5) | → | **D3** (input 1) |
+| **D12** (output 2) | → | **D8** (input 6) | | **A3** (output 6) | → | **D4** (input 2) |
+| **A0** (output 3) | → | **D9** (input 7) | | **A4** (output 7) | → | **D5** (input 3) |
 
 The board then drives its own inputs through a graph's entry actions, one scan
 later, which is how "both levers released and pressed again within the same
-millisecond" becomes something a test can do. Without the wires those seven skip
-and say so; nothing else changes.
+millisecond" becomes something a test can do. Without the wires those tests skip
+and print this table; nothing else changes.
 
-**The inputs are D6–D8 and not D2–D5 on purpose.** §2 wires the switches as a
-contact to **5 V**, so a jumper driving one of those pins would be fighting the
-switch every time somebody pressed it — an output pin pulling low against 5 V
-through a closed contact. Inputs 4–6 are untouched by §2, so the bench wiring and
-the loopback harness can sit on the same board. Sharing the *output* pins is
-fine: a pin can drive an LED and a jumper at once.
+**Why the shift, and not output _n_ to input _n_.** A straight-through harness
+cannot tell a correct board from one whose reported input word is secretly the
+output word — raise output 0, see bit 0, pass. Under the shift every output has
+a unique and non-obvious expected input bit, so that failure, and any rotation
+or off-by-one in either pin table, fails rather than passing for the wrong
+reason. It also covers all sixteen lines: before it, thirteen of the board's
+pins had never once been proven to be the pin the table claims.
 
-A run takes about 40 seconds and leaves the device idle.
+**It replaces the §2 bench switches rather than sitting beside them.** The wires
+to D2 and D3 land on the pins §2 wires as a contact to 5 V, and an output
+driving low against a closed switch is a short. Take the switches off while the
+harness is on, or put **1 kΩ in series** in those two wires — the inputs are
+high-impedance, so it costs nothing logically. Sharing the *output* pins with
+the bench lamps is harmless: a pin drives an LED and a jumper equally well.
+
+A run takes about 90 seconds and leaves the device idle.
+
+### Whole sessions, against this board
+
+`make test-hardware` drives the board one command at a time, the way a bench
+instrument does. To run whole *sessions* against it — several trials, through
+the daemon's HTTP API and through `StatemachinedDevice`, with the paradigms
+answering their own response windows through the harness above:
+
+```sh
+make test-runs-hardware TARGET=/dev/ttyACM0
+```
+
+Those are the same tests `make test-runs` runs with no board attached, against
+the firmware built for this machine. That is the point of them: the far end is
+a fixture, so a session that passes in CI and fails here has found something
+about the board rather than about the test.
 
 ---
 
@@ -314,8 +348,8 @@ explicit `autorun` to get there.
 ## 7. The daemon and the web UI, in front of the board
 
 Everything above talks to the board with one command at a time. This runs the
-whole host half against it -- the API of [`API.md`](API.md), the trace, and the
-six panels of [`DAEMON.md`](DAEMON.md) §5 -- so that what you are looking at in
+whole host half against it -- the API of [`api.md`](../reference/api.md), the trace, and the
+six panels of [`daemon.md`](../developer/daemon.md) §5 -- so that what you are looking at in
 a browser is a real device.
 
 ```sh
@@ -396,21 +430,20 @@ for the UI and the API, and the section above is for the rig.
 
 ## What to write down
 
-Three numbers settle M3, and everything after it assumes they held:
+Nothing, on an ordinary bring-up. The three figures this page used to ask you to
+record by hand — the scan rate, what link traffic costs the scan, and a served
+duration against its drawn one — are asserted by `make test-hardware`, and the
+reference board's measurements are in
+[`hardware.md`](hardware.md) under the board they were taken on.
 
-| | |
-|---|---|
-| `scan_hz` from `hello_ack` | against the 10 kHz target |
-| `scan.overruns` under link load | zero, or climbing |
-| Scope: D2 → D10 latency, and the step dwell | against 500 ms |
-
-The first two come out of one command, already as a markdown table:
+What still has no automated path is anything needing an instrument:
 
 ```sh
-make bringup ARGS="report" > /tmp/m3.md
+make bringup ARGS="report" > /tmp/board.md
 ```
 
-Record them in [`HARDWARE.md`](HARDWARE.md) under the board they were measured
-on, the way the RAM figures are recorded there — with the scope numbers added by
-hand, since no amount of serial traffic can produce those. A measurement that
-stays in somebody's terminal is one the next person has to take again.
+writes the link-side figures as a markdown table, and a scope on D2 and D10
+gives the input-to-output latency that the board's own clock cannot honestly
+measure about itself. If you take either, add it to
+[`hardware.md`](hardware.md) beside the others — a measurement that stays in
+somebody's terminal is one the next person has to take again.

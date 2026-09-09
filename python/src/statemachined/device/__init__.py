@@ -33,7 +33,7 @@ board rewarding an animal nobody is watching. Which means that on a rig box with
 `statemachined serve` running, this class is a *second* claimant on the same
 board. Over a tty the port is busy and you find out immediately; over
 `socket://` you will not -- the connection succeeds and two hosts are then
-driving a link whose whole design is one command in flight (dev/PROTOCOL.md
+driving a link whose whole design is one command in flight (docs/reference/protocol.md
 §1.2). Do not point this at a board a daemon is holding. If something else on
 the network should own it, talk to that instead: `statemachined.client`.
 

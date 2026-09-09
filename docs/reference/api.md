@@ -1,8 +1,8 @@
 # statemachined — the HTTP API
 
-> **Status:** specification. Milestone M4f in [`DAEMON.md`](DAEMON.md); the
+> **Status:** specification. Milestone M4f in [`daemon.md`](../developer/daemon.md); the
 > daemon is being written against this document, not the other way round —
-> which is the same order [`PROTOCOL.md`](PROTOCOL.md) was written in, and for
+> which is the same order [`protocol.md`](protocol.md) was written in, and for
 > the same reason: an interface argued for after the fact is an interface whose
 > shape is an accident of the first implementation.
 
@@ -11,7 +11,7 @@ Two callers and they want different things.
 - **triald** drives the trial loop. It knows the session, the trial types, the
   ITI and which paradigm a trial is; it does not know that a device exists. What
   it needs from here is small, stable, and in the critical path of every trial.
-- **A person** — through the web UI (§[DAEMON.md 5](DAEMON.md)) or `curl` — needs
+- **A person** — through the web UI (§[DAEMON.md 5](../developer/daemon.md)) or `curl` — needs
   everything else: what board is attached, which pin is the left lever, what the
   machine is doing right now, what the last trial did.
 
@@ -231,7 +231,7 @@ daemon does.
 
 Who arms the trials. The switch that makes this daemon optional: with it on, the
 board starts each run itself and takes the interval between them from the dwell
-the terminal state it reached declared. See dev/PROTOCOL.md §3.7 — the timing is
+the terminal state it reached declared. See docs/reference/protocol.md §3.7 — the timing is
 in the graph, the authority is here, and a graph that declares a dwell runs
 unchanged under a triald that arms every trial itself.
 
@@ -261,7 +261,7 @@ exit path, with its result reported, exactly as a cancel does.
 ### `POST /api/device/save`
 
 Write the board's wiring, graph set and autorun settings to its own storage, so
-that all three survive a power cut. dev/PROTOCOL.md §3.8. No body: what is saved
+that all three survive a power cut. docs/reference/protocol.md §3.8. No body: what is saved
 is what is there, because a save that took its own copy of the settings would be
 a second place for them to disagree.
 
@@ -457,7 +457,7 @@ One call, made by the daemon when a trial ends, carrying `outcome`,
 defaults**: the daemon has never heard of the eye monitor or vstimd, and
 acquiring an opinion about them would make it a second decision authority.
 
-> **This contradicts triald's own `dev/API.md`**, which says of the trial loop
+> **This contradicts triald's own `docs/reference/api.md`**, which says of the trial loop
 > *"**Pull, not push.** The caller asks for a trial when it is ready."* Under the
 > arrangement here triald calls `configure`/`start`, which makes triald the
 > clock — the precise thing it declined to be. It is still the right split, but
@@ -708,7 +708,7 @@ to infer them.
 ## 10. The pages this daemon serves
 
 Not part of the API, and listed here because they share its origin and its CORS
-rules. dev/DAEMON.md §5 is the design.
+rules. docs/developer/daemon.md §5 is the design.
 
 | | |
 |---|---|

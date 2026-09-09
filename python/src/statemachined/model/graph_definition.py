@@ -3,7 +3,7 @@
 
 This is the authored form -- what lives in /var/lib/statemachined/graphs/, what
 the web UI edits, and what `statemachined.graph_set_compiler` turns into the indices
-dev/PROTOCOL.md 3.2 puts on the wire. Nothing here has an index in it, and that
+docs/reference/protocol.md 3.2 puts on the wire. Nothing here has an index in it, and that
 is the point: an index is a fact about one device's pools, and a paradigm should
 outlive the board it was first run on.
 
@@ -307,7 +307,7 @@ class StateDefinition(BaseModel):
     #: What it decides is when the *next* trial may start, and whether anything
     #: acts on it is a property of the device rather than of the paradigm -- a
     #: graph that declares one runs unchanged under a triald that arms every
-    #: trial itself. See dev/PROTOCOL.md 3.7 for the device setting that does
+    #: trial itself. See docs/reference/protocol.md 3.7 for the device setting that does
     #: act on it.
     #:
     #: A terminal state that declares none is where a self-driving board stops,

@@ -1,7 +1,7 @@
 # statemachined — the daemon
 
 > **Status:** plan. Nothing here is built. It is the concrete shape of
-> [`PLAN.md`](PLAN.md)'s **M4**, which that document leaves as one line — *"bridge
+> [`PLAN.md`](../../dev/PLAN.md)'s **M4**, which that document leaves as one line — *"bridge
 > to triald"* — and an empty `bridge/` directory. It also answers two of
 > PLAN.md's open questions and contradicts one of its statements; both are
 > marked below. Argue with it before any of it is written.
@@ -472,7 +472,7 @@ takes the half that needs no flash driver:
 | `graph/state_graph.h` | `InputConfig` and `output_safe_levels` move out to device scope |
 | `protocol/host_link_session.cpp` | a `wiring` command, refused with `busy` during a trial |
 | `src/main.cpp` | the compile-time safe levels of §3.4, applied before the first `fail_safe()` |
-| `dev/PROTOCOL.md` | §3 gains `wiring`; §4.1 `hello_ack` says whether the board has been given one, so the daemon never guesses whether it came up configured |
+| `docs/reference/protocol.md` | §3 gains `wiring`; §4.1 `hello_ack` says whether the board has been given one, so the daemon never guesses whether it came up configured |
 
 ### 3.4 Data flash: what a board should know before anybody greets it
 
@@ -744,20 +744,20 @@ together is cheaper than sequencing them:
 | `core/config.h` | `STATEMACHINED_MAX_PATH` 64 → 255, and `STATEMACHINED_SAFE_LEVELS` (§3.4) |
 | `machine/state_machine.cpp` | `record_visit()` becomes a real ring: overflow costs the oldest visit, not the newest, which is what `config.h:34` has always claimed |
 | `protocol/host_link_session.cpp` | `result_begin` gains `first_seq` and `total_visits`; the chunker walks the ring in order |
-| `dev/PROTOCOL.md` | §4 gains `visit`, and §4.3 gains the sentence that the result is authoritative and the stream is a preview |
+| `docs/reference/protocol.md` | §4 gains `visit`, and §4.3 gains the sentence that the result is authoritative and the stream is a preview |
 
 ---
 
 ## 4. The API
 
-> **[`API.md`](API.md) is this section, written out.** It was written first, the
+> **[`api.md`](../reference/api.md) is this section, written out.** It was written first, the
 > way `PROTOCOL.md` was, and it is the document to change when the surface
 > changes — what follows here is the *argument* for the shape, and it stays
 > because the reasons are the part that is expensive to rediscover.
 
 FastAPI + pydantic. Every model is a transcription of something already
-specified — `PROTOCOL.md` for the device surface, triald's `dev/API.md` for the
-outbound `OutcomeReport`. Documented in `dev/API.md` here, generated schema at
+specified — `PROTOCOL.md` for the device surface, triald's `docs/reference/api.md` for the
+outbound `OutcomeReport`. Documented in `docs/reference/api.md` here, generated schema at
 `/openapi.json`, and the web UI uses **only** this API — no private route,
 which is what keeps the UI an honest test of it.
 
@@ -882,7 +882,7 @@ fabricated `CANCELLED`. The daemon passes that through unchanged; asking to
 cancel and being told `HIT` is triald's to cope with, and the alternative is a
 record claiming a trial was cancelled when the animal had already responded.
 
-> **This contradicts triald's `dev/API.md`.** That document says of the trial
+> **This contradicts triald's `docs/reference/api.md`.** That document says of the trial
 > loop: *"**Pull, not push.** The caller asks for a trial when it is ready, which
 > keeps triald reactive and stops it becoming the session's clock."* Under the
 > arrangement above, triald calls `configure`/`start` here — which makes triald
@@ -1305,7 +1305,7 @@ devices.
 
 **It is not a timing test.** The scan is a `nanosleep` on a preemptible desktop
 kernel. Durations are honest to about a millisecond, which is what an
-integration test needs; `dev/HARDWARE.md`'s numbers come from a board and
+integration test needs; `docs/operations/hardware.md`'s numbers come from a board and
 `make test-hardware`.
 
 **It is a compiled artifact, so it is per-architecture,** like the vendored
@@ -1349,7 +1349,7 @@ milestones that used to be M5 and M6 are now M8 and M9.
 | **M4c** ✅ | **The graph set, in the firmware** (§3.2, §3.3): shared pools, `GraphEntry`, `set_begin`/`set_end`, a slot in `configure`, `max_graphs` in `caps`. The larger of the two firmware milestones and the one this plan's trial loop rests on. Covered by the native core, the Renode session and `PROTOCOL.md` message by message, all of which exist |
 | **M4d** ✅ | `model/` and `graph_set_compiler.py`: the pydantic graph, the line map, names → wire. Host tests against `PROTOCOL.md` §3.2 message by message. `graphs/` gets go/no-go and 2AFC, which fills the directory `PLAN.md` has had empty since M0 |
 | **M4e** ✅ | `device/device_supervisor.py` and `device_clock_correlation.py`: owns the port, reconnects, holds the seed, arms the watchdog, reassembles results. Integration-tested against the native core — whole trials, cancel races, link loss, as `PLAN.md` §Testing asks. It needed a host-side entry point for the firmware, which is now `firmware/native/statemachined_native_device.cpp`, and a `socket://` transport rather than the pty this row used to say — see §7's note |
-| **M4f** ✅ | FastAPI: device, lines, graphs, trial, config, state/stream, and the trace of §4.6; the triald client; `statemachined serve`. [`dev/API.md`](API.md) written first, the way `PROTOCOL.md` was. It found `patch`: documented on the wire since M2 and implemented nowhere, so a host that sent one got a silently unpatched trial — see below |
+| **M4f** ✅ | FastAPI: device, lines, graphs, trial, config, state/stream, and the trace of §4.6; the triald client; `statemachined serve`. [`docs/reference/api.md`](../reference/api.md) written first, the way `PROTOCOL.md` was. It found `patch`: documented on the wire since M2 and implemented nowhere, so a host that sent one got a silently unpatched trial — see below |
 | **M4g** ✅ | The web UI and the `/elements/` contract; mDNS. Six elements, each with a shadow root and a `base` attribute, served as package data by `api/web_user_interface_routes.py`; the shell at `/`, the contract at `/elements/`. `mdns_service_advertisement.py` publishes `_statemachined._tcp` with vstimd's stable `id=`, hashed from `/etc/machine-id`, and never fatally. The UI's own tests are the compiler it does not have: every module it imports exists, every `/api/` path it calls is a route, every module parses, and the editor's outcome names are the ones the store accepts |
 | **M4h** ▶️ | **The bench: this UI in front of a real board.** Promoted ahead of packaging, because until somebody has clicked through the six panels with a device on the other end, everything above is a set of tests agreeing with each other. `make bench` runs the daemon, the API and the UI against `TARGET` -- a board on a cable, or `make bench-device` and `socket://127.0.0.1:5300` for the same firmware built for this machine -- from `daemon/bench/statemachined_bench_configuration.toml`, whose store is seeded from `graphs/` under `build/` so deleting a graph in the browser never deletes an example. The bridge the integration tests use moved to `daemon/bench/native_device_on_a_socket.py` and is now shared rather than copied, and `make integration-device`, named by three docstrings and existing in none, exists. **Done against the R4**: reflashed to M4c firmware, wiring pushed, the set uploaded, and a whole configure → start → result through the HTTP API. **Left**: the browser. No panel of this UI has ever been rendered |
 | **M4i** ✅ | **The board says which pin each line is** (`PROTOCOL.md` §3.6). The daemon kept its own copy of the firmware's pin table, keyed by the board name — a hand-copied pin map, which is the thing the RA4M1 HAL refuses to keep of the Arduino core's table for exactly the reason it was wrong here: a host cannot otherwise know which pin a line is, or even which lines are inputs, because both are fixed when the firmware is compiled. `pins`/`pin_map` answers out of the same table `pinMode()` is called over, one direction per request so a 32-line board's labels cannot overflow a line. A config may now name a pin instead of a bit position; where it names both they are checked, and a disagreement stops the daemon connecting rather than driving the wrong line for a session. Firmware older than the command answers `no_pin_map`, the daemon falls back to its own table, and every label it shows is then marked `assumed` rather than passing as the board's word. 624 B of flash and 8 B of RAM |
@@ -1376,7 +1376,7 @@ configure, which is the whole argument for the set.
 **The overrun counter is not a surprise, and is worth watching anyway.**
 `scan.overruns` climbs steadily while a daemon is attached -- a few hundred
 within a minute, `worst_gap` around 20, `tx_stalls` at zero -- and
-`dev/HARDWARE.md` already explains the mechanism: about 3 missed periods per
+`docs/operations/hardware.md` already explains the mechanism: about 3 missed periods per
 command, spent in the foreground holding the engine to parse one and build its
 reply. What is new is that the daemon is a *continuous* source of commands
 rather than an occasional one: a heartbeat every 2 s, plus whatever a browser
@@ -1473,7 +1473,7 @@ diff.
    singular. A rig with two MCUs is then `statemachined@.service`, a systemd
    template with a config per instance. Confirm that is far enough off to defer.
 3. **triald's "pull, not push".** §4.3 flags a genuine contradiction with
-   triald's `dev/API.md`. Someone has to decide which document changes.
+   triald's `docs/reference/api.md`. Someone has to decide which document changes.
 4. **What a whole-set upload costs at session start** (§3.2), for USB CDC and
    for the SCI2 UART. It is no longer the question the design turns on — §3.2
    switches by index, so the per-trial cost is a field — but it bounds how long

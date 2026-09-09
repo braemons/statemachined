@@ -8,7 +8,7 @@ Two different things live here and the difference is load-bearing.
 needs no upload. That is what lets a graph be authored against words rather than
 against a pinout somebody has to remember.
 
-**The wiring does reach the wire**, as dev/PROTOCOL.md 3.5's `wiring` command:
+**The wiring does reach the wire**, as docs/reference/protocol.md 3.5's `wiring` command:
 invert, enable, debounce and the output safe levels. It describes the box rather
 than the paradigm -- see firmware/core/io/wiring.h for why that distinction was
 worth a firmware change -- so it lives on the line map, is sent once when a rig
@@ -57,7 +57,7 @@ class InputLineDefinition(BaseModel):
 
     #: The pin, as the board names it: "D6", "TB1-3". Never sent anywhere -- the
     #: device knows its own pins -- but no longer free text either, because the
-    #: device can now be asked what it calls them (dev/PROTOCOL.md 3.6). Where
+    #: device can now be asked what it calls them (docs/reference/protocol.md 3.6). Where
     #: the board answered, this is *checked* against it, and it may be given
     #: instead of `line_index` rather than beside it.
     pin_label: str = ""
@@ -159,7 +159,7 @@ class LineMap(BaseModel):
     def resolved_against(self, pin_map) -> LineMap:
         """This map with every `line_index` filled in and checked against the board.
 
-        dev/PROTOCOL.md §3.6 is what makes this possible: the board answers with
+        docs/reference/protocol.md §3.6 is what makes this possible: the board answers with
         the same table `pinMode()` was called over, so a pin label is no longer
         a comment. Three things happen here, and they are the whole point of the
         command existing:
@@ -202,7 +202,7 @@ class LineMap(BaseModel):
     # -------------------------------------------------------------- wire ---
 
     def wiring_message_fields(self) -> dict[str, object]:
-        """The body of dev/PROTOCOL.md 3.5's `wiring`, as this rig needs it.
+        """The body of docs/reference/protocol.md 3.5's `wiring`, as this rig needs it.
 
         Every field, always, rather than only what differs from the default: the
         command replaces what the board holds, and a partial one would leave a
@@ -229,7 +229,7 @@ class LineMap(BaseModel):
 
         # Trailing zeros are dropped because the device fills the rest with
         # zeros anyway, and a 32-entry array of nothing is most of a protocol
-        # line's budget (dev/PROTOCOL.md 3.5).
+        # line's budget (docs/reference/protocol.md 3.5).
         while debounce_milliseconds_per_line and debounce_milliseconds_per_line[-1] == 0:
             debounce_milliseconds_per_line.pop()
 

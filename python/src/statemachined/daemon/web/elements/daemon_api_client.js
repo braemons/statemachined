@@ -3,12 +3,12 @@
 // The one place in the UI that knows a network exists.
 //
 // Every element takes a `base` attribute rather than assuming same-origin,
-// because the point of dev/DAEMON.md §5 is that a console served from somewhere
+// because the point of docs/developer/daemon.md §5 is that a console served from somewhere
 // else can drop `<statemachined-lines>` into its own page. An element that
 // called `fetch("/api/state")` would work perfectly on the rig's own page and
 // silently talk to the console's host everywhere else.
 
-/// A refusal from the daemon, with the three fields dev/API.md §2 promises.
+/// A refusal from the daemon, with the three fields docs/reference/api.md §2 promises.
 ///
 /// `context` is the useful one and it is why this is a class rather than a
 /// thrown string: every refusal names what to change, and a UI that shows only
@@ -61,7 +61,7 @@ export class DaemonApiClient {
     if (!response.ok) {
       // FastAPI's own 422 shape names the field in `detail`, which is an array
       // rather than a sentence. Flatten it here so a panel has one thing to
-      // show whichever half of dev/API.md §2 refused it.
+      // show whichever half of docs/reference/api.md §2 refused it.
       if (parsed && Array.isArray(parsed.detail)) {
         const first = parsed.detail[0] || {};
         parsed = {

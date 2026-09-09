@@ -47,7 +47,7 @@ Only the side that knows a trial is in flight can tell "not yet" from "never".
 whatever the stream did, which is why a lost subscription is an exception you
 can catch rather than a session you have lost.
 
-See `dev/API.md` for the API this wraps, and `http_client.py` for why it is
+See `docs/reference/api.md` for the API this wraps, and `http_client.py` for why it is
 shaped the way that document is.
 """
 

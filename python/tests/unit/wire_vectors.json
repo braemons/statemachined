@@ -1,6 +1,6 @@
 {
   "_comment": [
-    "Golden framing vectors for dev/PROTOCOL.md 1.1. Data, not code, so that",
+    "Golden framing vectors for docs/reference/protocol.md 1.1. Data, not code, so that",
     "every implementation of the framing in this repository is checked against",
     "the same bytes rather than against another one's opinion of them.",
     "`body` is a message without its closing brace; `line` is what must go on",

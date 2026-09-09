@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The framing, against fixed bytes -- and against the other implementation.
 
-`statemachined.device.message_framing` is the third implementation of dev/PROTOCOL.md's
+`statemachined.device.message_framing` is the third implementation of docs/reference/protocol.md's
 framing in this repository. It exists because an installed package cannot
 import `emulation/tests/statemachined_protocol.py`, and its risk is that the
 two drift. This is the test that makes a drift fail here, in `make ci`, on a

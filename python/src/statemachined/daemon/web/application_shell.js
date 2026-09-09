@@ -3,7 +3,7 @@
 // The rig's own page: navigation, and nothing else.
 //
 // Deliberately thin, and it is the same thinness the console repo is specified
-// to have (dev/DAEMON.md §5). Every view here is one custom element with a
+// to have (docs/developer/daemon.md §5). Every view here is one custom element with a
 // shadow root; this file chooses which one is on screen and hands it the same
 // `base` a console would. If this shell grew domain logic, the console would
 // either duplicate it or do without -- so it has none, and the panels are the

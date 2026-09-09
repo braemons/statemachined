@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """The saved configs: what this rig is wired like, and what it can run.
 
-dev/API.md §8. The half of the configuration a person owns -- the line map and
+docs/reference/api.md §8. The half of the configuration a person owns -- the line map and
 the graphs -- as opposed to the box, which is `/api/config` and a file in
 `/etc/braemons` this daemon never writes.
 

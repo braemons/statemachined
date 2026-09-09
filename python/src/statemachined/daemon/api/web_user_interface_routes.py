@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""Serving the web UI, and the `/elements/` contract. dev/DAEMON.md §5.
+"""Serving the web UI, and the `/elements/` contract. docs/developer/daemon.md §5.
 
 No build step, no framework, no CDN -- triald's rule, for triald's reason: a rig
 box may have no route to the internet and a browser in a booth must not wait on
@@ -49,7 +49,7 @@ def web_directory() -> Path:
 
     `as_file` rather than a path built from `__file__`, so this keeps working if
     the package is ever installed zipped -- which the vendored-interpreter
-    packaging of dev/DAEMON.md §6.1 does not do today and could tomorrow.
+    packaging of docs/developer/daemon.md §6.1 does not do today and could tomorrow.
     """
     with as_file(files("statemachined.daemon") / "web") as path:
         return Path(path)

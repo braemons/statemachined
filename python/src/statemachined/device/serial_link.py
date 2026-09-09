@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """The transport: one newline-delimited line in, one out.
 
-USB CDC is what the reference board offers and what dev/BRINGUP.md is written
+USB CDC is what the reference board offers and what docs/operations/bringup.md is written
 around, but nothing in the protocol is serial -- it is lines of ASCII with a
 CRC, which is as true of a TCP socket to an ethernet-attached MCU as it is of a
 tty. So the target is a URL, pyserial's `serial_for_url` resolves it, and the

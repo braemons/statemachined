@@ -9,7 +9,7 @@
 #
 # It says nothing about timing. Renode runs on virtual time against a nominal
 # MIPS figure, so a scan here takes however long we tell it to. The 10 kHz claim
-# needs a board. See dev/HARDWARE.md.
+# needs a board. See docs/operations/hardware.md.
 
 $elf?=@.pio/build/uno_r4_minima_sci/firmware.elf
 

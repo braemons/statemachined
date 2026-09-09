@@ -9,7 +9,7 @@
 // and toggle direction all live in firmware/core, where the host tests reach
 // them; what is left here is port registers, a timer and a serial port.
 //
-// Pinout: dev/HARDWARE.md.
+// Pinout: docs/operations/hardware.md.
 #if defined(ARDUINO_ARCH_RENESAS) || defined(ARDUINO_UNOR4_MINIMA)
 
 #include <Arduino.h>
@@ -47,7 +47,7 @@ namespace {
 //
 // Order is the statemachined line number: kInputPins[0] is input line 0. Changing this
 // table changes what every existing graph means, so it is a wire contract in
-// the same sense the protocol is -- see dev/HARDWARE.md.
+// the same sense the protocol is -- see docs/operations/hardware.md.
 constexpr uint8_t kInputPins[] = {2, 3, 4, 5, 6, 7, 8, 9};
 constexpr uint8_t kOutputPins[] = {10, 11, 12, A0, A1, A2, A3, A4};
 

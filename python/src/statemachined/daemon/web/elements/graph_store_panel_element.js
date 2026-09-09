@@ -564,7 +564,7 @@ export class GraphStorePanelElement extends BasePanelElement {
   /// It does not give the state an exit, and the wording here says so: the
   /// trial ends at this state either way. What the dwell decides is what
   /// happens *after* the record is closed, and only for a board running without
-  /// the daemon (dev/PROTOCOL.md 3.7). A terminal state with none is where such
+  /// the daemon (docs/reference/protocol.md 3.7). A terminal state with none is where such
   /// a board stops, which is how a paradigm says "this outcome ends the
   /// session".
   relightEditor(state, distributionNames) {

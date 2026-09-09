@@ -12,7 +12,7 @@
 // drives every output to its safe level before the first scan, and a rig image
 // holds no graph at reset -- so with the safe levels living in a graph there
 // was nothing to read, every output went low, and an active-low valve driver
-// was opened by every power cycle. See dev/DAEMON.md 3.4.
+// was opened by every power cycle. See docs/developer/daemon.md 3.4.
 #pragma once
 #include <cstdint>
 
@@ -35,7 +35,7 @@ struct InputConfig {
 /// The defaults are the compile-time ones: `kCompiledSafeLevels` is what a rig
 /// image is built with (`-DSTATEMACHINED_SAFE_LEVELS=0x...`), so a board that
 /// has never been told anything still fails safe correctly. A `wiring` command
-/// replaces them at runtime; until dev/DAEMON.md's M7 adds data flash, that
+/// replaces them at runtime; until docs/developer/daemon.md's M7 adds data flash, that
 /// runtime value does not survive a power cycle and the compiled one is what
 /// holds the hole shut.
 struct DeviceWiring {

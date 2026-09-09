@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The greeting, and what a board says about itself.
 
-dev/BRINGUP.md §4 done by machine: the numbers a person would read off the
+docs/operations/bringup.md §4 done by machine: the numbers a person would read off the
 `hello_ack` and squint at, asserted instead.
 """
 

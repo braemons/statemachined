@@ -253,7 +253,7 @@ class RigService:
         """One `visit` into the ring, named and placed in host time.
 
         A gap in the device's per-run `seq` is recorded as its own entry rather
-        than silently closed over. dev/DAEMON.md §3.6: the stream is a preview
+        than silently closed over. docs/developer/daemon.md §3.6: the stream is a preview
         and the result is the record, so a gap here is a thing to reconcile at
         `result_end` -- but only if somebody wrote down that it happened.
         """
@@ -383,7 +383,7 @@ class RigService:
     # ---------------------------------------------------------- the session ---
 
     def open_session(self) -> tuple[CompiledGraphSet, int]:
-        """Put the loaded config's graphs on the device. dev/DAEMON.md §3.2.
+        """Put the loaded config's graphs on the device. docs/developer/daemon.md §3.2.
 
         This is what triald does at the top of a session and what the web UI's
         button does on a bench -- the same call, because a bench that exercised
@@ -625,7 +625,7 @@ class RigService:
         """Hand the board the job of arming its own trials, or take it back.
 
         The daemon becomes optional at this point, which is the whole intent:
-        see dev/PROTOCOL.md 3.7. It is written to the trace because "who armed
+        see docs/reference/protocol.md 3.7. It is written to the trace because "who armed
         trial 412" is a question the record has to be able to answer, and a run
         the device armed itself looks otherwise identical to one this daemon did.
         """
@@ -656,7 +656,7 @@ class RigService:
 
     def save_device_settings(self) -> dict:
         """Write the board's wiring, graph set and autorun settings to its own
-        storage, so that all three survive a power cut. dev/PROTOCOL.md 3.8."""
+        storage, so that all three survive a power cut. docs/reference/protocol.md 3.8."""
         with self.device_lock:
             saved = self.supervisor.save_settings()
         self.trace.append(

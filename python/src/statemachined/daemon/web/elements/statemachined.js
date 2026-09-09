@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// The `/elements/` contract. dev/DAEMON.md §5.
+// The `/elements/` contract. docs/developer/daemon.md §5.
 //
 //     <script type="module" src="http://rig.local:8081/elements/statemachined.js"></script>
 //     <statemachined-device  base="http://rig.local:8081"></statemachined-device>

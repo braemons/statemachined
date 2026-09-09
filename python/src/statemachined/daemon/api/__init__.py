@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""The HTTP surface, as dev/API.md specifies it.
+"""The HTTP surface, as docs/reference/api.md specifies it.
 
 One router per subject, and a `RigService` underneath them that owns the device.
 Routers hold no state: everything that outlives a request lives in the service,

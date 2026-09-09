@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""Reading and changing what the box is. dev/API.md §8.
+"""Reading and changing what the box is. docs/reference/api.md §8.
 
 The rig config only: the device, the directories, where triald is. **Not** the
 line map or the graphs -- those are a state-machine config

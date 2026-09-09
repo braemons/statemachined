@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """Graphs on disk: one JSON file per graph, addressed by name.
 
-dev/DAEMON.md answers `PLAN.md`'s "where do graphs live in triald?" with
+docs/developer/daemon.md answers `PLAN.md`'s "where do graphs live in triald?" with
 *neither of the two options offered* -- they live here, under
 `/var/lib/statemachined/graphs/`, and a triald `TrialType` references one by
 name. That keeps N trial types from carrying N copies of a paradigm, and it puts

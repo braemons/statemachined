@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""The translation, message by message, against dev/PROTOCOL.md 3.2.
+"""The translation, message by message, against docs/reference/protocol.md 3.2.
 
 These assert the *bytes' shape* rather than only that compilation succeeded,
 because the compiler's whole job is to produce an upload the device will accept,
@@ -151,7 +151,7 @@ def test_a_dwell_after_a_terminal_state_becomes_a_distribution_index():
     # The inter-trial interval, as an index into the shared pool like every
     # other duration. Only terminal states carry one, and it is the whole of
     # what a graph says about running unattended -- who acts on it is a device
-    # setting (dev/PROTOCOL.md 3.7), not a field here.
+    # setting (docs/reference/protocol.md 3.7), not a field here.
     graph = graph_named("go-nogo")
     graph.distributions["iti"] = UniformDuration(minimum_ms=1000, maximum_ms=2000)
     graph.state_named("Hit").relight_after = "iti"

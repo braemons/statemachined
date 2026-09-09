@@ -422,7 +422,7 @@ void apply_wiring() {
 //
 // Both of those are gone, because the thing the demo was for is now expressible
 // without it. A bench board is greeted once, handed `graphs/state-walk.json`,
-// told to arm its own trials and saved (dev/PROTOCOL.md 3.7, 3.8) -- and then
+// told to arm its own trials and saved (docs/reference/protocol.md 3.7, 3.8) -- and then
 // runs that walk from its own storage, forever, with nothing plugged into it.
 // That is strictly better than the demo was: it is a real uploaded graph, so
 // watching it is evidence about the whole path rather than about a parallel

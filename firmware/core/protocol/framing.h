@@ -3,7 +3,7 @@
 // on the way out. Everything here is below JSON -- it knows a line has a `crc`
 // member last and nothing else about what a message means.
 //
-// See dev/PROTOCOL.md, section 1.
+// See docs/reference/protocol.md, section 1.
 #pragma once
 #include <cstddef>
 #include <cstdint>

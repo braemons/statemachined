@@ -504,7 +504,7 @@ TEST_CASE("the writer escapes what must not cross the wire raw") {
 }
 
 TEST_CASE("a non-ASCII byte is escaped rather than emitted") {
-  // dev/PROTOCOL.md: a byte >= 0x80 anywhere in a line is a framing error, and
+  // docs/reference/protocol.md: a byte >= 0x80 anywhere in a line is a framing error, and
   // non-ASCII text belongs in log as \uXXXX. The writer is where that is made
   // true, so a log message carrying a stray byte cannot break the link.
   char buf[kMaxLine];

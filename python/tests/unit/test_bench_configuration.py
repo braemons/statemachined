@@ -105,7 +105,7 @@ def test_the_bench_line_map_names_pins_rather_than_line_numbers() -> None:
     """Which pin is silkscreened on the board; which bit position is not.
 
     So the file says the half a person at the bench can check, and the daemon
-    asks the board for the other half at load (dev/PROTOCOL.md 3.6). A
+    asks the board for the other half at load (docs/reference/protocol.md 3.6). A
     `line_index` here would also be the half that stops being true the moment
     `kInputPins` is reordered, with nothing raised anywhere -- and now that a
     config is self-contained and therefore portable, it is the half that would

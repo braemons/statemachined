@@ -10,7 +10,7 @@ Documentation     statemachined on an emulated Uno R4 Minima.
 ...
 ...               Nothing here measures time. Renode runs on virtual time against
 ...               a nominal MIPS figure, so a scan takes exactly as long as we
-...               tell it to. The 10 kHz claim needs a board -- dev/HARDWARE.md.
+...               tell it to. The 10 kHz claim needs a board -- docs/operations/hardware.md.
 
 Library           ${CURDIR}/statemachined_protocol.py
 Resource          ${RENODEKEYWORDS}
@@ -60,7 +60,7 @@ Wait For The Link To Be Serviced
     ...
     ...                A real bridge has the same problem and the protocol
     ...                already answers it: a command that draws no reply is
-    ...                resent. See dev/PROTOCOL.md 3.1.
+    ...                resent. See docs/reference/protocol.md 3.1.
     Advance    0.5
 
 Send And Expect
@@ -68,7 +68,7 @@ Send And Expect
     ...                resending if none arrives.
     ...
     ...                The retry is not harness sugar covering a flaky test. It
-    ...                is what dev/PROTOCOL.md 3.1 requires of a bridge -- a
+    ...                is what docs/reference/protocol.md 3.1 requires of a bridge -- a
     ...                command that draws no reply is resent -- and it is safe
     ...                because a repeated `message_id` is answered from
     ...                DuplicateCommandGuard rather than acted on twice. A

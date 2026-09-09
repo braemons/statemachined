@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """What the board says its pins are called, and where that answer came from.
 
-dev/PROTOCOL.md §3.6. Which pin a line is, and which direction it has, are fixed
+docs/reference/protocol.md §3.6. Which pin a line is, and which direction it has, are fixed
 when the firmware is compiled -- the HAL's tables are what `pinMode()` is called
 over, and no command changes either. So a host cannot derive this; it can only
 ask, or assume.

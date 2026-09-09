@@ -1,6 +1,6 @@
 # The trace is the NDJSON tail of every state visit, appended a file per day.
 # The daemon never reads it back -- it is the copy for the analysis that happens
-# months later -- and dev/DAEMON.md is explicit that it is nobody's to keep.
+# months later -- and docs/developer/daemon.md is explicit that it is nobody's to keep.
 # A recording is the opposite: somebody's experiment, kept until they delete it,
 # which is why /var/lib/braemons/statemachined/recordings is not named here.
 #

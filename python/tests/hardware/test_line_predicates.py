@@ -26,7 +26,7 @@ a two-line predicate needs.
     Output line 7  A4  ──────► D5   Input line 3
 
 Eight jumper wires, no components -- output line *n* to input line *(n+4) mod
-8*. `LOOPBACK` in hardware_test_harness.py is that rule; dev/HARDWARE.md has the
+8*. `LOOPBACK` in hardware_test_harness.py is that rule; docs/operations/hardware.md has the
 full line map. The tests skip themselves with these instructions when the wires
 are not there, so the suite stays something you can run against a bare board.
 

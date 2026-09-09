@@ -5,7 +5,7 @@
 // The one view that is useful with nobody in the room, because it is still
 // there in the morning.
 //
-// Two rules are visible in this panel and both are dev/API.md §7's:
+// Two rules are visible in this panel and both are docs/reference/api.md §7's:
 //
 // **The stream is not coalesced.** A trace that dropped frames to keep up would
 // be a trace of the frames the browser felt like drawing. So the socket sends

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """What link traffic costs the scan, as a regression test rather than a report.
 
-dev/BRINGUP.md §5 asks a person to hammer the link and see whether `overruns`
+docs/operations/bringup.md §5 asks a person to hammer the link and see whether `overruns`
 moves. It did, on the reference board, and the fix is in: the scan runs in the
 timer ISR and the foreground holds the engine only while it parses a command.
 The numbers below are what that left behind, measured -- so this file's job is
@@ -17,7 +17,7 @@ measured figure: tight enough that reverting the handoff (9.9/command) fails
 them immediately, loose enough that a board a little slower than the reference
 one does not.
 
-The measurements themselves are in dev/HARDWARE.md, with the per-phase table.
+The measurements themselves are in docs/operations/hardware.md, with the per-phase table.
 """
 
 from __future__ import annotations

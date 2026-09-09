@@ -100,7 +100,7 @@ forgot to bump a number.
 
 **The daemon is enabled but not started on a first install.** Starting it opens
 the serial port and greets whatever is on it, and greeting *takes the rig*
-(`dev/PROTOCOL.md` §3.7) — so an install onto a box whose board was running
+(`docs/reference/protocol.md` §3.7) — so an install onto a box whose board was running
 unattended would stop it, before anybody had looked at the config naming which
 board it even is. An *upgrade* restarts, because something that was running
 should still be running afterwards.
@@ -152,5 +152,5 @@ sudo systemctl start statemachined
 xdg-open http://localhost:8081/
 ```
 
-`journalctl -u statemachined -f` is the log. The rest is `dev/DAEMON.md`, which
+`journalctl -u statemachined -f` is the log. The rest is `docs/developer/daemon.md`, which
 ships in `/usr/share/doc/braemons-statemachined/`.

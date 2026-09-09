@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
-"""The command line, one subcommand per step of dev/BRINGUP.md.
+"""The command line, one subcommand per step of docs/operations/bringup.md.
 
 Nothing here sends a command the operator did not ask for. In particular no
 subcommand says `hello` behind somebody's back: greeting a board **takes the
@@ -165,7 +165,7 @@ def cmd_pins(args, session: RequestResponseSession) -> int:
     """What this board calls its pins, and which of them are inputs.
 
     The command a person runs before wiring anything, and the one that settles
-    an argument about a line number without opening the firmware. dev/PROTOCOL.md
+    an argument about a line number without opening the firmware. docs/reference/protocol.md
     §3.6: the board answers out of the same table its `pinMode()` was called
     over, so this is the board's word rather than a table in this tool.
     """
@@ -414,7 +414,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="statemachined",
         description=(
-            "Talk to a statemachined device. The steps are dev/BRINGUP.md; this is the "
+            "Talk to a statemachined device. The steps are docs/operations/bringup.md; this is the "
             "instrument they ask for."
         ),
         epilog=(
@@ -479,7 +479,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("-n", "--count", type=int, default=200)
     s.set_defaults(func=cmd_load)
 
-    s = sub.add_parser("report", help="the M3 numbers, as markdown for dev/HARDWARE.md")
+    s = sub.add_parser("report", help="the M3 numbers, as markdown for docs/operations/hardware.md")
     s.add_argument("-n", "--count", type=int, default=200, help="pings of link load first")
     s.set_defaults(func=cmd_report)
 

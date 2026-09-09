@@ -15,7 +15,7 @@ What that ownership buys, in the order the problems arrive:
     let each command carry its own seed would make a session unreproducible and
     nobody would notice until the analysis.
 
-  * **The wiring first.** dev/DAEMON.md 3.4: a board's compile-time safe levels
+  * **The wiring first.** docs/developer/daemon.md 3.4: a board's compile-time safe levels
     are what hold the fail-safe hole shut, and the daemon's job on connecting is
     to replace them with this rig's before anything else happens -- before a
     graph, certainly before a trial.
@@ -88,7 +88,7 @@ class ObservedStateVisit:
     The three timebases are kept side by side on purpose. `raw` is what the
     device said and is the evidence; `unwrapped` is that made monotonic for this
     connection; `host_time` is an estimate and is labelled as one, and is None
-    until a `ping` has been answered. dev/DAEMON.md 4.6 keeps all three in the
+    until a `ping` has been answered. docs/developer/daemon.md 4.6 keeps all three in the
     trace for the same reason.
     """
 
@@ -148,7 +148,7 @@ class StatemachinedDevice:
         self.hello_ack: dict | None = None
         self.capabilities: DeviceCapabilities | None = None
         self.session_seed: str | None = None
-        #: What the board says its pins are called (dev/PROTOCOL.md §3.6), or
+        #: What the board says its pins are called (docs/reference/protocol.md §3.6), or
         #: what this daemon assumed when the board could not say. Read once per
         #: connection, because it cannot change without a reflash -- and a
         #: reflash is a reconnect.
@@ -184,7 +184,7 @@ class StatemachinedDevice:
     def connect_and_watch(self) -> None:
         """Open the port and say nothing.
 
-        For a board that is running on its own (dev/PROTOCOL.md 3.7): greeting
+        For a board that is running on its own (docs/reference/protocol.md 3.7): greeting
         it would *take the rig* -- cancelling the run in flight and stopping it
         driving itself -- and there are times when what is wanted is to watch,
         not to take over. The results and visits it emits are routed exactly as
@@ -382,7 +382,7 @@ class StatemachinedDevice:
     # --------------------------------------------------------- the wiring ---
 
     def push_wiring(self) -> dict:
-        """Tell the board what it is wired to. dev/PROTOCOL.md 3.5."""
+        """Tell the board what it is wired to. docs/reference/protocol.md 3.5."""
         session = self._require_session()
         return session.request(
             MsgType.WIRING, timeout=self.timeout, **self.resolved_line_map.wiring_message_fields()
@@ -397,7 +397,7 @@ class StatemachinedDevice:
 
         The slow call, and the one where a session is allowed to fail: a graph
         too big for this board is refused here, minutes before an animal is in
-        the booth, rather than at trial 40. See dev/DAEMON.md 4.3.
+        the booth, rather than at trial 40. See docs/developer/daemon.md 4.3.
         """
         session = self._require_session()
         if self.capabilities is None:
@@ -490,7 +490,7 @@ class StatemachinedDevice:
         """Hand the board the job of arming its own trials, or take it back.
 
         The one thing this daemon does that makes itself optional. See
-        dev/PROTOCOL.md 3.7: the device starts each run itself and takes the
+        docs/reference/protocol.md 3.7: the device starts each run itself and takes the
         interval between them from the dwell the terminal state it reached
         declared, which is why the timing lives in the graph and only the
         authority lives here.
@@ -539,7 +539,7 @@ class StatemachinedDevice:
 
     def save_settings(self) -> dict:
         """Write the board's wiring, graph set and autorun settings to its own
-        storage, so that all three survive a power cut. dev/PROTOCOL.md 3.8.
+        storage, so that all three survive a power cut. docs/reference/protocol.md 3.8.
 
         Slow by the standards of everything else here -- it erases and programs
         data flash -- and refused by the device while a trial is running rather

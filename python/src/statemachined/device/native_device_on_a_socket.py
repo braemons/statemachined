@@ -154,7 +154,7 @@ class NativeDeviceOnASocket:
 
         `loopback` wires the device's outputs back to its inputs in software --
         `"8"` for output line n on input line (n + 4) mod 8, which is the
-        loopback harness of dev/HARDWARE.md with no jumper wires in it, or
+        loopback harness of docs/operations/hardware.md with no jumper wires in it, or
         `"<width>:<shift>"` to say both. It is what lets a suite that drives
         transitions from *predicates* run unchanged with a board and without
         one. Left out, the device has no inputs at all, which is what every

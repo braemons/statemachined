@@ -72,7 +72,7 @@ class StateMachineConfig(BaseModel):
 
     #: Every graph a session using this config may run, in the order they will
     #: take slots on the device. The whole set goes up before the first trial
-    #: (dev/DAEMON.md §3.2), so this list is what a session *is*.
+    #: (docs/developer/daemon.md §3.2), so this list is what a session *is*.
     graphs: list[GraphDefinition] = Field(default_factory=list)
 
     @model_validator(mode="after")
@@ -80,7 +80,7 @@ class StateMachineConfig(BaseModel):
         seen: set[str] = set()
         for graph in self.graphs:
             if graph.name in seen:
-                # A trial names a graph, never a slot (dev/DAEMON.md §3.1), so
+                # A trial names a graph, never a slot (docs/developer/daemon.md §3.1), so
                 # two graphs of one name is a trial whose paradigm depends on
                 # which copy the compiler reached first.
                 raise ValueError(f"two graphs in this config are called {graph.name!r}")

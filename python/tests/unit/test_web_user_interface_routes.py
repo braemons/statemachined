@@ -10,7 +10,7 @@ Four of them do work a build step would otherwise do:
   * **every module it imports exists**, and **every module parses** -- there is
     no bundler to notice a renamed file and no compiler to catch a stray brace;
   * **every `/api/` path the UI mentions is a route this daemon serves** -- the
-    claim in dev/DAEMON.md §5 that the web UI uses only this API, checked rather
+    claim in docs/developer/daemon.md §5 that the web UI uses only this API, checked rather
     than asserted, which is what keeps the UI an honest test of it;
   * **the outcome names in the editor are the ones the store accepts** -- a menu
     offering a spelling the store refuses is a paradigm author's afternoon.
@@ -85,7 +85,7 @@ def test_the_index_is_served_and_loads_the_shell(client: TestClient) -> None:
 
 
 def test_the_elements_entry_point_is_served_as_javascript(client: TestClient) -> None:
-    """The one URL the console repo depends on. dev/DAEMON.md §5."""
+    """The one URL the console repo depends on. docs/developer/daemon.md §5."""
     response = client.get("/elements/statemachined.js")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/javascript")
@@ -425,7 +425,7 @@ def test_a_poll_does_not_take_the_focus_out_of_a_field_somebody_is_editing() -> 
 
 
 def test_the_pin_is_chosen_from_the_boards_own_pins_and_not_typed() -> None:
-    """The board owns the labels (dev/PROTOCOL.md §3.6): which pin line 4 is was
+    """The board owns the labels (docs/reference/protocol.md §3.6): which pin line 4 is was
     decided when the firmware was compiled, and typing a different string cannot
     move a wire. So where the board answered, the pin column offers *its* pins.
 

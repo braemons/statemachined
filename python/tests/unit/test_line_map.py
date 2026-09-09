@@ -112,7 +112,7 @@ def test_an_empty_line_map_still_produces_a_whole_wiring():
 
 # --------------------------------------------------- resolved against a board ---
 #
-# dev/PROTOCOL.md §3.6. A pin label used to be a comment: free text, checked
+# docs/reference/protocol.md §3.6. A pin label used to be a comment: free text, checked
 # against nothing, and wrong in exactly the way nothing downstream could see.
 # Now the board answers with the table its own `pinMode()` was called over, and
 # these are the rules for what happens when the config and the board disagree.

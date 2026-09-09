@@ -29,7 +29,7 @@
 // upload, which is the start of a session, with an animal in the booth.
 //
 // The **pin** column is a chooser rather than a text box, wherever the board
-// answered `pins` (dev/PROTOCOL.md 3.6). The board owns the labels: which pin
+// answered `pins` (docs/reference/protocol.md 3.6). The board owns the labels: which pin
 // line 4 is was decided when the firmware was compiled, and typing a different
 // string here cannot move a wire. What a person legitimately decides is the
 // *assignment* -- "the lever is on D6" -- and that is a choice among this

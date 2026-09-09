@@ -75,7 +75,7 @@ RUN mkdir -p "$PLATFORMIO_CORE_DIR" && chown -R vscode:vscode "$PLATFORMIO_CORE_
 #
 # What it does NOT give is timing. Renode runs on virtual time with a nominal
 # MIPS figure, so it will tell you a scan is correct and never how long one
-# takes. The 10 kHz claim needs a board; see dev/HARDWARE.md.
+# takes. The 10 kHz claim needs a board; see docs/operations/hardware.md.
 #
 # The portable-dotnet tarball carries its own runtime, so this needs no mono and
 # no dotnet from apt. Pinned like everything else here.

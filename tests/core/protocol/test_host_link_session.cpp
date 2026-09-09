@@ -118,7 +118,7 @@ std::string type_of(const std::string& line) {
 
 /// The lines that are not the `visit` stream.
 ///
-/// A completed state visit is reported as it happens (dev/PROTOCOL.md 4.4), so
+/// A completed state visit is reported as it happens (docs/reference/protocol.md 4.4), so
 /// it can land between a command and its reply and in the middle of a result.
 /// That is what "unsolicited" means and the bridge is required to cope with it;
 /// these tests are about everything else, so they drop them here rather than
@@ -425,7 +425,7 @@ std::string run_trial(Host& h, int trial_id, int graph_index) {
 }
 
 TEST_CASE("a trial selects its graph by index, and switching costs one field") {
-  // The whole of dev/DAEMON.md 3.2: every graph the session uses is already on
+  // The whole of docs/developer/daemon.md 3.2: every graph the session uses is already on
   // the device, so changing paradigm between two trials is a field on a message
   // that was going to be sent anyway. No upload, and nothing added to the ITI
   // of the trials where the type happened to change.
@@ -535,7 +535,7 @@ TEST_CASE("a graph that claims the wrong slot is refused") {
 TEST_CASE("every state visit is reported as it happens") {
   // The record at the end of a trial is authoritative and stays so. What it is
   // not is a trace: something with a timestamp on it that arrives while the
-  // trial is still running and survives a truncated path. See dev/DAEMON.md 3.6.
+  // trial is still running and survives a truncated path. See docs/developer/daemon.md 3.6.
   Host h;
   greet(h);
   upload_minimal(h);
@@ -1327,7 +1327,7 @@ TEST_CASE("the entry state's output actions reach the caller of advance_trial") 
 
 // ------------------------------------------------------------- the pin map ---
 //
-// dev/PROTOCOL.md 3.6. The command exists so that a host can stop keeping its
+// docs/reference/protocol.md 3.6. The command exists so that a host can stop keeping its
 // own copy of the board's pin table: which pin a line is, and which direction
 // it has, are fixed when this firmware is compiled, and before `pins` there was
 // no way to ask.

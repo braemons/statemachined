@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: LGPL-3.0-or-later
 """One rig, addressed by base URL.
 
-`dev/API.md` is the specification and this is the whole of it in Python: the
+`docs/reference/api.md` is the specification and this is the whole of it in Python: the
 device and its wiring, the graph store, a session's graph set, the trial loop,
 the trace and its subscription, the two configurations, and the recordings.
 
@@ -171,7 +171,7 @@ class StatemachinedClient:
 class DeviceApi:
     """What is attached, what it can hold, and which pin is the left lever.
 
-    `dev/API.md` §3, and the half of this API that is not in a trial's critical
+    `docs/reference/api.md` §3, and the half of this API that is not in a trial's critical
     path. It is also the half that answers the question a rig raises at two in
     the morning -- is the valve wired to A0, and did it open -- which is why the
     daemon is a daemon and not a library.

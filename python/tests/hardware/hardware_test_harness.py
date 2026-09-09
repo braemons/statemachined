@@ -39,7 +39,7 @@ class LinkState(IntEnum):
     ARMED = 2  # configured for a trial that has not started
     RUNNING = 3  # a trial is in flight
     # The dwell between two runs a board is driving itself, which only a board
-    # under autorun is ever in. See dev/PROTOCOL.md 3.7.
+    # under autorun is ever in. See docs/reference/protocol.md 3.7.
     RELIGHTING = 4
 
 
@@ -178,7 +178,7 @@ class Device:
 # ------------------------------------------------------- the loopback harness ---
 #
 # Eight jumper wires, output line *n* to input line *(n + 4) mod 8*, which is
-# what dev/HARDWARE.md calls the loopback harness. It lives here rather than in
+# what docs/operations/hardware.md calls the loopback harness. It lives here rather than in
 # whichever test file uses it because `conftest.py` needs it too, and a fixture
 # importing a *test module* is a fixture that a rename breaks -- which is
 # exactly what happened when test_lines.py became test_line_predicates.py and

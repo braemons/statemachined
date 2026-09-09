@@ -14,7 +14,7 @@
 // timer lives. That separation is what lets a whole session be played out on
 // the host, at host speed, with no board attached.
 //
-// See dev/PROTOCOL.md.
+// See docs/reference/protocol.md.
 #pragma once
 #include <cstddef>
 #include <cstdint>
@@ -54,7 +54,7 @@ struct DeviceIdentity {
 
   /// What is written on the board beside each line, indexed by line number:
   /// `input_pin_labels[3]` is the label of input line 3. Answered to the host
-  /// by the `pins` command (dev/PROTOCOL.md 3.6).
+  /// by the `pins` command (docs/reference/protocol.md 3.6).
   ///
   /// **This is the table that drives pinMode(), not a copy of it.** A host
   /// cannot otherwise know which pin a line is, or even which lines are inputs:

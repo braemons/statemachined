@@ -3,7 +3,7 @@
 
 A person writes `{"when": {"all": ["lever_left"], "none": ["abort"]}, "goto":
 "Hit"}`. The device is told `{"all": 16, "none": 4, "target": 3}`, because it
-has 32 KB and cannot hold the word "lever_left" (dev/PROTOCOL.md, "Types and
+has 32 KB and cannot hold the word "lever_left" (docs/reference/protocol.md, "Types and
 units"). Everything in between happens here.
 
 What comes out is a **plan**, not a conversation: an ordered list of messages and
@@ -98,7 +98,7 @@ class DeviceCapabilities(BaseModel):
 
 @dataclass(frozen=True)
 class UploadMessage:
-    """One line of dev/PROTOCOL.md 3.2, before it is framed.
+    """One line of docs/reference/protocol.md 3.2, before it is framed.
 
     A message type and its body, in the order it must be sent. The CRC and the
     rolling checksum belong to the wire and are added there, over the bytes
@@ -293,7 +293,7 @@ def compile_graph_set_for_device(
     capabilities: DeviceCapabilities,
     set_version: int,
 ) -> CompiledGraphSet:
-    """Turn the graphs a session will use into the upload dev/PROTOCOL.md 3.2 wants.
+    """Turn the graphs a session will use into the upload docs/reference/protocol.md 3.2 wants.
 
     The order of `graphs` is the order of the slots, and a slot is what
     `configure`'s `graph_index` names -- so it is stable for the life of the set

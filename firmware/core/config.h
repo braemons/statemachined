@@ -9,7 +9,7 @@
 // How many graphs one set may hold. Sixty bytes of table on the reference
 // board, so this is not where a set's cost is -- the pools below are. A session
 // declares its graphs up front and switches between them by index; see
-// dev/DAEMON.md 3.2.
+// docs/developer/daemon.md 3.2.
 #ifndef STATEMACHINED_MAX_GRAPHS
 #define STATEMACHINED_MAX_GRAPHS 20
 #endif
@@ -90,14 +90,14 @@ constexpr uint8_t kMaxOutputLines = STATEMACHINED_MAX_OUTPUT_LINES;
 /// `from` index of every result_path chunk -- a protocol change for headroom
 /// nobody has asked for. At 16 B a StateVisit that is 4080 B, about 3 KB more
 /// than the 64 it used to be, which is the price of a trial whose path is
-/// complete rather than truncated. See dev/DAEMON.md 3.6.
+/// complete rather than truncated. See docs/developer/daemon.md 3.6.
 constexpr uint8_t kMaxPath = STATEMACHINED_MAX_PATH;
 static_assert(kMaxPath >= 1 && STATEMACHINED_MAX_PATH <= 255,
               "path_len is a uint8_t; 256 breaks record_visit's comparison silently");
 
 /// The protocol's line budget, reported to the host in hello_ack. Every message
 /// is sized to fit inside it -- which is why the graph upload and the trial
-/// result are both chunked. See dev/PROTOCOL.md.
+/// result are both chunked. See docs/reference/protocol.md.
 constexpr uint16_t kMaxLine = STATEMACHINED_MAX_LINE;
 
 /// Choice options and their weights live in one shared pool, like everything

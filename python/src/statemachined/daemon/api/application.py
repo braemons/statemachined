@@ -67,7 +67,7 @@ def create_application(
     application.state.rig_service = service
 
     # The web UI's elements are meant to be embedded in a console served from
-    # somewhere else (dev/DAEMON.md §5), so nothing may assume same-origin. The
+    # somewhere else (docs/developer/daemon.md §5), so nothing may assume same-origin. The
     # price of that decision is paid here, in one line.
     application.add_middleware(
         CORSMiddleware,
