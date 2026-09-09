@@ -175,6 +175,24 @@ class Device:
         return out
 
 
+# ------------------------------------------------------------ what to expect ---
+#
+# Here rather than in `conftest.py`, and that is not a preference. pytest puts
+# every test directory on sys.path, so with a `conftest.py` under both
+# `hardware/` and `runs/` the name `conftest` means whichever was imported
+# first -- and `from conftest import TRIAL_OUTPUT_LINE` in this suite started
+# resolving to the *runs* conftest the moment anything collected both. A module
+# named for what it holds means the same thing from anywhere, which is the rule
+# `tests/integration/rig_harness.py` already states.
+
+#: dev/PLAN.md M3, and the target docs/operations/bringup.md §4 reads off a board.
+SCAN_HZ_TARGET = 10_000
+
+#: The output line `two_state_graph` raises, so that a test can watch a graph's
+#: line number reach a pin.
+TRIAL_OUTPUT_LINE = 3
+
+
 # ------------------------------------------------------- the loopback harness ---
 #
 # Eight jumper wires, output line *n* to input line *(n + 4) mod 8*, which is

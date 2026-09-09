@@ -77,13 +77,9 @@ SOFTWARE_HARNESS = "8"
 RIG_URL = "http://statemachined.test"
 
 
-def pytest_addoption(parser):
-    parser.addoption(
-        "--target",
-        default="",
-        help="a board to run these against: a device path, host:port, or pyserial URL. "
-        "Left out, they run against the firmware built for this machine.",
-    )
+# `--target` is registered in python/tests/conftest.py rather than here, because
+# `hardware/` takes it as well and pytest registers each option once per run.
+# Unset is falsy, and every reader below treats that as "the host build".
 
 
 def pytest_report_header(config):

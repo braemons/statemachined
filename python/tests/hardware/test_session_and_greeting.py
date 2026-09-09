@@ -10,7 +10,7 @@ from __future__ import annotations
 import time
 
 import pytest
-from conftest import SCAN_HZ_TARGET
+from hardware_test_harness import SCAN_HZ_TARGET
 from statemachined.device.message_vocabulary import ErrorCode, Field, MsgType
 
 PROTO = 1

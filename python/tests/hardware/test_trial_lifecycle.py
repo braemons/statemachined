@@ -13,8 +13,7 @@ from __future__ import annotations
 
 import time
 
-from conftest import TRIAL_OUTPUT_LINE
-from hardware_test_harness import CancelReason, SingleGraphSetUploader, Outcome, read_trial_result
+from hardware_test_harness import TRIAL_OUTPUT_LINE, CancelReason, SingleGraphSetUploader, Outcome, read_trial_result
 from statemachined.device.message_vocabulary import ErrorCode, Field, MsgType
 
 #: The `wait` state's fixed duration, and the tolerance it is held to.

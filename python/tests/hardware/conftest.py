@@ -35,6 +35,7 @@ from statemachined.device.message_framing import DeviceRefusedTheCommand
 
 from hardware_test_harness import (
     LOOPBACK,
+    TRIAL_OUTPUT_LINE,
     LOOPBACK_PINS,
     Device,
     LinkState,
@@ -42,22 +43,11 @@ from hardware_test_harness import (
     wiring_instructions,
 )
 
-#: dev/PLAN.md M3, and what docs/operations/bringup.md §4 is waiting on.
-SCAN_HZ_TARGET = 10_000
-
-#: The output line `two_state_graph` raises, so that a test can watch a graph's
-#: line number reach a pin. Deliberately clear of test_lines.py's loopback
-#: lines: one of those drives an input, so it cannot also be evidence about
-#: outputs alone.
-TRIAL_OUTPUT_LINE = 3
-
-
 def pytest_addoption(parser):
-    parser.addoption(
-        "--target",
-        default=DEFAULT_TARGET,
-        help="device path, host:port, or any pyserial URL (default: %(default)s)",
-    )
+    # `--target` is registered in python/tests/conftest.py, not here: `runs/`
+    # takes it too, and pytest registers an option once per run rather than once
+    # per conftest -- so defining it in both is a collision that kills
+    # collection for anything gathering both suites.
     parser.addoption("--baud", type=int, default=DEFAULT_BAUD, help="serial only")
     parser.addoption(
         "--read-timeout",
@@ -69,7 +59,13 @@ def pytest_addoption(parser):
 
 @pytest.fixture(scope="session")
 def target(pytestconfig) -> str:
-    return pytestconfig.getoption("--target")
+    """The board to run against; the reference path when nobody said.
+
+    This suite needs a board by definition, so "no --target" means the usual
+    one rather than "do not run" -- which is the opposite of what it means to
+    `runs/`, and why the default lives in neither conftest.
+    """
+    return pytestconfig.getoption("--target") or DEFAULT_TARGET
 
 
 @pytest.fixture(scope="session")
@@ -291,4 +287,7 @@ def loopback(greeted) -> dict[int, int]:
 
 
 def pytest_report_header(config):
-    return f"statemachined hardware suite, target {config.getoption('--target')}"
+    return (
+        "statemachined hardware suite, target "
+        f"{config.getoption('--target') or DEFAULT_TARGET}"
+    )
