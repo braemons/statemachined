@@ -134,5 +134,36 @@ bool storage_write_commit();
 const char* const* input_pin_labels();
 const char* const* output_pin_labels();
 
+// ------------------------------------------------- the host build's stimulus ---
+//
+// Only the host HAL has these, and the guard is what says so: on a board an
+// input line is a pin and nothing in software may drive it.
+
+#if !defined(ARDUINO)
+
+/// Drive the input word directly. The host build has no pins, so this is where
+/// its inputs come from.
+void set_native_inputs(LineBitmask word);
+
+/// Wire every output line back to an input line, in software.
+///
+/// Output line *n* appears on input line *(n + shift) mod width*, which is the
+/// loopback harness of dev/HARDWARE.md with the jumper wires taken out. It
+/// exists so that the tests which drive a transition from a *predicate* --
+/// the pin -> conditioner -> matches() -> transition chain -- are the same
+/// tests with a board on the desk and without one. Before it, that chain could
+/// only ever be exercised on silicon, so CI never ran it at all.
+///
+/// It is not pretending to be a board. The delay is whatever one scan of this
+/// loop is rather than a propagation time, and nothing here has a deadline.
+/// What it reproduces faithfully is the *logic*: which line a level arrives on,
+/// and that it arrives one scan after it was raised.
+///
+/// `width` of 0 turns it off, which is the default -- a host device whose
+/// inputs went high on their own would surprise every other test in the tree.
+void set_native_loopback(uint8_t width, uint8_t shift);
+
+#endif  // !ARDUINO
+
 }  // namespace hal
 }  // namespace statemachined

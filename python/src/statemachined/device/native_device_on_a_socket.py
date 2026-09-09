@@ -137,7 +137,12 @@ class NativeDeviceOnASocket:
     device wrote a result while the caller was still sending an upload.
     """
 
-    def __init__(self, port: int = 0, store_path: str | None = None) -> None:
+    def __init__(
+        self,
+        port: int = 0,
+        store_path: str | None = None,
+        loopback: str | None = None,
+    ) -> None:
         """`port` 0 asks the kernel for a free one, which is what a test wants;
         a fixed one is what a bench wants, so the URL can be written down.
 
@@ -146,6 +151,14 @@ class NativeDeviceOnASocket:
         with the same path are the same board before and after a power cut,
         which is how the stored-settings behaviour is tested at all. Left out,
         the device uses its own default in the working directory.
+
+        `loopback` wires the device's outputs back to its inputs in software --
+        `"8"` for output line n on input line (n + 4) mod 8, which is the
+        loopback harness of dev/HARDWARE.md with no jumper wires in it, or
+        `"<width>:<shift>"` to say both. It is what lets a suite that drives
+        transitions from *predicates* run unchanged with a board and without
+        one. Left out, the device has no inputs at all, which is what every
+        other test in this tree expects of it.
         """
         self._listening_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._listening_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -154,6 +167,7 @@ class NativeDeviceOnASocket:
         self.port = self._listening_socket.getsockname()[1]
 
         self._store_path = store_path
+        self._loopback = loopback
         self._process: subprocess.Popen | None = None
         self._connection: socket.socket | None = None
         self._stop = threading.Event()
@@ -167,9 +181,12 @@ class NativeDeviceOnASocket:
         binary = the_native_device_binary()
         if binary is None:
             raise FileNotFoundError(_reason_when_not_built())
-        environment = None
+        overrides = {}
         if self._store_path is not None:
-            environment = {**os.environ, "STATEMACHINED_STORE": self._store_path}
+            overrides["STATEMACHINED_STORE"] = self._store_path
+        if self._loopback is not None:
+            overrides["STATEMACHINED_LOOPBACK"] = self._loopback
+        environment = {**os.environ, **overrides} if overrides else None
         self._process = subprocess.Popen(
             [str(binary)],
             stdin=subprocess.PIPE,

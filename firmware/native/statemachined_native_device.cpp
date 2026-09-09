@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 
@@ -130,7 +131,35 @@ class FileSettingsPort : public SettingsPort {
 
 }  // namespace
 
+/// The software loopback harness, if the environment asked for one.
+///
+/// `STATEMACHINED_LOOPBACK=8` wires output line n back to input line
+/// (n + 4) mod 8 -- the eight jumper wires of dev/HARDWARE.md, in software, so
+/// that a suite driving transitions from predicates is the same suite with a
+/// board and without one. `<width>:<shift>` sets both; unset is off.
+///
+/// An environment variable rather than an argument for the same reason
+/// STATEMACHINED_STORE is one: this binary's whole command line is "no
+/// arguments", and every launcher it has -- the socket bridge, `make
+/// bench-device`, `statemachined device` -- already passes an environment.
+void configure_the_loopback_from_the_environment() {
+  const char* setting = std::getenv("STATEMACHINED_LOOPBACK");
+  if (setting == nullptr || *setting == '\0') return;
+
+  char* after = nullptr;
+  const long width = std::strtol(setting, &after, 10);
+  if (width <= 0 || width > 32) return;
+  long shift = width / 2;  // out n -> in (n + width/2), the harness's own rule
+  if (after != nullptr && *after == ':') shift = std::strtol(after + 1, nullptr, 10);
+
+  hal::set_native_loopback(static_cast<uint8_t>(width), static_cast<uint8_t>(shift % width));
+}
+
 int main() {
+  // Before init(), which primes the conditioner off the first read: a harness
+  // configured after that would have its first scan see an input word that the
+  // conditioner had already been told was the resting state.
+  configure_the_loopback_from_the_environment();
   hal::init();
 
   QueueingReplySink reply_sink;

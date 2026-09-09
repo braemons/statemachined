@@ -23,6 +23,12 @@ namespace hal {
 namespace {
 LineBitmask inputs_ = 0;
 LineBitmask levels_ = 0;
+
+// The software loopback harness; see set_native_loopback() in hal.h. Width 0 is
+// off, and off is the default -- a host device whose inputs rose on their own
+// would surprise every test that never asked for this.
+uint8_t loopback_width_ = 0;
+uint8_t loopback_shift_ = 0;
 }  // namespace
 
 // No pins, and the labels say so rather than borrowing a board's.
@@ -54,6 +60,9 @@ const char* const* output_pin_labels() { return kSimulatedLineLabels; }
 void init() {
   levels_ = 0;
   inputs_ = 0;
+  // Deliberately *not* clearing the loopback: it is configured before init()
+  // by whoever built this device, and it describes the wiring rather than the
+  // state. A board's jumper wires survive a reset too.
 
   // hal.h promises link_read() never blocks, and on a board that is free --
   // asking a UART peripheral whether a byte is waiting cannot block. Here it
@@ -68,7 +77,19 @@ void init() {
   if (flags >= 0) fcntl(STDIN_FILENO, F_SETFL, flags | O_NONBLOCK);
 }
 
-LineBitmask read_inputs() { return inputs_; }
+LineBitmask read_inputs() {
+  if (loopback_width_ == 0) return inputs_;
+  // Whatever was driven directly, plus whatever the outputs are feeding back.
+  // Both, rather than only the loopback, so a test can still hold a line high
+  // by hand on a device that also has the harness on.
+  LineBitmask word = inputs_;
+  for (uint8_t out = 0; out < loopback_width_; ++out) {
+    if (levels_ & (static_cast<LineBitmask>(1) << out)) {
+      word |= static_cast<LineBitmask>(1) << ((out + loopback_shift_) % loopback_width_);
+    }
+  }
+  return word;
+}
 
 void write_outputs(LineBitmask set_high, LineBitmask set_low) {
   // Same rule as the board: a line in both is a bug upstream, and it goes high.
@@ -189,6 +210,11 @@ bool storage_write_commit() {
 // ------------------------------------------------------ the rig, simulated ---
 
 void set_native_inputs(LineBitmask word) { inputs_ = word; }
+
+void set_native_loopback(uint8_t width, uint8_t shift) {
+  loopback_width_ = width;
+  loopback_shift_ = width == 0 ? 0 : static_cast<uint8_t>(shift % width);
+}
 LineBitmask native_output_levels() { return levels_; }
 
 }  // namespace hal
