@@ -207,7 +207,7 @@ Three things follow, and they are the point of measuring rather than estimating:
 
 ### Scan rate and link cost — measured 2026-09-03
 
-On the board, with `daemon/` driving it over USB CDC.
+On the board, with `python/` driving it over USB CDC.
 
 | | |
 |---|---|

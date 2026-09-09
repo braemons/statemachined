@@ -136,7 +136,7 @@ Erratic or self-starting chases are the pull-downs, not the firmware.
 Every line carries a CRC-16/CCITT-FALSE, so typing JSON into a serial monitor
 gets no reply. Use the repository's own bench instrument, which frames commands
 with the same helper CI drives the emulated board with
-([`daemon/`](../daemon/README.md)):
+([`python/`](../python/README.md)):
 
 ```sh
 make bringup ARGS="hello"
@@ -324,7 +324,7 @@ make bench                       # /dev/ttyACM0, or make bench TARGET=...
 
 Then open **http://127.0.0.1:8081/**. The daemon greets the board on startup,
 pushes the wiring from the line map in
-`daemon/bench/statemachined_bench_configuration.toml`, and seeds its graph store
+`python/bench/statemachined_bench_rig_config.toml`, and seeds its graph store
 from `graphs/` into `build/bench/graphs` -- a copy, so deleting a graph in the
 browser does not delete an example from the repository. Greeting takes the rig,
 as it does anywhere else.

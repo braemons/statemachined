@@ -50,7 +50,7 @@ cargo-deb and rpmbuild are different tools; nfpm packs both from one staged
 tree, so the matrix here is by architecture alone.
 
 **Built in a pinned container, and reproducible.** Base image pinned by digest,
-uv and nfpm by version, dependencies installed from `daemon/uv.lock` with
+uv and nfpm by version, dependencies installed from `python/uv.lock` with
 hashes rather than resolved against PyPI at build time, every mtime taken from
 the commit, and every `.pyc` rebuilt with hash-based invalidation so that
 normalising those mtimes does not invalidate them. Two builds of one commit are
@@ -73,7 +73,7 @@ that interpreter is native to the architecture it was fetched for, so the arm64
 package is built by running the builder image *as* arm64 under qemu. Slower,
 and much simpler than a cross toolchain.
 
-**The version comes from the git tag.** `daemon/pyproject.toml` carries a
+**The version comes from the git tag.** `python/pyproject.toml` carries a
 `0.0.0` sentinel and `scripts/git-version.sh` stamps the real version into a
 *copy* at build time, so a build never dirties the working tree — and a `0.0.0`
 artifact in the wild means the stamping was bypassed rather than that somebody

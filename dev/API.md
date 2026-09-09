@@ -20,9 +20,24 @@ library; a thing you can ask *"is the valve wired to A0 and did it open"* at two
 in the morning cannot.
 
 Everything here is JSON. The models are the ones in
-`daemon/src/statemachined/model/`, so the generated schema at `/openapi.json` is
+`python/src/statemachined/model/`, so the generated schema at `/openapi.json` is
 not a second description of them that can drift. **The web UI uses only this
 API** — no private route — which is what keeps the UI an honest test of it.
+
+**`statemachined.client` is this document in Python**, and it ships from the same
+distribution as the daemon for the same reason: a consumer that wrote these
+paths, refusal codes and stream rules down for itself would be keeping a second
+description of them somewhere this repository's tests cannot see. Its payloads
+are dictionaries, so what it adds is only what is *not* in the generated schema —
+the routes, the refusal shape, the subscription's rules, and a timeout per call —
+and `statemachined.model` is the models themselves, the very ones this daemon
+validates with, so nothing is described twice anywhere.
+
+There is a second way to drive a board and it is not this API at all:
+`statemachined.device` opens the port itself, for a bench script with no daemon
+in the way. What it cannot offer is everything below §7 — the trace ring, the
+recordings, the observer list, the stores — because those exist only because a
+daemon outlives the process that spoke to it.
 
 ---
 

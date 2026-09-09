@@ -87,6 +87,7 @@ That is the fastest feedback loop in the repo and it needs no board attached.
 
 ```sh
 make test        # build and run the core unit tests
+make test-python # the Python package: unit, integration, and the shipped commands
 make sanitize    # the same, under ASan and UBSan
 make golden      # the tests at -O0 and -O3, for reproducibility
 make firmware    # build for the Uno R4 Minima
@@ -164,6 +165,80 @@ toolchain, with a `MANIFEST.txt` recording the commit, sizes and checksums — a
 board in a rack cannot be asked which commit it is running. `make image` builds
 the same thing locally.
 
+## Drive it from Python
+
+`python/` is one package with three tiers, and which one you install says how
+you mean to drive a board.
+
+```sh
+pip install statemachined            # the documents, and talking to a daemon
+pip install 'statemachined[device]'  # + open the serial port yourself
+pip install 'statemachined[serve]'   # + be the daemon
+```
+
+**Through a daemon**, when something other than your script owns the board — a
+rig, where `statemachined serve` is holding it and a web UI and triald are
+watching too:
+
+```python
+from statemachined.client import StatemachinedClient
+
+with StatemachinedClient("http://rig-3.local:8081") as rig:
+    rig.session.upload_graph_set(["go-nogo", "2afc"])
+
+    with rig.trace.subscribe("my-experiment") as stream:
+        rig.trial.configure(1, graph="go-nogo", cap_milliseconds=30_000)
+        rig.trial.start(1)
+        stream.wait_for_trial(1, timeout_seconds=35)
+
+    for entry in rig.trace.for_trial(1):
+        print(entry["kind"], entry.get("state_name"), entry.get("outcome"))
+```
+
+**Or straight at the board**, on a bench, with no daemon anywhere:
+
+```python
+from statemachined.device import StatemachinedDevice
+from statemachined.model.graph_definition import GraphDefinition
+from statemachined.model.line_map import LineMap
+
+board = StatemachinedDevice("/dev/ttyACM0", line_map=LineMap.model_validate(wiring))
+board.connect_and_greet()
+board.push_wiring()
+board.upload_graph_set([GraphDefinition.model_validate(go_nogo)], set_version=1)
+
+result = board.run_trial_to_completion(1, "go-nogo", cap_milliseconds=30_000)
+# `.name`, not the member: TrialOutcome is an IntEnum and since Python 3.11
+# those print as their number. The `.tdr` taxonomy crosses the wire by name.
+print(result.outcome.name, [visit.state_name for visit in result.visits])
+```
+
+**Two classes and not one facade with two backends**, because the difference is
+not the transport. A daemon keeps a trace ring, takes named recordings off it,
+holds a graph store and saved configs on disk, and can say who else is watching
+— all of which exist because it *outlives the script that spoke to it*. A direct
+connection has no ring to record from: your process was the only listener, and
+what it did not keep is gone. One facade would have to answer
+`rig.recordings.start()` on both, and on one of them the answer would be a
+fiction.
+
+What they do share is the trial loop, the graph set, the wiring, autorun and
+save — because those are the board's, not the daemon's. A paradigm moves between
+them. A record-keeping strategy does not.
+
+**And `statemachined.model` is the same pydantic in both**, and the same the
+daemon validates with, so a graph is refused where you wrote it rather than
+after a round trip. That is the reason this is one distribution: every place the
+package could have been split leaves those models described twice, and a second
+description is right until the day it is not.
+
+```sh
+make test-unit          # host-only: no daemon, no device, no socket
+make test-integration   # against the firmware built for this machine
+make test-e2e-local     # `statemachined serve` and `device`, two processes, a socket
+make test-python        # all three
+```
+
 ## Install it on a rig
 
 `make packages` builds installable packages — the daemon and a vendored Python
@@ -207,11 +282,13 @@ Also: **VStim** (Andreas Kreiter, Cognitive Neurophysiology Lab, Bremen), whose
 ## License
 
 **Firmware, core, tests and tools: [GPLv3-or-later](LICENSE).
-The daemon's library, `daemon/src/`: [LGPLv3-or-later](daemon/LICENSE)**, so an
+The Python package, `python/src/`: [LGPLv3-or-later](python/LICENSE)**, so an
 experiment importing it is not placed under copyleft — the same split, and the
 same reason, as vstimd's client. The split is by *what is importable*, not by
-directory: `daemon/tests/` is a test suite and stays GPL. Every source file
-carries an `SPDX-License-Identifier`.
+directory: `python/tests/` is a test suite and stays GPL. That the importable
+half now includes a client and a way to drive a board directly does not change
+the line; it is the same argument reaching further. Every source file carries an
+`SPDX-License-Identifier`.
 
 The GPL here is a *choice*, not an inheritance: no Bpod source is copied,
 translated or adapted anywhere in this repository — the references to it in the

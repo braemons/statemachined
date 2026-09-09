@@ -1,0 +1,167 @@
+# All the Python in this repository, as one uv project: the documents, the two
+# ways to drive a board, and the daemon. Keeping them inside one project means
+# `uv run --project python` builds an environment for it without touching the
+# interpreter renode-test drives or the uv-tool sandboxes the Makefile installs.
+#
+# It was tools/bringup/ until M4a and daemon/ until this restructure. The
+# directory is `python/` now because three of its five subpackages are not a
+# daemon, and a name that says otherwise is a name somebody has to correct.
+[project]
+name = "statemachined"
+# The sentinel. packaging/scripts/git-version.sh stamps the real version from
+# the tag at build time (dev/DAEMON.md §6.1), so a 0.0.0 artifact in the wild
+# means the stamping was bypassed rather than that this number was forgotten.
+version = "0.0.0"
+description = "Owns one statemachined device: the wire, the graphs, and the API over both"
+requires-python = ">=3.11"
+license = "LGPL-3.0-or-later"
+# **Three tiers, three extras, one distribution.** What you install depends on
+# which way you want to drive a board, and the import tree says the same thing:
+#
+#   statemachined            model/, graph_set_compiler.py, client/
+#                            the documents, the translation, and talking to a
+#                            daemon over HTTP. pydantic, httpx, websockets.
+#
+#   statemachined[device]    + device/     open the port yourself. pyserial.
+#
+#   statemachined[serve]     + daemon/     be the daemon. fastapi, uvicorn,
+#                                          zeroconf, and the web UI.
+#
+# One distribution rather than a package plus a client package, because the
+# division would have had to cut somewhere, and every place it could cut leaves
+# the same models described twice. `model/` is what a graph *is*; the daemon
+# validates against it, the client sends it, a bench script builds one. A second
+# copy of that in a client library is a copy that is right until it is not, and
+# the day it is not is a session.
+dependencies = [
+    # The documents: a graph as somebody authored it, a line map, a config. This
+    # is the boundary where a file somebody edited arrives and "refuse it, naming
+    # the field" is the whole job, and the same models become the API's schema --
+    # which is why it is pydantic rather than dataclasses plus hand-written
+    # checks, and why it is in the base tier rather than behind an extra.
+    "pydantic>=2.13.5",
+    # `client/`. httpx rather than requests for one reason that is not taste:
+    # `httpx.Client` is what Starlette's `TestClient` is, so a caller can point
+    # this client at a daemon in its own process -- which is how the integration
+    # suite exercises the real far end rather than a mock of it.
+    "httpx>=0.28.1",
+    # `WS /api/trace/stream`, which is the whole of subscribing to a rig. The
+    # sync client is used, so nothing here is async and no caller has to be.
+    "websockets>=13",
+]
+
+[project.optional-dependencies]
+# Driving a board from your own process, with no daemon anywhere.
+device = [
+    # serial_for_url() is why this is here rather than a hand-written transport:
+    # it already speaks socket:// and rfc2217://, so the day a board is on a
+    # switch instead of a USB cable, nothing above device/serial_link.py changes.
+    "pyserial>=3.5",
+]
+
+# Being the daemon: the HTTP API, the web UI, the stores, the trace.
+serve = [
+    "statemachined[device]",
+    "fastapi>=0.141.1",
+    # `[standard]` for one reason: the WebSocket implementation. Plain uvicorn
+    # answers a WebSocket upgrade with 404 -- not an error in the log, a 404 --
+    # so `WS /api/stream`, the trace tail and the serial monitor would all be
+    # dead in the shipped daemon while every test passed, because Starlette's
+    # TestClient implements WebSockets in process and needs no server library at
+    # all. Found by connecting to a running one.
+    "uvicorn[standard]>=0.52.4",
+    # A console discovers a rig instead of being hand-configured with URLs --
+    # dev/DAEMON.md §5, and the same record vstimd already publishes. Imported
+    # lazily and never fatal: a daemon that cannot advertise still serves, and a
+    # rig with no mDNS on its network is a rig, not an error.
+    "zeroconf>=0.132",
+]
+
+[project.scripts]
+statemachined = "statemachined.command_line_interface:main"
+
+# pytest is a dependency of the test suites, not of the package, so it lives in
+# a group rather than in `dependencies`: `uv run --project` installs it for
+# `make test-python` and `make test-hardware` and leaves it out of anything that
+# just wants to talk to a board.
+#
+# The group installs both extras, because the suites cover all three tiers:
+# `tests/unit` needs none of it, `tests/integration` and `tests/e2e` stand a
+# real daemon up in front of a real device.
+[dependency-groups]
+test = ["pytest>=8.0", "statemachined[device,serve]"]
+dev = ["ruff>=0.8", "ty>=0.0.1a1"]
+# The end-to-end tests only, and never at runtime. **Nothing in this package
+# imports triald, and nothing in it knows triald exists** -- this daemon reports
+# to nobody and has no setting naming another one. The dependency is here
+# because the test needs both halves and the expensive half is here: the
+# firmware built for this machine. triald opens a stream, drives a trial and
+# reads what this daemon published, which is what a rig does.
+#
+# Its own group rather than part of `test` so that `make test-python` on a fresh
+# checkout never reaches for another repository. Without it
+# `tests/integration/test_a_whole_trial_with_triald.py` skips itself and says
+# why; with it (`make test-e2e`) it runs.
+#
+# Marked rather than folded into requires-python: triald needs 3.12 and this
+# daemon runs on 3.11, and raising a shipped daemon's floor for a test
+# dependency is the wrong trade.
+#
+# See the contracts repo, INTERACTIONS.md §8.
+e2e = ["triald[serve] ; python_full_version >= '3.12'"]
+
+[tool.pytest.ini_options]
+# tests/unit is host-only. tests/integration needs the native device built --
+# `make test` does it -- and skips itself with instructions when it is not
+# there, so a bare `pytest` here never fails for want of a build. tests/hardware
+# needs a board and is deliberately not named: a target that fails on every
+# machine without hardware is a target people learn to ignore.
+# tests/e2e starts `statemachined serve` and `statemachined device` as
+# subprocesses, so it is slower than the rest and still needs no board; it skips
+# itself when the native device is not built, like tests/integration.
+testpaths = ["tests/unit", "tests/integration", "tests/e2e"]
+markers = [
+    "loopback: needs output-to-input jumper wires; see tests/hardware/test_lines.py",
+]
+# One device, one order. Without this, a plugin that reorders or parallelises
+# would have several hardware tests arming the same board at once.
+addopts = "-p no:randomly"
+filterwarnings = [
+    # `statemachined.client` sets a deadline on every request, deliberately, so
+    # that its `timeout_seconds` means the same thing whoever opened the httpx
+    # client. Against Starlette's `TestClient` -- which is how two of these
+    # suites reach a daemon in one process -- there is no network to time out
+    # on, and the warning is right and useless.
+    "ignore::DeprecationWarning:starlette.*",
+    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
+    "ignore:You should not use the 'timeout' argument with the TestClient",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/statemachined"]
+
+[tool.uv.sources]
+triald = { git = "ssh://git@github.com/braemons/triald.git", rev = "main" }
+# The test group installs this project's own extras, which uv resolves to the
+# workspace copy rather than to a registry.
+statemachined = { workspace = true }
+
+[tool.uv.workspace]
+members = ["."]
+
+[tool.ruff]
+line-length = 96
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.ty.src]
+include = ["src"]

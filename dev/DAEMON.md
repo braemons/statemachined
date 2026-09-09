@@ -75,6 +75,14 @@ number the daemon reports about a trial came off the device's clock.
 `bridge/` becomes `daemon/`, `tools/bringup/` moves into it, and `packaging/`
 appears. `firmware/` and `emulation/` do not move at all.
 
+> **Since amended.** `daemon/` is `python/`, and it holds one package with three
+> tiers rather than a daemon: `model/` and `client/` are the base, `device/` is
+> the `[device]` extra, and everything this section calls the daemon is under
+> `daemon/` inside it, behind `[serve]`. The reason is that three of the five
+> subpackages are not a daemon, and a directory that says otherwise is one
+> somebody has to keep correcting. The tree below is otherwise as described;
+> read `daemon/` for `python/` and `src/statemachined/X` for the tier X sits in.
+
 ```
 statemachined/
 ├── firmware/                  unchanged, apart from native/ below
@@ -161,7 +169,7 @@ framing (as `tools/bringup/wire.py` does today) was acceptable for a bench tool
 run from a checkout. It is **not** acceptable for an installed package: a `.deb`
 has no `emulation/` directory.
 
-So `daemon/src/statemachined/device/message_framing.py` becomes a real third
+So `python/src/statemachined/device/message_framing.py` becomes a real third
 implementation. That is a cost, and it is the right one: the alternative is
 shipping the test suite inside the daemon package. The two are kept honest by a
 golden-vector test — a fixed set of lines with known CRCs, asserted by both.
@@ -1175,7 +1183,7 @@ emulation only has to run pip-shaped work.
 **The build is reproducible, and that is checked rather than asserted.** Four
 things had to be nailed down, and every one of them was found by building twice
 and diffing rather than by predicting it: the base image is pinned by digest and
-the tools by version; dependencies are installed from `daemon/uv.lock` with
+the tools by version; dependencies are installed from `python/uv.lock` with
 hashes instead of being resolved against PyPI at build time, or a release of
 fastapi between two builds changes the artifact; every mtime comes from the
 commit rather than the clock; and every `.pyc` is rebuilt with hash-based
@@ -1292,7 +1300,7 @@ reassembles a result with the same chunker. That is why the daemon's integration
 suite has always talked to it, and why it is the same binary and the same bridge
 here rather than a second one — `statemachined.device.native_device_on_a_socket`
 is imported by `statemachined device`, by `make bench-device`, and by
-`daemon/tests/integration/conftest.py`. Two bridges that drift are two different
+`python/tests/integration/conftest.py`. Two bridges that drift are two different
 devices.
 
 **It is not a timing test.** The scan is a `nanosleep` on a preemptible desktop
