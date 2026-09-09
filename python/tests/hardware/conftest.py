@@ -33,7 +33,14 @@ from statemachined.device.message_vocabulary import Field, MsgType
 from statemachined.device.request_response_session import RequestResponseSession, NoReplyInTime, random_seed
 from statemachined.device.message_framing import DeviceRefusedTheCommand
 
-from hardware_test_harness import Device, SingleGraphSetUploader, LinkState
+from hardware_test_harness import (
+    LOOPBACK,
+    LOOPBACK_PINS,
+    Device,
+    LinkState,
+    SingleGraphSetUploader,
+    wiring_instructions,
+)
 
 #: dev/PLAN.md M3, and what dev/BRINGUP.md §4 is waiting on.
 SCAN_HZ_TARGET = 10_000
@@ -141,7 +148,33 @@ def greeted(board, pre_hello_probe) -> Device:
         pytest.exit(f"the board did not answer hello: {exc}", returncode=2)
     device.seed = seed
     device.ack = ack
+    _give_it_a_wiring_of_our_own(device, ack)
     return device
+
+
+def _give_it_a_wiring_of_our_own(device, ack: dict) -> None:
+    """Enable every line, rather than inheriting whatever the last host left.
+
+    A board remembers its wiring across a greeting -- deliberately, since that
+    is what lets it come up self-driving after a power cut -- and `enable` is a
+    *mask*. So a rig whose line map named only four inputs leaves the other four
+    switched off, and the next suite to run reads them as permanently low.
+
+    That is not hypothetical: it is what `python/tests/runs/` does to this board
+    when it is pointed at one, and the symptom was this suite reporting four of
+    the eight loopback wires missing while they were all firmly in their holes.
+    A test suite that silently depends on the last thing anybody ran is a test
+    suite that passes or fails by history, so this one states what it needs.
+    """
+    inputs = int(ack.get("n_input_lines", 0))
+    every_input_line = (1 << inputs) - 1
+    device.request(
+        MsgType.WIRING,
+        invert=0,
+        enable=every_input_line,
+        safe=0,
+        debounce_ms=[],
+    )
 
 
 @pytest.fixture
@@ -215,12 +248,13 @@ def loopback(greeted) -> dict[int, int]:
     against a board where a wire has fallen out, and the tests it enables would
     then fail as if the *firmware* could not see its inputs.
 
-    The probe is the smallest graph that can answer the question: raise output
-    line 0, look at `io.in`. Returns the map, or skips every test in
-    test_lines.py with the wiring instructions.
+    The probe is the smallest graph that can answer the question: raise every
+    output line at once, read `io.in`, and compare against what the eight wires
+    should have produced. Returns the map, or skips with the wiring list --
+    naming the wires that are actually missing, since a harness with seven of
+    eight wires in is the normal way this fails and "no loopback harness" would
+    send somebody to check all of them.
     """
-    from test_lines import LOOPBACK
-
     device = greeted
     graph = SingleGraphSetUploader(device.session, version=99)
     graph.begin(n_states=2, entry=0)
@@ -238,20 +272,20 @@ def loopback(greeted) -> dict[int, int]:
     seen = device.state()["io"]["in"]
     device.settle(0.5)  # let the 250 ms state finish and its result arrive
 
-    expected = 0
-    for in_line in LOOPBACK.values():
-        expected |= 1 << in_line
-    if seen & expected != expected:
-        missing = [
-            f"output {o} -> input {i}"
-            for o, i in LOOPBACK.items()
-            if not seen & (1 << i)
-        ]
+    missing = [(o, i) for o, i in sorted(LOOPBACK.items()) if not seen & (1 << i)]
+    if missing:
+        board = (device.ack or {}).get("board")
+        pins = LOOPBACK_PINS.get(board or "", [])
+        named = ", ".join(
+            f"{pins[o][0]}->{pins[o][1]}" if o < len(pins) else f"out {o}->in {i}"
+            for o, i in missing
+        )
         pytest.skip(
-            "no loopback harness: "
-            + ", ".join(missing)
-            + ". These tests drive the board's inputs from its own outputs, which needs "
-            "three jumper wires: D10->D2, D11->D3, D12->D4. See test_lines.py."
+            f"the loopback harness is not wired: {len(missing)} of {len(LOOPBACK)} "
+            f"wires missing ({named}).\n"
+            "These tests drive the board's inputs from its own outputs. The harness "
+            "is eight jumper wires, output line n to input line (n+4) mod 8:\n"
+            + wiring_instructions(board)
         )
     return LOOPBACK
 

@@ -19,30 +19,47 @@ a two-line predicate needs.
     Output line 0  D10 ──────► D6   Input line 4
     Output line 1  D11 ──────► D7   Input line 5
     Output line 2  D12 ──────► D8   Input line 6
+    Output line 3  A0  ──────► D9   Input line 7
+    Output line 4  A1  ──────► D2   Input line 0
+    Output line 5  A2  ──────► D3   Input line 1
+    Output line 6  A3  ──────► D4   Input line 2
+    Output line 7  A4  ──────► D5   Input line 3
 
-Three jumper wires, no components. dev/HARDWARE.md has the full line map. The
-tests skip themselves with these instructions when the wires are not there, so
-the suite stays something you can run against a bare board.
+Eight jumper wires, no components -- output line *n* to input line *(n+4) mod
+8*. `LOOPBACK` in hardware_test_harness.py is that rule; dev/HARDWARE.md has the
+full line map. The tests skip themselves with these instructions when the wires
+are not there, so the suite stays something you can run against a bare board.
 
-**Inputs 4-6, not 0-2.** BRINGUP.md §2 wires the bench switches as a contact to
-5 V, so a jumper driving input 0 or 1 would be fighting a closed switch -- an
-output pulling low against 5 V. Inputs 4-6 are untouched by §2, so a board can
-carry the bench wiring and this harness at once. Sharing the output pins is
-harmless the other way round: a pin drives an LED and a jumper equally well.
+**Why the shift, rather than out n to in n.** A straight-through harness cannot
+tell a correct board from one whose reported input word is secretly the output
+word: raise output 0, see bit 0 set, pass. Under the shift each output has a
+unique and non-obvious expected input bit, so that -- and any rotation or
+off-by-one in either pin table -- fails rather than passing for the wrong
+reason. It also covers all sixteen lines, where the original three wires left
+thirteen pins never once proven to be the pin the table claims.
+
+**It replaces the bench switch harness rather than sitting beside it.**
+Wires 5 and 6 land on D2 and D3, which BRINGUP.md §2 wires as a contact to 5 V:
+an output driving low against a closed switch is a short. Take the switches off,
+or put 1 kΩ in series in those two wires. Sharing the *output* pins with the
+bench lamps is harmless -- a pin drives an LED and a jumper equally well.
 
 One consequence of using outputs as the stimulus is that a line driving an input
-can no longer be asserted on independently, which is why test_trial.py raises
-output line 3 to check that an entry action reaches a pin, and not one of these.
+can no longer be asserted on independently. Every output line now drives one, so
+test_trial_lifecycle.py's check that an entry action reaches a pin is a check on
+line 3 *and* its jumper -- which is more evidence than it had before, not less.
 """
 
 from __future__ import annotations
 
 import pytest
-from hardware_test_harness import SingleGraphSetUploader, Outcome, read_trial_result
+from hardware_test_harness import (
+    LOOPBACK,
+    Outcome,
+    SingleGraphSetUploader,
+    read_trial_result,
+)
 from statemachined.device.message_vocabulary import Field, MsgType
-
-#: output line -> input line, as the jumpers above wire them.
-LOOPBACK = {0: 4, 1: 5, 2: 6}
 
 #: Named, because a test that says `bit(0)` in an action and `bit(0)` in a
 #: predicate is a test that will one day be read as though they were the same

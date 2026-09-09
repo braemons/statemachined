@@ -173,3 +173,46 @@ class Device:
             except Exception:  # noqa: BLE001 -- recorded, not acted on
                 pass
         return out
+
+
+# ------------------------------------------------------- the loopback harness ---
+#
+# Eight jumper wires, output line *n* to input line *(n + 4) mod 8*, which is
+# what dev/HARDWARE.md calls the loopback harness. It lives here rather than in
+# whichever test file uses it because `conftest.py` needs it too, and a fixture
+# importing a *test module* is a fixture that a rename breaks -- which is
+# exactly what happened when test_lines.py became test_line_predicates.py and
+# took the `loopback` fixture down with it.
+#
+# **Why the +4 shift and not out n -> in n.** A straight-through harness cannot
+# distinguish a correct board from one whose reported input word is secretly the
+# output word: raise output 0, see bit 0 in `io.in`, pass. Under the shift every
+# output has a unique and non-obvious expected input bit, so that failure -- and
+# any rotation or off-by-one in either pin table -- shows up as a test that
+# fails rather than one that passes for the wrong reason.
+
+#: output line -> input line, as the eight jumpers wire them.
+LOOPBACK = {n: (n + 4) % 8 for n in range(8)}
+
+#: The same thing as pins, for a message somebody can hold against a breadboard.
+#: Keyed on the reference board because that is the only pinout these wires
+#: describe; another board is another harness.
+LOOPBACK_PINS = {
+    "uno_r4_minima": [
+        ("D10", "D6"), ("D11", "D7"), ("D12", "D8"), ("A0", "D9"),
+        ("A1", "D2"), ("A2", "D3"), ("A3", "D4"), ("A4", "D5"),
+    ],
+}
+
+
+def wiring_instructions(board: str | None = "uno_r4_minima") -> str:
+    """The eight wires as a list, for a skip reason that is also a wiring guide."""
+    pins = LOOPBACK_PINS.get(board or "", [])
+    if not pins:
+        return "\n".join(
+            f"  output line {out} -> input line {inp}" for out, inp in sorted(LOOPBACK.items())
+        )
+    return "\n".join(
+        f"  {frm:>3} (output {out})  ->  {to:>3} (input {inp})"
+        for (out, inp), (frm, to) in zip(sorted(LOOPBACK.items()), pins)
+    )
