@@ -5,7 +5,7 @@ This file closes the one gap nothing else in the repository covers. The three
 masks in `firmware/core/graph/transition.h` are exercised thoroughly on the
 host, and Renode checks that an input pin arrives as the line number a graph
 would name -- but no test anywhere drives a *predicate* from real silicon. Both
-the Renode trial and the one in test_trial.py end by timeout, on purpose; the
+the Renode trial and the one in test_trial_lifecycle.py end by timeout, on purpose; the
 chain pin -> InputConditioner -> Transition::matches() -> a transition firing
 has never run on a board.
 

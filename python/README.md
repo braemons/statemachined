@@ -67,14 +67,15 @@ what it did not keep is gone. One facade would have to answer
 
 ## Tests
 
-Three tiers, and each adds exactly one thing the one below cannot say anything
+Four tiers, and each adds exactly one thing the one below cannot say anything
 about. None of them is a mock, and none needs a board.
 
 ```sh
 make -C .. test-unit          # host-only: no daemon, no device, no socket
 make -C .. test-integration   # against the firmware built for this machine
+make -C .. test-runs          # whole sessions, both API paths, either far end
 make -C .. test-e2e-local     # `statemachined serve` and `device`, two processes, a socket
-make -C .. test-python        # all three
+make -C .. test-python        # all four
 ```
 
 `tests/integration` drives whole sessions against `statemachined_native_device`
@@ -85,8 +86,23 @@ the two shipped commands as subprocesses and talks to them over a socket, which
 is the only place uvicorn's WebSocket support is exercised at all: plain uvicorn
 answers an upgrade with a 404 and every in-process test passes regardless.
 
+`tests/runs` is the one that varies the *far end*. Every other tier is pinned to
+one — `integration` and `e2e` to the host build, `hardware` to a board — so the
+question a rig actually cares about had never been asked: does a session that
+works against the host device work against a board, and does it work the same
+through both ways of driving one? The same tests run through the daemon's HTTP
+API and through `StatemachinedDevice`, against either far end:
+
+```sh
+make -C .. test-runs                              # the host build
+make -C .. test-runs-hardware TARGET=/dev/ttyACM0 # the same tests, on a board
+```
+
+That is possible because the board presses its own levers — see the loopback
+harness below, which exists in jumper wire and in software.
+
 Build the native device first (`make -C .. integration-device`, which `make test`
-does); without it the last three skip themselves and say how.
+does); without it every tier but the first skips itself and says how.
 
 ## The bench instrument
 
@@ -117,7 +133,7 @@ the Makefile installs there.
 
 The protocol is lines of ASCII with a CRC, which is as true over TCP as over a
 tty, so the transport is one class (`device/serial_link.py`) and nothing above it knows which
-it got. The part that is *not* transport-independent is fail-safe: BRINGUP.md §6
+it got. The part that is *not* transport-independent is fail-safe: [`bringup.md`](../docs/operations/bringup.md) §6
 turns on `hal::link_up()` going false when a USB port closes, and a device on a
 switch has to decide for itself what a dead peer looks like — a missed `ping`,
 most likely. That is a firmware question, not one this tool can answer.
@@ -134,7 +150,7 @@ unknown board prints bare line numbers rather than somebody else's pinout.
 | `watch` | polls `state` and prints `io` as it changes — hold a switch, watch `in` |
 | `ping` | round trip and uptime |
 | `load` | hammers the link, then reports whether `overruns` moved. Exits non-zero if it did |
-| `report` | `hello` + link load + `state`, printed as markdown for HARDWARE.md |
+| `report` | `hello` + link load + `state`, printed as markdown for [`hardware.md`](../docs/operations/hardware.md) |
 | `raw` | a hand-written body without its closing brace; the CRC is appended here |
 | `monitor` | reads and CRC-checks lines, **sending nothing** — the one way to watch the link without taking the rig |
 
@@ -260,7 +276,7 @@ See the contracts repo, `INTERACTIONS.md` §5.1 and §8.
 
 ## The hardware test suite
 
-`tests/hardware/` is the automated half of BRINGUP.md §4 and §5 — everything
+`tests/hardware/` is the automated half of [`bringup.md`](../docs/operations/bringup.md) §4 and §5 — everything
 those sections ask a person to read off the screen, asserted instead.
 
 ```sh
@@ -269,17 +285,18 @@ make test-hardware ARGS="-k trial -v"     # ARGS goes straight to pytest
 ```
 
 Connect a board and run it; there is no other setup. It greets the device once
-— **which takes the rig** — and takes about 40 seconds. It is deliberately not
+— **which takes the rig** — and takes about 90 seconds. It is deliberately not
 part of `make ci`, because a target that fails on every machine without a board
 is a target people learn to ignore.
 
 | File | What only a board can answer |
 |---|---|
 | `test_session_and_greeting.py` | `scan_hz` against the 10 kHz target; what the greeting declares |
-| `test_framing.py` | a corrupt line, an over-long one, a resend — against real silicon and a real buffer |
-| `test_trial.py` | a drawn 500 ms served to within 2 ms on the board's own clock; a result arriving whole from the ISR |
+| `test_framing_errors.py` | a corrupt line, an over-long one, a resend — against real silicon and a real buffer |
+| `test_trial_lifecycle.py` | a drawn 500 ms served to within 2 ms on the board's own clock; a result arriving whole from the ISR |
 | `test_scan_health.py` | what a command costs the scan, as a regression test on the ISR handoff |
-| `test_line_predicates.py` | predicates over several real pins — **needs three jumper wires** |
+| `test_line_predicates.py` | predicates over several real pins — **needs the jumper wires below** |
+| `test_timing_accuracy.py` | duration accuracy against the drawn value, and pin-to-transition latency — **needs the wires** |
 
 The graph upload and the result reassembly this suite needs used to live in
 `hardware_test_harness.py`, with a note that they were the bridge's job and should move when
@@ -294,23 +311,43 @@ deliberate refusals, and the enums a bench instrument has no use for.
 Nothing in this repository drives a *predicate* from real pins. The host suite
 covers the three masks thoroughly and Renode checks that an input pin arrives as
 the right line number, but both hardware trials — Renode's and this suite's —
-end on a timeout. Three jumper wires close that gap, by letting the board drive
-its own inputs through a graph's entry actions:
+end on a timeout. Eight jumper wires close that gap, by letting the board drive
+its own inputs through a graph's entry actions: **output line _n_ to input line
+_(n + 4) mod 8_.**
 
-| | | |
-|---|---|---|
-| **D10** → **D6** | output 0 → input 4 | |
-| **D11** → **D7** | output 1 → input 5 | `all` over two lines, `any`, `none` |
-| **D12** → **D8** | output 2 → input 6 | the rising-edge rule, and `level` |
+| Wire | | | Wire | | |
+|---|---|---|---|---|---|
+| 1 | **D10** → **D6** | output 0 → input 4 | 5 | **A1** → **D2** | output 4 → input 0 |
+| 2 | **D11** → **D7** | output 1 → input 5 | 6 | **A2** → **D3** | output 5 → input 1 |
+| 3 | **D12** → **D8** | output 2 → input 6 | 7 | **A3** → **D4** | output 6 → input 2 |
+| 4 | **A0** → **D9** | output 3 → input 7 | 8 | **A4** → **D5** | output 7 → input 3 |
 
-Inputs 4–6 rather than 0–2 because BRINGUP.md §2 wires the bench switches as a
-contact to **5 V**, and a jumper driving one of those pins would fight the switch
-when it closed. As it stands the bench wiring and this harness share a board.
+**Why the shift and not output _n_ to input _n_.** A straight-through harness
+cannot tell a correct board from one whose reported input word is secretly the
+output word: raise output 0, see bit 0 set, pass. Under the shift each output
+has a unique and non-obvious expected input bit, so that failure — and any
+rotation or off-by-one in either pin table — fails rather than passing for the
+wrong reason. It also covers all sixteen lines, where the three-wire harness
+this replaced left thirteen pins never once proven to be the pin the table
+claims.
+
+**It replaces the bench switches rather than sitting beside them.** Wires 5 and
+6 land on D2 and D3, which [`bringup.md`](../docs/operations/bringup.md) §2
+wires as a contact to **5 V**, and an output driving low against a closed switch
+is a short. Take the switches off while the harness is on, or put **1 kΩ in
+series** in those two wires. Sharing the output pins with the bench lamps is
+harmless.
 
 The wires are probed, not declared — a flag saying "the harness is attached"
 would one day be passed against a board with a wire hanging loose, and the tests
-would then read as though the firmware could not see its inputs. Without them,
-those seven skip and name the wires.
+would then read as though the firmware could not see its inputs. The probe names
+the wires actually missing, since seven-of-eight is the normal way this fails.
+
+**The same harness exists in software.** `hal::set_native_loopback()` gives the
+host build the identical rule, switched on with `STATEMACHINED_LOOPBACK=8`, so
+`tests/runs/` runs unchanged with a board and without one. It reproduces which
+line a level arrives on and that it arrives a scan later; it reproduces nothing
+about timing, and no timing assertion is made against it.
 
 ## Framing
 
