@@ -157,6 +157,14 @@ test-hardware:              ## the suite that needs a board: make test-hardware 
 # through `StatemachinedDevice`, once through the daemon's API, and once through
 # the client in front of that daemon.
 #
+# tests/runs drives whole sessions of several trials through *both* ways of
+# driving a rig -- the daemon's HTTP API and StatemachinedDevice -- against a far
+# end that is either the native device or a board. The same tests run both ways
+# and against both far ends, which is what makes `make test-runs-hardware` a
+# re-run rather than a different suite. The paradigms wait on input lines, and
+# the native device supplies them through a software loopback harness
+# (STATEMACHINED_LOOPBACK); on a board it is eight jumper wires.
+#
 # tests/e2e starts `statemachined serve` and `statemachined device` as
 # subprocesses and talks to them over a socket. It is the only place the shipped
 # commands are run the way an operator runs them, and the only place uvicorn's
@@ -168,7 +176,7 @@ test-hardware:              ## the suite that needs a board: make test-hardware 
 .PHONY: test-python
 test-python:                ## the Python tests that need no board
 	uv run --project python --group test pytest \
-	  python/tests/unit python/tests/integration python/tests/e2e $(ARGS)
+	  python/tests/unit python/tests/integration python/tests/e2e python/tests/runs $(ARGS)
 
 # The tiers on their own, for a feedback loop that matches what you are editing.
 .PHONY: test-unit
@@ -178,6 +186,20 @@ test-unit:                  ## host-only: no daemon, no device, no socket
 .PHONY: test-integration
 test-integration: test      ## build the native device, then drive whole sessions against it
 	uv run --project python --group test pytest python/tests/integration $(ARGS)
+
+.PHONY: test-runs
+test-runs: test             ## whole sessions, both API paths, against the host build
+	uv run --project python --group test pytest python/tests/runs $(ARGS)
+
+# The same tests as `test-runs`, with a board on the other end instead of the
+# host build. Not part of `make ci` for the same reason `test-hardware` is not:
+# a target that fails on every machine without a board is one people learn to
+# ignore. Needs the eight-wire loopback harness -- dev/HARDWARE.md -- and skips
+# the paradigms that wait on a line, with the wiring list, when it is not there.
+.PHONY: test-runs-hardware
+test-runs-hardware:         ## the same sessions against a board: make test-runs-hardware TARGET=...
+	uv run --project python --group test \
+	  pytest python/tests/runs --target=$(TARGET) $(ARGS)
 
 .PHONY: test-e2e-local
 test-e2e-local: test        ## the shipped commands, two processes and a socket
