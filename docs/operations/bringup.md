@@ -9,7 +9,7 @@ this page is the sequence. The wire protocol is [`protocol.md`](../reference/pro
 
 **What this is for.** Everything in this repository is either tested on the host
 or tested on an emulated board under Renode, and both are real tests of the
-*logic*. Neither says anything about timing: Renode runs on virtual time, so a
+_logic_. Neither says anything about timing: Renode runs on virtual time, so a
 scan there takes exactly as long as it is told to. This page is the sequence for
 putting the firmware on a board and confirming, by eye and with a meter, the
 things no amount of testing without hardware can confirm.
@@ -74,15 +74,15 @@ either: the fault is before the link is serviced.
 These are the lines `configs/uno-r4-minima-bench.config.json` maps, so a board
 wired this way can run every example graph in `graphs/` unchanged.
 
-| What | statemachined line | Pin | Wire it as |
-|---|---|---|---|
-| Start switch | input 0 | **D2** | switch to **5 V**, plus a **10 kΩ pull-down to GND** |
-| Abort switch | input 1 | **D3** | the same |
-| Ready lamp | output 0 | **D10** | anode to pin, cathode through **220-330 Ω** to GND |
-| Cue lamp | output 1 | **D11** | the same |
-| Error lamp | output 2 | **D12** | the same |
-| Reward valve | output 3 | **A0** | an LED will do; on a rig it is the driver |
-| Alive heartbeat | *not a line* | **D13** | nothing; it is the on-board LED |
+| What            | statemachined line | Pin     | Wire it as                                           |
+| --------------- | ------------------ | ------- | ---------------------------------------------------- |
+| Start switch    | input 0            | **D2**  | switch to **5 V**, plus a **10 kΩ pull-down to GND** |
+| Abort switch    | input 1            | **D3**  | the same                                             |
+| Ready lamp      | output 0           | **D10** | anode to pin, cathode through **220-330 Ω** to GND   |
+| Cue lamp        | output 1           | **D11** | the same                                             |
+| Error lamp      | output 2           | **D12** | the same                                             |
+| Reward valve    | output 3           | **A0**  | an LED will do; on a rig it is the driver            |
+| Alive heartbeat | _not a line_       | **D13** | nothing; it is the on-board LED                      |
 
 **The pull-downs are not optional.** `hal::init()` sets inputs to `INPUT`, not
 `INPUT_PULLUP`, deliberately: a rig's TTL sources drive both ways and a pull-up
@@ -123,11 +123,11 @@ input-to-output latency, and any step lamp for the 500 ms dwell.
 
 Two behaviours that are correct and look like faults, when you get there:
 
-* **Holding start down does not re-trigger.** A transition fires on its
-  predicate's *rising edge*, so the switch has to be released and pressed again.
+- **Holding start down does not re-trigger.** A transition fires on its
+  predicate's _rising edge_, so the switch has to be released and pressed again.
   It is the same rule that stops a lever the animal is already holding from
   ending a trial the instant it begins.
-* **One lamp at a time, never two.** Exiting a state lowers everything that
+- **One lamp at a time, never two.** Exiting a state lowers everything that
   state raised, by the same code that lowers it on any other transition. Two lit
   at once would be a real finding -- report it.
 
@@ -140,7 +140,7 @@ Erratic or self-starting chases are the pull-downs, not the firmware.
 Every line carries a CRC-16/CCITT-FALSE, so typing JSON into a serial monitor
 gets no reply. Use the repository's own bench instrument, which frames commands
 with the same helper CI drives the emulated board with
-([`python/`](../../python/README.md)):
+([`python/`](https://github.com/braemons/statemachined/blob/main/python/README.md)):
 
 ```sh
 make bringup ARGS="hello"
@@ -165,7 +165,7 @@ hello_ack
 
 It is measured at boot rather than declared — 2000 repetitions of reading and
 conditioning the pins, timed — so it is what the board actually achieves, not
-what the design hoped for. It is a *floor*: it covers the pins only, and
+what the design hoped for. It is a _floor_: it covers the pins only, and
 evaluating a state's transitions sits on top of it and depends on the graph.
 Renode reports something in the hundreds of kHz here and it means nothing, since
 virtual time is not time.
@@ -176,7 +176,7 @@ through the ordinary exit path, and its result is still reported. The stored
 setting survives, so the next boot comes up self-driving again; restarting it in
 this session takes another `autorun`. That asymmetry is deliberate — a daemon
 that crashed must not be able to leave a board rewarding an animal nobody is
-watching. Note that *opening* the port is not enough — a serial monitor does
+watching. Note that _opening_ the port is not enough — a serial monitor does
 that — it is the greeting that hands over. Only `hello` and `report` greet the
 board; `make bringup ARGS="monitor"` watches the link and sends nothing, which
 is how you look at a board that is still running.
@@ -185,7 +185,7 @@ is how you look at a board that is still running.
 
 ## 5. Prove the pins reach the line numbers
 
-First, ask the board which pin each line *is*. It answers out of the same table
+First, ask the board which pin each line _is_. It answers out of the same table
 its firmware calls `pinMode()` over, so this is the board's own word and not
 this tool's:
 
@@ -246,7 +246,7 @@ against 9.9 before — and it is bounded by our own parse rather than by whateve
 the USB stack is doing. The measurement, and the reasoning, are at the top of
 `firmware/src/main.cpp`; the numbers are in [`hardware.md`](hardware.md).
 
-A board reporting *far* more than that, or a `worst_gap` in the hundreds, is
+A board reporting _far_ more than that, or a `worst_gap` in the hundreds, is
 still a finding. So is any non-zero `scan.tx_stalls`, which means a reply had to
 wait for the wire because the outbound queue was full.
 
@@ -272,7 +272,7 @@ board attached is a target people learn to ignore.
 
 ### The loopback harness
 
-What the suite cannot do without jumper wires is drive the board's *inputs*.
+What the suite cannot do without jumper wires is drive the board's _inputs_.
 Add them and two more things run: the predicate tests, which fire a transition
 from a condition over several lines, and the timing suite in
 `test_timing_accuracy.py`, which measures how long the board takes to answer a
@@ -280,12 +280,12 @@ line it drove itself.
 
 **Eight wires, output line _n_ to input line _(n + 4) mod 8_:**
 
-| From | | To | | From | | To |
-|---|---|---|---|---|---|---|
-| **D10** (output 0) | → | **D6** (input 4) | | **A1** (output 4) | → | **D2** (input 0) |
-| **D11** (output 1) | → | **D7** (input 5) | | **A2** (output 5) | → | **D3** (input 1) |
-| **D12** (output 2) | → | **D8** (input 6) | | **A3** (output 6) | → | **D4** (input 2) |
-| **A0** (output 3) | → | **D9** (input 7) | | **A4** (output 7) | → | **D5** (input 3) |
+| From               |     | To               |     | From              |     | To               |
+| ------------------ | --- | ---------------- | --- | ----------------- | --- | ---------------- |
+| **D10** (output 0) | →   | **D6** (input 4) |     | **A1** (output 4) | →   | **D2** (input 0) |
+| **D11** (output 1) | →   | **D7** (input 5) |     | **A2** (output 5) | →   | **D3** (input 1) |
+| **D12** (output 2) | →   | **D8** (input 6) |     | **A3** (output 6) | →   | **D4** (input 2) |
+| **A0** (output 3)  | →   | **D9** (input 7) |     | **A4** (output 7) | →   | **D5** (input 3) |
 
 The board then drives its own inputs through a graph's entry actions, one scan
 later, which is how "both levers released and pressed again within the same
@@ -304,7 +304,7 @@ pins had never once been proven to be the pin the table claims.
 to D2 and D3 land on the pins §2 wires as a contact to 5 V, and an output
 driving low against a closed switch is a short. Take the switches off while the
 harness is on, or put **1 kΩ in series** in those two wires — the inputs are
-high-impedance, so it costs nothing logically. Sharing the *output* pins with
+high-impedance, so it costs nothing logically. Sharing the _output_ pins with
 the bench lamps is harmless: a pin drives an LED and a jumper equally well.
 
 A run takes about 90 seconds and leaves the device idle.
@@ -312,7 +312,7 @@ A run takes about 90 seconds and leaves the device idle.
 ### Whole sessions, against this board
 
 `make test-hardware` drives the board one command at a time, the way a bench
-instrument does. To run whole *sessions* against it — several trials, through
+instrument does. To run whole _sessions_ against it — several trials, through
 the daemon's HTTP API and through `StatemachinedDevice`, with the paradigms
 answering their own response windows through the harness above:
 

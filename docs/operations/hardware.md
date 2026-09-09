@@ -357,8 +357,9 @@ and in order with their rolling checksum intact.
 **Still not measured:** the step dwell as seen by a scope on D2 and D10. The
 figure above is the device's own clock reporting on itself, which is a different
 claim from a probe on a pin. Input-to-output latency *has* since been measured —
-by the board against itself, through the loopback harness, and the number is
-surprising: see "Response latency and duration accuracy" below.
+by the board against itself, through the loopback harness: 228 µs mid-trial,
+with a further ~1.1 ms on the trial's first state only. See "Response latency
+and duration accuracy" below.
 
 **What *is* verified without a board:** the pin map above, the port-register
 reads and writes, the timer ISR, and a whole session over a real UART, all under
@@ -386,30 +387,87 @@ running fast. A rate error would have grown with the dwell, and at 1000 ms it is
 66 µs — 66 ppm — so the device's clock is good to well under a part in ten
 thousand over a trial. Jitter on a repeated 100 ms dwell is sd ≈ 25 µs.
 
-**Response latency — an open question, not a settled cost.** A state that raises
-one output and waits for the input its jumper drives, 300 trials:
+**Response latency — decomposed and then fixed, 2026-09-09.** A state that
+raises one output and waits for the input its jumper drives began as a single
+alarming figure: median 1 196 µs, bimodal at ≈1 150 and ≈1 950 µs, 12 to 20 scan
+periods for a chain that touches nothing but GPIO. It turned out to be three
+separate costs stacked on one measurement, and none of them was the pin path.
 
-| | |
-|---|---|
-| Median | 1 196 µs |
-| p95 | 1 957 µs |
-| Max | 1 960 µs |
-| Distribution | **bimodal**: ≈1 150 µs (55%), ≈1 950 µs (38%), a thin tail between |
+| | before | after |
+|---|---|---|
+| Pin → transition, mid-trial | 223 µs | **100 µs**, sd 0 |
+| The same wait, entered by `start` | 1 196 µs (bimodal) | see below |
+| `start` stamp → first scan, no pins at all | 1 117 µs | ~1 scan period |
 
-**That is 12 to 20 scan periods for a chain that touches nothing but GPIO.** The
-scan timer is 10 kHz (`kScanHz`, `firmware/src/main.cpp`), the whole path is
-`write_outputs` → pin → jumper → `read_inputs` → `InputConditioner` →
-`Transition::matches()`, and all of it runs inside one ISR — so two periods is
-what it looks like it should cost. Debounce is not the explanation: these lines
-are configured with `debounce_ms` 0.
+**First: the `start` command's timestamp.** `entered_us` was stamped from the
+timestamp `service_link()` took off the link *before* it raised the
+`EngineHold`, while the entry state's outputs waited for the next scan. A graph
+whose entry state had no actions and a 0 ms timeout still reported a first visit
+of **1 117 µs** (sd 4, unimodal) — no pin, no conditioner, no predicate in it.
+Every trial's first state reported about a millisecond it had not spent, and its
+entry action reached the pin about a millisecond after the timestamp that said
+it had. `on_start` now hands the run to the next `advance_trial()`, so the scan
+that stamps the trial is the scan that drives its pins — one call, the shape
+autorun's first run always had.
 
-The bimodality, with the two modes ~800 µs apart, suggests a beat against
-something periodic rather than a constant overhead. It has not been diagnosed.
-The budgets in the test are set above the measurement so the suite is a
-regression test today; **if this is explained and closed, they come down with
-it.** For a paradigm whose response window is tens of milliseconds this is
-comfortably inside the noise; for anything reasoning about single-millisecond
-response times it is not, and it should be understood before that is relied on.
+**Second, and the one that mattered for a response window: the visit stream was
+being serialised inside the scan ISR.** Building a ~130 byte `visit` line with a
+CRC costs about 120 µs on this part. Paying that inside `advance_trial()` — and
+on a board `advance_trial()` *is* the timer interrupt — made the scan overrun
+its own tick, so the **next** scan landed late and the board's answer to a line
+was 223 µs instead of one scan period. Measured both ways on the same board:
+
+| entry actions on the waiting state | 1 | 4 | 8 |
+|---|---|---|---|
+| visit stream formatted in the ISR | 222 µs | 224 µs | 227 µs |
+| visit sink unbound (diagnostic build) | **100 µs** | 100 µs | 100 µs |
+
+Exactly one scan period, sd 0, and insensitive to how much else the entry action
+did — which is what says the remaining 100 µs is the period itself and not a
+cost hiding inside it. The pin is driven at the end of scan *N* and read at scan
+*N+1*; there is nothing else in there.
+
+`ScanHealth` did not show this. It counts periods with no scan in them, and a
+scan that runs *long* is not a scan that did not run.
+
+**Why raising the scan rate did not help.** It was the obvious lever and it did
+nothing: at 20 kHz the latency was 220 µs, against 223 at 10 kHz, while overruns
+per `ping` doubled from 3.4 to 7.9 — so the timer genuinely doubled and the
+number did not move. Shortening the period cannot shorten the ISR that is
+overrunning it. **The fix is what makes the scan rate a lever at all**: with the
+formatting out of the interrupt, the response path is one period, so 20 kHz
+would be 50 µs and 50 kHz 20 µs, against a measured scan floor of 8.2 µs.
+
+**The fix.** `advance_trial()` copies the completed `StateVisit` into a
+32-deep ring and returns; `drain_visits()`, called from `loop()`, does the JSON
+and the CRC. Two further things follow from it:
+
+- **`ReplySink::send_line()` is no longer reachable from an interrupt.** It
+  spins when the transmit queue is full, which is correct from the foreground
+  and a deadlock from the ISR — the queue only drains through USB work the
+  foreground has to run. A graph of eight states with 0 ms timeouts stalled a
+  `start` at 10 kHz, and the 20 kHz build stopped answering USB altogether and
+  needed a double-tap reset. Both are consistent with that spin; neither has
+  been reproduced since the move, and neither was *proven* to be it.
+- **A full ring drops the newest visit and counts it**, reported as
+  `scan.visits_dropped` in `state_report`. Dropping the newest rather than the
+  oldest is what keeps the ring single-producer/single-consumer and therefore
+  lock-free with an interrupt at one end. The host sees the gap either way, in
+  the `seq` field that exists for exactly this. **The result is unaffected**:
+  `result_path` is built from the machine's own record, not from the stream, so
+  a dropped visit costs a live trace and never the record.
+
+The ring is 32 deep (~640 B) because it has to cover the longest the foreground
+can go without draining — one link command, about 2.5 ms, or 25 scans at 10 kHz,
+against the worst gap of 22 measured here. It is deliberately *not* sized to
+hold a trial: a graph with a loop produces far more visits than it has states,
+and the thing that must hold a whole trial is `kMaxPath`.
+
+**What this means for a paradigm.** The response path is one scan period —
+100 µs at 10 kHz, deterministic to the microsecond, and it follows the scan rate
+if that is ever raised. A state entered by `start` still pays the link's
+overhead in *when it begins*, but no longer in what it reports: its `entered_us`
+is the scan's clock and coincides with its own pins.
 
 ### Flashing
 

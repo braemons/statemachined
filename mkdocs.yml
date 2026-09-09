@@ -1,0 +1,112 @@
+site_name: statemachined
+site_description: >-
+  The within-trial state machine for a braemons rig — it runs on the
+  microcontroller, debounces and timestamps in its own clock, and names the
+  trial outcome.
+site_author: Joscha Schmiedt
+site_url: https://statemachined.readthedocs.io/
+
+repo_name: braemons/statemachined
+repo_url: https://github.com/braemons/statemachined
+edit_uri: edit/main/docs/
+
+copyright: >-
+  Copyright &copy; 2026 Joscha Schmiedt, University of Bremen —
+  firmware, core and tools under the GNU GPLv3; the Python package under the
+  GNU LGPLv3.
+
+docs_dir: docs
+
+theme:
+  name: material
+  language: en
+  # Header sits on UB blue, so use the dark-background wordmark (white text).
+  # Placeholder wordmark — replace with the final designed logo when it exists.
+  logo: assets/statemachined-logo-dark.svg
+  favicon: assets/favicon.png
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.instant
+    - navigation.tracking
+    # No `navigation.sections`: top-level groups stay collapsible, so only the
+    # section you are reading is expanded and long ones (Developer guide) do not
+    # push the sidebar into a scroll.
+    - navigation.prune
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - toc.follow
+    - search.suggest
+    - search.highlight
+  # Colours come from University of Bremen's corporate design (blue + red),
+  # shared with vstimd's site.
+  # `custom` activates the [data-md-color-primary=custom]/[…-accent=custom]
+  # rules defined in stylesheets/extra.css.
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      # so pages can include real source files (e.g. the shipped example graphs)
+      # by their repo-relative path, rather than carrying a copy that drifts
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.keys
+
+plugins:
+  - search
+
+extra_css:
+  - stylesheets/extra.css
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Bringing up a board: operations/bringup.md
+      - Hardware: operations/hardware.md
+  - Reference:
+      - The wire protocol: reference/protocol.md
+      - The HTTP API: reference/api.md
+  - Developer guide:
+      - The daemon: developer/daemon.md

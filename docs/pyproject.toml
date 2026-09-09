@@ -1,0 +1,16 @@
+# Documentation build environment for the statemachined MkDocs site.
+# Managed with uv; pinned to MkDocs 1.x (< 2.0) with the Material theme.
+[project]
+name = "statemachined-docs"
+version = "0"
+description = "Documentation build environment for statemachined."
+requires-python = ">=3.12"
+dependencies = [
+    "mkdocs>=1.6,<2.0",
+    "mkdocs-material>=9.5,<10.0",
+    "pymdown-extensions>=10.7",
+]
+
+[tool.uv]
+# This project only pulls in doc tooling; it is not an installable package.
+package = false

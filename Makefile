@@ -374,6 +374,20 @@ packages:                   ## every release artifact: amd64 and arm64, deb and 
 	$(MAKE) -C packaging packages
 
 # --------------------------------------------------------------------------
+# Documentation (MkDocs + Material, via uv; see docs/pyproject.toml)
+# --------------------------------------------------------------------------
+
+# Live preview at http://127.0.0.1:8000 with auto-reload.
+.PHONY: docs
+docs:                       ## live docs at http://127.0.0.1:8000
+	uv run --project docs mkdocs serve
+
+# Static site build to site/ (matches the Read the Docs build).
+.PHONY: docs-build
+docs-build:                 ## build the static docs site to site/
+	uv run --project docs mkdocs build --strict
+
+# --------------------------------------------------------------------------
 
 # Everything CI runs, in the order it runs it, minus the toolchain installs.
 # The point is that a red build can be reproduced with one command.

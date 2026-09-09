@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 110" width="660" height="110" role="img" aria-label="statemachined">
+  <title>statemachined</title>
+  <!-- Placeholder wordmark for light backgrounds (UB-blue name, red trailing
+       "d"). Font-dependent on purpose: replace with the final designed
+       wordmark when one exists. -->
+  <text x="2" y="88" font-family="'Liberation Sans','Helvetica Neue',Arial,sans-serif" font-size="84" font-weight="700" letter-spacing="-1">
+    <tspan fill="#00326d">statemachine</tspan><tspan fill="#c60c2b">d</tspan>
+  </text>
+</svg>
