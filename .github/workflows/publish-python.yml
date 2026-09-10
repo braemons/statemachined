@@ -1,0 +1,238 @@
+name: Publish Python package
+
+# The `statemachined` distribution to PyPI, on the same tag that cuts a release.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# vstimd's publish-python.yml is the model, with one difference that matters.
+# **It triggers on `v*`, not on a `python-v*` of its own.** There, the client
+# versions independently of the server it talks to. Here the wheel *is* the
+# daemon -- the same code the .deb carries, and release.yml builds both from
+# this tag -- so two tags would be two spellings of one release and an invitation
+# for the wheel on PyPI to disagree with the package on a rig. One tag, two
+# artifacts, one version in two forms: `0.2.0~alpha1` for dpkg and rpm,
+# `0.2.0a1` for PEP 440, both from packaging/scripts/git-version.sh.
+#
+# Publishing uses PyPI trusted publishing (OIDC), so there is no API token
+# stored anywhere. It has to be configured once, before the first upload, from
+# the PyPI account or organisation that will own the project, under
+# Publishing -> Add a pending publisher:
+#
+#   PyPI project: statemachined
+#   owner: braemons   repository: statemachined
+#   workflow: publish-python.yml   environment: pypi   (testpypi for TestPyPI)
+#
+# `owner` is the GitHub org, which is unrelated to any PyPI org -- the publisher
+# is matched on the repository and workflow that requests the token.
+#
+# **What a `pip install statemachined` is not.** The wheel carries the daemon,
+# the client and the documents; it does not carry the firmware built for the
+# host that the .deb installs at libexec/statemachined-device. So a pip install
+# on a box with no board has a daemon and nothing to point it at, and
+# `statemachined device` there will say so. That is the .deb's job, and
+# python/README.md says which to reach for.
+on:
+  push:
+    tags: ['v*']
+  # Manual runs default to TestPyPI, which is the way to rehearse the whole
+  # path -- including the upload -- without burning a version number on PyPI.
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Index to upload to
+        type: choice
+        options: [testpypi, pypi]
+        default: testpypi
+
+jobs:
+  build:
+    name: build the wheel, stamped
+    runs-on: ubuntu-latest
+
+    steps:
+      # Unshallow: git-version.sh derives the version from the most recent `v*`
+      # tag, and a shallow clone can reach none of them.
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - uses: astral-sh/setup-uv@v6
+
+      # The version comes from the one place it is defined, in PEP 440's
+      # spelling. Computed *before* anything is written, because a dirty working
+      # tree is itself part of what the script reports.
+      - name: Resolve the version
+        id: version
+        run: |
+          version=$(packaging/scripts/git-version.sh --pep440)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "building $version"
+
+      # A tag that disagrees with what the script derived means one of the two
+      # is wrong, and PyPI never lets a filename be reused once uploaded.
+      #
+      # Compared after PEP 440 normalisation, because they are not spelled the
+      # same and both are correct: the script prints `0.2.0alpha1` (it only
+      # strips dpkg's `~`), and the wheel that hatchling builds from it is
+      # `0.2.0a1`. Comparing the strings would fail on every pre-release.
+      - name: The tag and the derived version are the same version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          uvx --from packaging python -c '
+          import sys
+          from packaging.version import Version
+          tag, derived = sys.argv[1], sys.argv[2]
+          if Version(tag) != Version(derived):
+              print(f"::error::tag {tag} is version {Version(tag)}, but "
+                    f"git-version.sh derived {Version(derived)}")
+              raise SystemExit(1)
+          print(f"tag {tag} == derived {derived} == {Version(derived)}")
+          ' "$tag" "${{ steps.version.outputs.version }}"
+
+      # A local version segment (`+12.gabc123`, `+dirty`) is what the script
+      # prints for a commit that is not a tag. PyPI rejects those outright, so
+      # catch it here rather than at the upload -- a manual run from an untagged
+      # commit is the way somebody meets this.
+      - name: Refuse a version PyPI would reject
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          case "$version" in
+            *+*)
+              echo "::error::$version carries a local version segment, which PyPI refuses. Build from a tagged commit."
+              exit 1
+              ;;
+          esac
+
+      # Built from a copy, stamped there. python/pyproject.toml carries the
+      # 0.0.0 sentinel in the repository and a build must never leave the
+      # working tree dirty -- see packaging/Makefile, which stages the same way
+      # for the same reason. tests/ and bench/ are not part of the distribution.
+      - name: Stage and stamp
+        run: |
+          rm -rf build/wheel
+          mkdir -p build/wheel
+          cp -a python/. build/wheel/
+          rm -rf build/wheel/tests build/wheel/bench build/wheel/.venv build/wheel/dist
+          sed -i 's/^version = "0.0.0"$/version = "${{ steps.version.outputs.version }}"/' \
+            build/wheel/pyproject.toml
+          grep -q '^version = "${{ steps.version.outputs.version }}"$' build/wheel/pyproject.toml || {
+            echo "::error::the version sentinel in python/pyproject.toml did not match."
+            echo "Nothing was stamped, and a 0.0.0 wheel is one nobody can correlate"
+            echo "with a commit."
+            exit 1; }
+
+      - name: Build
+        working-directory: build/wheel
+        run: uv build
+
+      # The metadata renders, which is what stops a project going up with a
+      # blank page. --strict makes a missing long_description an error.
+      - name: Check metadata renders on PyPI
+        run: uvx twine check --strict build/wheel/dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: build/wheel/dist/*
+          if-no-files-found: error
+
+  # Installs the built wheel the way a user would -- from the artefact, into a
+  # clean environment, with no source tree on sys.path. Package data has gone
+  # missing from a wheel before and is invisible until a browser asks for it;
+  # this is the same question packaging/scripts/check-staged-tree.py asks of the
+  # .deb, asked of the wheel.
+  smoke:
+    needs: build
+    name: the wheel installs and is the three tiers
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.11', '3.13']
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # **The base tier on its own**, which is the whole point of it being
+      # tiered: something that only talks to a daemon must not have to install a
+      # serial library or a web framework. If `import statemachined.client` ever
+      # drags in fastapi, this is where it shows.
+      - name: The base tier — the documents and the client
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          wheel=$(ls dist/*.whl)
+          python -m pip install "${wheel}"
+          cd "$(mktemp -d)"   # anywhere but a directory holding the sources
+          python - <<'PY'
+          import importlib, importlib.metadata as metadata, pathlib
+          import statemachined
+          from statemachined.client import StatemachinedClient        # noqa: F401
+          from statemachined.model.graph_definition import GraphDefinition  # noqa: F401
+          print("version", metadata.version("statemachined"))
+
+          # A typed package that ships no py.typed is a silent no-op for users.
+          root = pathlib.Path(statemachined.__file__).parent
+          assert (root / "py.typed").is_file(), "the typing marker did not survive packaging"
+
+          # The web UI, which is package data and invisible until a browser asks.
+          web = root / "daemon" / "web"
+          assert (web / "index.html").is_file(), "the web UI shell is not in the wheel"
+          elements = sorted(p.name for p in (web / "elements").iterdir() if p.suffix == ".js")
+          assert len(elements) >= 10, f"only {len(elements)} web elements: {elements}"
+
+          # And the extras really are extras: the device tier refuses to import
+          # without pyserial, by name, rather than failing somewhere obscure.
+          try:
+              importlib.import_module("statemachined.device")
+          except ImportError as refused:
+              assert "pyserial" in str(refused), refused
+          else:
+              raise AssertionError("statemachined.device imported without the `device` extra")
+          PY
+
+      - name: The serve tier — the daemon, and the command that ships
+        shell: bash
+        run: |
+          wheel=$(ls dist/*.whl)
+          python -m pip install "${wheel}[serve]"
+          cd "$(mktemp -d)"
+          python - <<'PY'
+          from statemachined.daemon.api.application import create_application  # noqa: F401
+          from statemachined.device import native_device_on_a_socket           # noqa: F401
+          PY
+          statemachined --version
+          statemachined --help > /dev/null
+
+  publish:
+    needs: smoke
+    name: upload
+    runs-on: ubuntu-latest
+    environment: ${{ (github.event_name == 'push' || inputs.target == 'pypi') && 'pypi' || 'testpypi' }}
+    permissions:
+      id-token: write   # required for trusted publishing
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Publish
+        run: |
+          if [ "${{ github.event_name }}" = "push" ] || [ "${{ inputs.target }}" = "pypi" ]; then
+            uv publish --trusted-publishing always dist/*
+          else
+            uv publish --trusted-publishing always \
+              --publish-url https://test.pypi.org/legacy/ dist/*
+          fi
