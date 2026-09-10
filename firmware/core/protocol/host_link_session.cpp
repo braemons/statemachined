@@ -9,6 +9,14 @@ namespace {
 
 constexpr uint16_t kProtocolVersion = 1;
 
+/// Add `later` to the outputs already owed, with `later` winning where the two
+/// touch the same line. Written out by hand in four places before this existed,
+/// and getting the `& ~` half of it wrong is a line that silently stays put.
+void owe(OutputUpdate& into, const OutputUpdate& later) {
+  into.set_high = (into.set_high | later.set_high) & ~later.set_low;
+  into.set_low = (into.set_low | later.set_low) & ~later.set_high;
+}
+
 /// Microseconds between two device-clock readings, correct across the ~71
 /// minute wrap because unsigned subtraction is.
 Microseconds since(Microseconds from, Microseconds to) { return to - from; }
@@ -77,7 +85,28 @@ HostLinkSession::HostLinkSession(ReplySink& out, const DeviceIdentity& identity)
   rebind_runner();
 }
 
-void HostLinkSession::rebind_runner() { runner_.set_visit_sink(&visit_relay_); }
+void HostLinkSession::rebind_runner() {
+  runner_.set_visit_sink(&visit_relay_);
+  runner_.set_timer_sink(&timer_relay_);
+}
+
+void HostLinkSession::revert_timer_patch(Microseconds now_us) {
+  if (!timers_patched_) return;
+  timers_patched_ = false;
+  const OutputUpdate ops = timers_.set_enabled(timers_enabled_, now_us);
+  // Owed rather than returned: this is called from the end of a run and from
+  // paths that have no update of their own to hand back.
+  owe(pending_ops_, ops);
+}
+
+void HostLinkSession::run_timer_action(uint8_t timer, bool start, Microseconds now_us) {
+  // Accumulated, not returned: the machine is midway through building its own
+  // update and has nowhere to put these. advance_trial() folds them into the
+  // same scan's output, so a timer's line and the entry action that started it
+  // reach the pins together.
+  const OutputUpdate ops = start ? timers_.start(timer, now_us) : timers_.cancel(timer, now_us);
+  owe(timer_action_ops_, ops);
+}
 
 // ------------------------------------------------------------- receiving ---
 
@@ -168,6 +197,8 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
       return on_state_request(message_id, now_us);
     case MsgType::Wiring:
       return on_wiring(m, message_id);
+    case MsgType::Timers:
+      return on_timers(m, message_id, now_us);
     case MsgType::Pins:
       return on_pins_request(m, message_id);
     case MsgType::Autorun:
@@ -175,7 +206,7 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
     case MsgType::Save:
       return on_save(message_id);
     case MsgType::Configure:
-      return on_configure(m, message_id);
+      return on_configure(m, message_id, now_us);
     case MsgType::Start:
       return on_start(m, message_id, now_us);
     case MsgType::Cancel:
@@ -188,8 +219,9 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
     case MsgType::GraphState:
     case MsgType::GraphTransition:
     case MsgType::GraphAction:
+    case MsgType::GraphTimer:
     case MsgType::GraphEnd:
-      return on_upload_message(m, covered, message_id, t);
+      return on_upload_message(m, covered, message_id, now_us, t);
 
     // Names this device knows but only ever sends. A host saying `pong` is as
     // unrecognisable a command as one saying `teleport`, and is refused the
@@ -241,6 +273,9 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id, Microse
   // NOT clear the committed graph: reconnecting the bridge must not cost a
   // re-upload.
   session_seed_ = seed;
+  // The timers get their own stream from the same seed, so a session replays
+  // whole. Not the trial stream: see GlobalTimerBank::reseed.
+  timers_.reseed(seed);
   // A host that greets takes the rig. A board driving itself has to stop --
   // through the ordinary exit path, so whatever the current state raised comes
   // down -- because two authorities arming trials on one box is a rig running
@@ -266,6 +301,7 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id, Microse
     state_ = LinkState::Idle;
   }
   armed_trial_id_ = 0;
+  start_from_line_ = false;
 
   JsonWriter w(tx_, sizeof(tx_));
   w.begin(msg_type_name(MsgType::HelloAck), tx_message_id_);
@@ -289,6 +325,13 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id, Microse
   w.key_u32("max_choice_options", kMaxChoiceOptions);
   w.key_u32("max_path", kMaxPath);
   w.key_u32("max_graphs", kMaxGraphs);
+  w.key_u32("max_timers", kMaxTimers);
+  // Which input line the first timer holds high. Not derivable from the line
+  // count -- the timers are counted down from the top of the word so that a
+  // graph means the same thing on a board with eight inputs and one with
+  // twenty -- so a host that wants to write a predicate against a timer has to
+  // be told. See config.h.
+  w.key_u32("first_timer_line", kFirstTimerLine);
   w.end_object();
   w.key_bool("has_set", have_set_);
   w.key_u32("set_version", have_set_ ? live_set_.version : 0);
@@ -297,6 +340,37 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id, Microse
   // running the compile-time defaults, which a daemon needs to know before it
   // decides whether to push a wiring or to trust the one that is there.
   w.key_bool("has_wiring", have_wiring_);
+  send(w, message_id);
+}
+
+void HostLinkSession::on_timers(const JsonObject& m, uint16_t message_id, Microseconds now_us) {
+  // Refused mid-trial for the reason `wiring` is: this changes what the scan
+  // does, and a timer switched off under a running trial would move a timing
+  // that trial's record could not account for. A trial that wants a different
+  // mask says so in its own `configure`, which is the whole point of the
+  // per-trial override.
+  if (state_ == LinkState::Armed || state_ == LinkState::Running) {
+    send_error(message_id, "busy", "a trial is armed or running", "timers");
+    return;
+  }
+  uint32_t enable = 0;
+  if (!m.u32("enable", &enable)) {
+    send_error(message_id, "bad_json", "enable must be a mask", "enable");
+    return;
+  }
+  timers_enabled_ = enable;
+  // Applied now, not at the next trial: between trials is exactly when a
+  // free-running timer is doing something, and "off" has to mean off.
+  owe(pending_ops_, timers_.set_enabled(enable, now_us));
+
+  JsonWriter w(tx_, sizeof(tx_));
+  w.begin(msg_type_name(MsgType::Ack), tx_message_id_);
+  w.in_reply_to(message_id);
+  // Echoed, so a host never has to infer what took: a mask naming timers the
+  // set does not declare is accepted and simply has no effect, and this says
+  // what the device is actually holding.
+  w.key_u32("enable", enable);
+  w.key_u32("n_timers", live_set_.n_timers);
   send(w, message_id);
 }
 
@@ -425,7 +499,8 @@ void HostLinkSession::on_wiring(const JsonObject& m, uint16_t message_id) {
 }
 
 void HostLinkSession::on_upload_message(const JsonObject& m, JsonSpan covered,
-                                        uint16_t message_id, MsgType type) {
+                                        uint16_t message_id, Microseconds now_us,
+                                        MsgType type) {
   if (state_ == LinkState::Armed || state_ == LinkState::Running) {
     send_error(message_id, "busy", "a trial is armed or running", "graph upload");
     return;
@@ -456,6 +531,9 @@ void HostLinkSession::on_upload_message(const JsonObject& m, JsonSpan covered,
     case MsgType::GraphAction:
       e = builder_.add_action(m, covered);
       break;
+    case MsgType::GraphTimer:
+      e = builder_.add_timer(m, covered);
+      break;
     case MsgType::GraphEnd:
       e = builder_.end_graph(m, covered);
       break;
@@ -481,6 +559,11 @@ void HostLinkSession::on_upload_message(const JsonObject& m, JsonSpan covered,
   // chose.
   runner_ = TrialRunner(live_set_, 0);
   rebind_runner();
+  // The new set's timers, and none of the old set's. bind() puts back any line
+  // a timer of the previous set was holding up -- nothing else would, and an
+  // upload is refused while a trial is armed or running, so this is the only
+  // moment it can be done.
+  owe(pending_ops_, timers_.bind(&live_set_, now_us));
 
   JsonWriter w(tx_, sizeof(tx_));
   w.begin(msg_type_name(MsgType::SetOk), tx_message_id_);
@@ -655,6 +738,9 @@ SettingsError HostLinkSession::restore_settings(Microseconds now_us) {
     have_set_ = true;
     runner_ = TrialRunner(live_set_, 0);
     rebind_runner();
+    // Same as the upload path: a restored set brings its timers with it, and a
+    // board that comes up self-driving runs them from the first scan.
+    (void)timers_.bind(&live_set_, now_us);
   }
 
   autorun_ = stored.autorun;
@@ -731,7 +817,8 @@ void HostLinkSession::on_save(uint16_t message_id) {
   send(w, message_id);
 }
 
-void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
+void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id,
+                                   Microseconds now_us) {
   if (!have_set_) {
     send_error(message_id, "not_ready", "no graph set has been committed", "graph");
     return;
@@ -788,6 +875,7 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
   }
 
   start_from_serial_ = true;
+  bool start_from_line = false;
   if (m.type_of("start") != JsonType::Missing) {
     JsonSpan s;
     if (!m.str("start", &s)) {
@@ -795,21 +883,73 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id) {
       return;
     }
     start_from_serial_ = json_str_eq(s, "serial") || json_str_eq(s, "both");
-    if (!start_from_serial_ && !json_str_eq(s, "line")) {
+    start_from_line = json_str_eq(s, "line") || json_str_eq(s, "both");
+    if (!start_from_serial_ && !start_from_line) {
       send_error(message_id, "bad_json", "start must be serial, line or both", "start");
       return;
     }
   }
 
+  // Which line, and is it a line that could ever rise. Both refusals are here
+  // rather than at the edge that never comes, because a trial armed on a line
+  // the board will never see reports nothing at all: it simply waits, and the
+  // host has no way to tell that from a subject who has not responded yet.
+  uint8_t start_line = 0;
+  if (start_from_line) {
+    if (!m.u8("start_line", &start_line)) {
+      send_error(message_id, "bad_json", "start on a line needs start_line", "start_line");
+      return;
+    }
+    if (start_line >= identity_.input_line_count) {
+      send_error(message_id, "bad_index", "no such input line", "start_line");
+      return;
+    }
+    // The conditioner zeroes a disabled line, so its bit cannot rise no matter
+    // what the pin does. `wiring` is refused while a trial is armed, so what is
+    // checked here is still true when the edge is looked for.
+    if ((wiring_.inputs.enable_mask & (static_cast<LineBitmask>(1) << start_line)) == 0) {
+      send_error(message_id, "bad_index", "start_line is disabled in the wiring", "start_line");
+      return;
+    }
+  }
+
+  // Which timers this trial runs, if it says. The parallel to `graph_index`:
+  // a trial type selects its timers the way it selects its graph, on a message
+  // the device was going to receive anyway, so mapping a trial type onto a set
+  // of timers costs no extra round trip in the inter-trial interval. Absent
+  // means the device's own mask, set by `timers`.
+  //
+  // An override rather than a new setting, and reverted when the trial ends,
+  // exactly like a distribution `patch` -- a mask that outlived its trial would
+  // be a timer running, or not running, that nobody could account for
+  // afterwards.
+  bool patch_timers = false;
+  uint32_t trial_timers = 0;
+  if (m.type_of("timers") != JsonType::Missing) {
+    if (!m.u32("timers", &trial_timers)) {
+      send_error(message_id, "bad_json", "timers must be a mask", "timers");
+      return;
+    }
+    patch_timers = true;
+  }
+
   // Any previous trial's overrides come off before this one's go on, so a
   // trial that was armed and never started cannot leave its foreperiod behind.
   revert_distribution_patches();
+  revert_timer_patch(now_us);
   if (!apply_distribution_patches(m, message_id)) return;  // refusal already sent
 
   runner_ = TrialRunner(live_set_, graph_index);
   rebind_runner();
   runner_.set_trial_cap_ms(cap_ms);
+  if (patch_timers) {
+    timers_patched_ = true;
+    owe(pending_ops_, timers_.set_enabled(trial_timers, now_us));
+  }
+
   armed_trial_id_ = trial_id;
+  start_from_line_ = start_from_line;
+  start_line_ = start_line;
   state_ = LinkState::Armed;
 
   // Both fields, always: this is the confirmation that start requires, and it
@@ -843,23 +983,41 @@ void HostLinkSession::on_start(const JsonObject& m, uint16_t message_id, Microse
     return;
   }
 
-  // The entry state's output actions come back from start() and are owed to
-  // the pins. They are handed to the next advance_trial() rather than applied
-  // here, for the same reason a cancel's are: this is the link's thread of
-  // control and it drives nothing. Dropping them was a real bug -- "house light
-  // on at trial start" silently did nothing on a board -- and it survived the
-  // host tests because those call TrialRunner::start() and read the update
-  // themselves, so nothing ever asked whether the session passed it on.
-  const OutputUpdate entry_ops = runner_.start(armed_trial_id_, session_seed_, now_us);
-  pending_ops_.set_high = (pending_ops_.set_high | entry_ops.set_high) & ~entry_ops.set_low;
-  pending_ops_.set_low = (pending_ops_.set_low | entry_ops.set_low) & ~entry_ops.set_high;
+  // The run begins on the next advance_trial(), not here.
+  //
+  // It used to begin here, and the entry state's outputs were owed to the next
+  // scan while its `entered_us` was stamped from `now_us` -- the timestamp
+  // service_link() took off the link *before* it raised the EngineHold. Those
+  // are not the same instant. Everything this function does afterwards, plus
+  // serialising the reply below, is scan-deferred time that landed inside the
+  // entry state's measured duration: **1 117 us of it**, measured on an Uno R4
+  // Minima, on a state with no actions and a 0 ms timeout. Every trial's first
+  // state reported about a millisecond too long, and its entry action reached
+  // the pin about a millisecond after the timestamp that claimed it had. See
+  // docs/operations/hardware.md, "Response latency and duration accuracy", for
+  // the decomposition that found it -- the same wait mid-trial is 228 us.
+  //
+  // Deferring fixes it by construction rather than by being careful: the scan
+  // that stamps `entered_us` is the scan that drives the entry action's pins,
+  // because it is one call. That is exactly how autorun's first run has always
+  // worked (begin_autorun(), and start_autorun_trial() below), and this is now
+  // the same shape -- there is one thread of control that starts trials and
+  // drives pins, and it is the timer's.
+  start_pending_ = true;
   state_ = LinkState::Running;
 
   JsonWriter w(tx_, sizeof(tx_));
   w.begin(msg_type_name(MsgType::Started), tx_message_id_);
   w.in_reply_to(message_id);
   w.key_u32("trial_id", armed_trial_id_);
+  // When the command was accepted, which is not when the trial starts: the run
+  // begins on the next scan, together with its pins. A host that needs the
+  // trial's own clock reads `entered_us` on the first row of the result, which
+  // is the timestamp the machine actually ran on. See the note above.
   w.key_u32("at_us", now_us);
+  // Which source started it, so a host reads one field in both cases rather
+  // than inferring the answer from whether the message carried an in_reply_to.
+  w.key_str("by", "serial");
   send(w, message_id);
 }
 
@@ -884,6 +1042,12 @@ void HostLinkSession::on_cancel(const JsonObject& m, uint16_t message_id, Micros
       return;
     }
   }
+
+  // A cancel that beat the scan cancels a trial that does not exist yet, so
+  // start it first: see start_now_if_pending(). Its entry actions are owed to
+  // the pins exactly as they would have been, and the cancel below takes them
+  // straight back down.
+  owe(pending_ops_, start_now_if_pending(now_us));
 
   // Loses the race against a graph that already reached a terminal state. The
   // bridge must cope with asking to cancel and being told Hit -- the
@@ -1039,8 +1203,14 @@ void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us)
   // device's own parser would refuse, so anything further nests.
   w.key_bool("autorun", autorun_active_);
   w.key_u32("trial_id", armed_trial_id_);
-  w.key_bool("running", runner_.running());
-  w.key_u32("current_state", runner_.current_state());
+  // `running` is the answer to "did the host's start take", not "has the engine
+  // ticked yet": between `started` going out and the scan that begins the run
+  // there is up to one scan period in which the runner has not started and the
+  // trial unarguably has. Reporting false there would make a state_report sent
+  // straight after a start contradict the `started` it just received.
+  w.key_bool("running", start_pending_ || runner_.running());
+  w.key_u32("current_state",
+            start_pending_ ? entry_state_of_live_graph() : runner_.current_state());
   w.key_u32("up_us", since(booted_us_, now_us));
   // Diagnosis, not control: a link dropping lines should be visible to whoever
   // is debugging the rig rather than inferred from trials that did not happen.
@@ -1065,6 +1235,18 @@ void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us)
   w.key_u32("overruns", scan_.overruns);
   w.key_u32("worst_gap", scan_.worst_gap);
   w.key_u32("tx_stalls", scan_.tx_stalls);
+  // Same question as the counters above it -- is this device keeping up -- and
+  // nested here because state_report is at kJsonMaxMembers exactly.
+  w.key_u32("visits_dropped", dropped_visits_);
+  // The timers, in here for the same reason and not because they are a scan
+  // health statistic: the top level of state_report is full, and this is the
+  // object that already holds what the scan is doing. `enabled` is the mask in
+  // force *now*, so during a trial that overrode it this is the trial's, not
+  // the device's. `running` is one bit per timer actually in flight, delay
+  // included -- a timer counting down its onset is running, it is simply not
+  // high yet.
+  w.key_u32("timers_enabled", timers_.enabled());
+  w.key_u32("timers_running", timers_.bits() >> kFirstTimerLine);
   w.end_object();
   send(w, message_id);
 }
@@ -1076,22 +1258,98 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
     booted_us_ = now_us;
     have_boot_ = true;
   }
+  // Anything a cancel or a fail-safe owed since the last scan.
+  OutputUpdate owed = pending_ops_;
+  pending_ops_ = OutputUpdate{};
+
+  // The global timers, before anything reads the word -- including before
+  // `last_word_` is written, so that the timer bits are part of the word every
+  // edge on this device is measured against. A timer bit that joined the word
+  // after that snapshot would look like a rising edge on every scan it was
+  // high, which would make a timer unusable as a trial's start line.
+  //
+  // They tick whether or not a trial is running: that is what makes them
+  // global, and it is why they are here rather than inside the machine, which
+  // is rebuilt per trial. Their bits join the input word as ordinary lines, so
+  // a transition waiting on a timer is a transition waiting on a line, and
+  // needs nothing special anywhere below this point. See
+  // machine/global_timers.h.
+  const TimerTick timers = timers_.tick(word, now_us);
+  owe(owed, timers.ops);
+  word |= timers.bits;
+  // A timer a state action started or cancelled on the *previous* scan, after
+  // the machine had already built its update. Merged here so it is paid exactly
+  // once, on the scan after the one that owed it.
+  owe(owed, timer_action_ops_);
+  timer_action_ops_ = OutputUpdate{};
+
   // A pulse raised by the last act of a trial -- the ordinary way to write a
   // reward -- falls due after the run has ended and the session is back to
   // Idle. Returning an empty update here would leave the valve open until the
   // next trial started.
+  const LineBitmask previous_word = last_word_;
   last_word_ = word;
 
-  // Anything a start() owed since the last scan.
-  const OutputUpdate owed = pending_ops_;
-  pending_ops_ = OutputUpdate{};
+  // A start the link accepted since the last scan. Here, so that the trial's
+  // entered_us and the pins its entry action drives are one instant -- see
+  // on_start(). Not evaluated in this same tick: a state entered by a
+  // transition gets its first look on the following scan, and the entry state
+  // of a trial is not a special case.
+  if (start_pending_) {
+    start_pending_ = false;
+    // Pulses owed from before this trial, which start() is about to drop. The
+    // autorun path gets these from the idle branch below; this one has to ask.
+    owe(owed, runner_.service_outputs(now_us));
+    owe(owed, runner_.start(armed_trial_id_, session_seed_, now_us, word));
+    return owed;
+  }
+
+  // A trial armed to start on a line, and the edge that starts it.
+  //
+  // An *edge*, not a level: a line already asserted when `configure` arrived
+  // would otherwise start the trial on the very next scan, which is not a start
+  // signal but a line nobody had lowered yet. So the bit must be seen low on one
+  // scan and high on the next, and `previous_word` is what makes that a
+  // question about the world rather than about when the host happened to send
+  // the command. The word is the conditioned one, so `invert` has already been
+  // applied and a debounce, if the line has one, has already been waited out --
+  // the edge here is the edge the paradigm's own transitions would see.
+  //
+  // Started here, in the trial loop, rather than flagged for the link the way a
+  // serial start is flagged for the scan: this *is* the scan. The edge, the
+  // trial's `entered_us` and the pins its entry action drives are one call, one
+  // instant, and one scan period after the pin moved -- there is no equivalent
+  // of on_start()'s 1 117 us to defer away, because no foreground work is in
+  // the path at all. Telling the host is the part that waits (see
+  // `line_start_pending_`), and it waits behind the trial rather than in it.
+  if (state_ == LinkState::Armed && start_from_line_) {
+    const LineBitmask bit = static_cast<LineBitmask>(1) << start_line_;
+    if ((word & bit) != 0 && (previous_word & bit) == 0) {
+      // One edge starts one trial. Cleared before the run so that the line
+      // going high again mid-trial is just an input, which is what it is: this
+      // flag is the arming, and the arming is spent.
+      start_from_line_ = false;
+      state_ = LinkState::Running;
+      line_start_pending_ = true;
+      line_started_at_us_ = now_us;
+      // Pulses owed from before this trial, which start() is about to drop --
+      // the same debt the serial path collects above.
+      owe(owed, runner_.service_outputs(now_us));
+      owe(owed, runner_.start(armed_trial_id_, session_seed_, now_us, word));
+      return owed;
+    }
+  }
 
   if (state_ != LinkState::Running) {
     OutputUpdate idle = runner_.service_outputs(now_us);
     // The dwell a terminal state declared has run out, so another run begins.
     // Here rather than in the link's thread of control for the reason every
     // other output on this device is: the scan drives the pins.
-    if (state_ == LinkState::Relighting && reached(relight_at_us_, now_us)) {
+    // Not while a result is still waiting to go out: starting the next run
+    // would reset the record that result is built from. One pass of the
+    // foreground is all it waits for.
+    if (state_ == LinkState::Relighting && !result_pending_ &&
+        reached(relight_at_us_, now_us)) {
       const OutputUpdate entry_ops = start_autorun_trial(word, now_us);
       idle.set_high = (idle.set_high | entry_ops.set_high) & ~entry_ops.set_low;
       idle.set_low = (idle.set_low | entry_ops.set_low) & ~entry_ops.set_high;
@@ -1111,9 +1369,25 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
     // device's account of what it did, and a board that stopped writing them
     // down when the port closed would be a board whose record depended on who
     // was watching.
-    emit_result();
-    // After the result, not before: the record reports the durations that were
-    // drawn, and the patch is what they were drawn from.
+    // Flagged, not sent. Sending it means building a result_begin, however many
+    // result_path chunks and a result_end -- the largest burst of formatting on
+    // this device -- and doing that here means doing it in the trial loop, which
+    // on a board is the timer ISR. ReplySink::send_line() spins when the
+    // transmit queue is full, and a spin in an interrupt waiting for the
+    // foreground that drains that queue does not end. drain_outbound() sends it,
+    // from the foreground, after the visits it summarises.
+    result_pending_ = true;
+    // Every timer that declared itself trial-bound stops here, and the rest run
+    // on. Per timer, as VStim's ResetTimer() is, rather than a property of the
+    // device -- see graph/global_timer.h.
+    owe(ops, timers_.end_of_run(now_us));
+    // And this trial's enable mask goes back to the device's, alongside the
+    // distribution patches below and for the same reason.
+    revert_timer_patch(now_us);
+    // Safe to revert before the result is built rather than after: emit_result()
+    // reads the trial record and the run record, and touches the distribution
+    // pool nowhere. The drawn durations it reports were written down when they
+    // were drawn.
     revert_distribution_patches();
 
     // The graph says when another run may begin; whether anything acts on it is
@@ -1129,6 +1403,28 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
       state_ = LinkState::Idle;
     }
   }
+  return ops;
+}
+
+StateIndex HostLinkSession::entry_state_of_live_graph() const {
+  if (!have_set_ || runner_.graph_index() >= live_set_.n_graphs) return kNoState;
+  const GraphEntry& g = live_set_.graphs[runner_.graph_index()];
+  if (g.entry == kNoState) return kNoState;
+  // Per-graph, like every index that crosses the wire: the pool offset is the
+  // device's business. Same arithmetic StateMachine::get_current_state_index()
+  // does, and for the same reason.
+  return static_cast<StateIndex>(g.entry - g.first_state);
+}
+
+OutputUpdate HostLinkSession::start_now_if_pending(Microseconds now_us) {
+  OutputUpdate ops;
+  if (!start_pending_) return ops;
+  start_pending_ = false;
+  // `last_word_` rather than a fresh read, because this is the link's thread of
+  // control and it reads no pin. It is the previous scan's word, at most one
+  // period old, and it is what the transitions are armed against -- the same
+  // thing the scan would have handed start() had it got there first.
+  ops = runner_.start(armed_trial_id_, session_seed_, now_us, last_word_);
   return ops;
 }
 
@@ -1161,6 +1457,10 @@ OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
   }
   pending_ops_ = OutputUpdate{};
   if (state_ == LinkState::Running) {
+    // As in on_cancel(): a run the scan has not reached yet is still a run this
+    // has to end and report. Its entry outputs are discarded rather than owed,
+    // because every line is about to go to its safe level anyway.
+    start_now_if_pending(now_us);
     runner_.cancel(TrialCancelReason::LinkLost, now_us);
     // cancel() hands its outputs to the next scan rather than returning them,
     // because a cancel normally arrives between scans. There is not going to be
@@ -1171,6 +1471,19 @@ OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
   // bridge that comes back does not have to re-upload one. It sends hello
   // anyway, which is what brings a fresh session seed.
   if (state_ != LinkState::Greeting) state_ = LinkState::Idle;
+  // Whatever is still queued was for a host that is gone, exactly like the
+  // transmit queue main.cpp clears alongside this.
+  visit_head_ = visit_tail_ = 0;
+  // The cancel above ended the run and flagged its result, and there is nobody
+  // to send it to -- main.cpp clears the transmit queue alongside this for the
+  // same reason. A board driving itself returns earlier and keeps both.
+  result_pending_ = false;
+  start_pending_ = false;
+  // The arming and its unsent announcement both belonged to the session that
+  // just ended. A board left armed on a line across a reconnect would start a
+  // trial the returning host never asked for.
+  start_from_line_ = false;
+  line_start_pending_ = false;
   greeted_ = false;
   revert_distribution_patches();
   armed_trial_id_ = 0;
@@ -1183,6 +1496,14 @@ OutputUpdate HostLinkSession::link_lost(Microseconds now_us) {
 OutputUpdate HostLinkSession::fail_safe() {
   OutputUpdate ops;
   pending_ops_ = OutputUpdate{};
+  // Every timer stops. Without this a free-running one would re-raise its line
+  // on its next pulse and fight the safe levels -- and this runs when the graph
+  // is what may be wrong, which includes the timer that graph declared. The
+  // ops it returns are discarded on purpose: the safe levels below drive every
+  // line the board has, so they already say where each one goes.
+  (void)timers_.set_enabled(0, 0);
+  timers_enabled_ = 0;
+  timers_patched_ = false;
   // The wiring's, not a graph's, and applied whether or not a graph exists --
   // which is the whole point of the move. A rig image holds no graph at reset,
   // and this is the call main.cpp makes before the first scan.
@@ -1200,31 +1521,93 @@ OutputUpdate HostLinkSession::fail_safe() {
   return ops;
 }
 
-void HostLinkSession::emit_visit(const StateVisit& v, uint32_t seq) {
-  // Emitted when the state is LEFT, not when it is entered: a visit's duration
-  // and exit cause do not exist before then. For a trace that is not a latency
-  // problem, because what matters is the timestamp and `entered_us` is exact --
-  // and each exit tells a host both when the state it reports ended and, via
-  // the transition it resolves against the graph, which state the machine is in
-  // now.
+void HostLinkSession::record_visit(const StateVisit& v, uint32_t seq) {
+  // On a board this is the scan ISR, so it does the least it can: a copy and an
+  // index bump. Everything with a cost in it -- the JSON, the CRC, the queue --
+  // is drain_visits(), in the foreground. See the note on that declaration for
+  // what it cost when it was here.
+  const uint8_t next = static_cast<uint8_t>((visit_head_ + 1) % kVisitRingDepth);
+  if (next == visit_tail_) {
+    // Full. The newest is dropped rather than the oldest, so that the producer
+    // never touches `tail` and the ring stays lock-free with an interrupt at
+    // one end. The host sees the gap in `seq` either way, and the count goes
+    // out in state_report.
+    ++dropped_visits_;
+    return;
+  }
+  PendingVisit& slot = visit_ring_[visit_head_];
+  slot.visit = v;
+  slot.seq = seq;
+  // Zero where there is no host-configured trial -- the bench, a line-started
+  // run before anything assigned an id. The trace is still worth having; it
+  // simply joins to nothing.
+  slot.trial_id = (state_ == LinkState::Running) ? armed_trial_id_ : 0;
+  visit_head_ = next;
+}
+
+void HostLinkSession::drain_outbound(uint8_t max_visit_lines) {
+  // Before this trial's visits, because it is the line that says which trial
+  // they belong to and a host that saw them first would be reading a stream it
+  // had not been told had begun.
+  if (line_start_pending_) {
+    line_start_pending_ = false;
+    emit_line_started();
+  }
+  drain_visits(max_visit_lines);
+  // Only once the visits are out: a result summarises them, and a host reading
+  // the stream in order should not meet the summary first. The ring being empty
+  // is the condition, not the count sent, so a paced caller takes as many passes
+  // as it needs and the result still follows.
+  if (result_pending_ && visit_tail_ == visit_head_) {
+    result_pending_ = false;
+    emit_result();
+  }
+}
+
+void HostLinkSession::emit_line_started() {
   JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::Visit), tx_message_id_);
-  // Zero where there is no host-configured trial -- demo mode, the bench, a
-  // line-started run before anything assigned an id. The trace is still worth
-  // having; it simply joins to nothing.
-  w.key_u32("trial_id", (state_ == LinkState::Running) ? armed_trial_id_ : 0);
-  w.key_u32("seq", seq);
-  // The same six-element array as a result_path entry, decoded by the same
-  // function on the host. Two shapes for one fact is how the two drift apart.
-  w.begin_array("v");
-  w.elem_u32(v.state_index);
-  w.elem_str(cause_name(v.cause));
-  w.elem_u32(v.transition_index);
-  w.elem_i32(v.drawn_ms);
-  w.elem_u32(v.entered_us);
-  w.elem_u32(v.duration_us);
-  w.end_array();
+  w.begin(msg_type_name(MsgType::Started), tx_message_id_);
+  // No in_reply_to: nothing asked. This is the device reporting an event, in
+  // the same class as `visit` and `result`.
+  w.key_u32("trial_id", armed_trial_id_);
+  // Unlike the serial path's, this `at_us` *is* the start of the trial and not
+  // an acknowledgement of a command: it is the timestamp of the scan that saw
+  // the edge, which is the timestamp that scan stamped `entered_us` with. See
+  // on_start() for why the two cases differ.
+  w.key_u32("at_us", line_started_at_us_);
+  w.key_str("by", "line");
+  w.key_u32("line", start_line_);
   send_unsolicited(w);
+}
+
+void HostLinkSession::drain_visits(uint8_t max_lines) {
+  for (uint8_t sent = 0; visit_tail_ != visit_head_; ++sent) {
+    if (max_lines != 0 && sent == max_lines) return;
+    const PendingVisit& p = visit_ring_[visit_tail_];
+    // Emitted when the state is LEFT, not when it is entered: a visit's
+    // duration and exit cause do not exist before then. Being sent a moment
+    // later than that is not a latency problem, because what matters is the
+    // timestamp and `entered_us` is exact -- and each exit tells a host both
+    // when the state it reports ended and, via the transition it resolves
+    // against the graph, which state the machine is in now.
+    JsonWriter w(tx_, sizeof(tx_));
+    w.begin(msg_type_name(MsgType::Visit), tx_message_id_);
+    w.key_u32("trial_id", p.trial_id);
+    w.key_u32("seq", p.seq);
+    // The same six-element array as a result_path entry, decoded by the same
+    // function on the host. Two shapes for one fact is how the two drift apart.
+    w.begin_array("v");
+    w.elem_u32(p.visit.state_index);
+    w.elem_str(cause_name(p.visit.cause));
+    w.elem_u32(p.visit.transition_index);
+    w.elem_i32(p.visit.drawn_ms);
+    w.elem_u32(p.visit.entered_us);
+    w.elem_u32(p.visit.duration_us);
+    w.end_array();
+    send_unsolicited(w);
+    // Last, so the producer never sees a slot freed before it has been read.
+    visit_tail_ = static_cast<uint8_t>((visit_tail_ + 1) % kVisitRingDepth);
+  }
 }
 
 void HostLinkSession::emit_result() {

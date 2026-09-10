@@ -91,24 +91,21 @@ statemachined = "statemachined.command_line_interface:main"
 [dependency-groups]
 test = ["pytest>=8.0", "statemachined[device,serve]"]
 dev = ["ruff>=0.8", "ty>=0.0.1a1"]
-# The end-to-end tests only, and never at runtime. **Nothing in this package
-# imports triald, and nothing in it knows triald exists** -- this daemon reports
-# to nobody and has no setting naming another one. The dependency is here
-# because the test needs both halves and the expensive half is here: the
-# firmware built for this machine. triald opens a stream, drives a trial and
-# reads what this daemon published, which is what a rig does.
+# **There is no `e2e` group, and that is deliberate.** The trial loop across
+# this daemon and triald used to be tested from here, which meant a group
+# installing triald, a `tool.uv.sources` pin on its main branch, and a CI job
+# fetching it -- to test a handover that is not this daemon's alone. It got
+# worse than untidy when triald began depending on `statemachined` for the
+# client it had stopped hand-copying: this project's editable copy of itself and
+# the git URL triald asks for are one distribution from two sources, which uv
+# refuses, so the lock could no longer be refreshed and the test ran forever
+# against whatever triald commit it had captured.
 #
-# Its own group rather than part of `test` so that `make test-python` on a fresh
-# checkout never reaches for another repository. Without it
-# `tests/integration/test_a_whole_trial_with_triald.py` skips itself and says
-# why; with it (`make test-e2e`) it runs.
-#
-# Marked rather than folded into requires-python: triald needs 3.12 and this
-# daemon runs on 3.11, and raising a shipped daemon's floor for a test
-# dependency is the wrong trade.
+# That test lives in the contracts repo now (`rig/`), with the others that are
+# about more than one daemon. Nothing in this package imports triald or knows it
+# exists -- and now nothing in its build does either.
 #
 # See the contracts repo, INTERACTIONS.md §8.
-e2e = ["triald[serve] ; python_full_version >= '3.12'"]
 
 [tool.pytest.ini_options]
 # tests/unit is host-only. tests/integration needs the native device built --
@@ -145,7 +142,6 @@ build-backend = "hatchling.build"
 packages = ["src/statemachined"]
 
 [tool.uv.sources]
-triald = { git = "ssh://git@github.com/braemons/triald.git", rev = "main" }
 # The test group installs this project's own extras, which uv resolves to the
 # workspace copy rather than to a registry.
 statemachined = { workspace = true }

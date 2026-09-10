@@ -14,7 +14,7 @@ import time
 from collections.abc import Callable
 
 from .serial_link import SerialLink
-from .message_vocabulary import UNSOLICITED, Field, MsgType
+from .message_vocabulary import UNSOLICITED, UNSOLICITED_WHEN_UNPROMPTED, Field, MsgType
 from .message_framing import DeviceRefusedTheCommand, FramingError, command_line, parse_reply
 
 PROTOCOL_VERSION = 1
@@ -140,6 +140,12 @@ class RequestResponseSession:
             self.on_junk(line, str(exc))
             return None
         if msg.get(Field.MSG_TYPE) in UNSOLICITED:
+            self.on_unsolicited(msg, line)
+            return None
+        # A `started` with nothing to reply to is a trial the *line* began. It
+        # is the device reporting an event, not an answer, and routing it by
+        # type alone would make `start_trial` unable to recognise its own reply.
+        if msg.get(Field.MSG_TYPE) in UNSOLICITED_WHEN_UNPROMPTED and Field.IN_REPLY_TO not in msg:
             self.on_unsolicited(msg, line)
             return None
         return msg

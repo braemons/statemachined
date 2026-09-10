@@ -539,6 +539,7 @@ class TrialApi:
         graph: str = "",
         cap_milliseconds: int = 0,
         start_source: str = "serial",
+        start_line: int | None = None,
         distribution_patches: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Arm the device for exactly one trial, and do not return until it is.
@@ -575,6 +576,10 @@ class TrialApi:
             "cap_milliseconds": cap_milliseconds,
             "start_source": start_source,
         }
+        # Only when there is one, so a trial that starts on serial sends the
+        # body it always sent.
+        if start_line is not None:
+            body["start_line"] = start_line
         if distribution_patches:
             body["distribution_patches"] = list(distribution_patches)
         return self._transport.post(

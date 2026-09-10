@@ -1,0 +1,54 @@
+/* ── University of Bremen corporate-design colours ───────────────────────────
+   Pulled from uni-bremen.de: blue #00326d (primary), red #c60c2b (accent),
+   with darker/lighter tints. Applied as Material theme variables. Same
+   stylesheet family as vstimd's site. */
+:root {
+    --ub-blue: #00326d;
+    --ub-blue-dark: #002857;
+    --ub-blue-light: #d5e3f3;
+    --ub-red: #c60c2b;
+    --ub-red-dark: #aa1f44;
+}
+
+/* Primary = UB blue. Attribute-targeted so it beats Material's built-in
+   [data-md-color-primary=…] rules regardless of load order. */
+[data-md-color-primary="custom"] {
+    --md-primary-fg-color: var(--ub-blue);
+    --md-primary-fg-color--light: #21467a;
+    --md-primary-fg-color--dark: var(--ub-blue-dark);
+    --md-primary-bg-color: #ffffff;
+    --md-primary-bg-color--light: rgba(255, 255, 255, 0.7);
+}
+
+/* Accent = UB red (hover, focus, selection). */
+[data-md-color-accent="custom"] {
+    --md-accent-fg-color: var(--ub-red);
+    --md-accent-fg-color--transparent: rgba(198, 12, 43, 0.1);
+}
+
+/* Make body links UB red so the brand red is actually visible (by default
+   Material colours links with the primary, i.e. blue). Header stays blue. */
+[data-md-color-scheme="default"] {
+    --md-typeset-a-color: var(--ub-red);
+}
+
+/* Dark mode: brighten the red so links/accents stay legible on dark. */
+[data-md-color-scheme="slate"] {
+    --md-typeset-a-color: #ff5d6c;
+}
+[data-md-color-scheme="slate"][data-md-color-accent="custom"] {
+    --md-accent-fg-color: #ff5d6c;
+}
+
+/* ── Header: the wordmark already spells out the site name, so hide the
+   duplicate site-title text next to it. ────────────────────────────────────── */
+.md-header__title {
+    display: none;
+}
+
+/* Mermaid diagrams: let a diagram that is still wider than the content column
+   scroll horizontally inside its own box instead of shrinking to unreadable. */
+.mermaid {
+    overflow-x: auto;
+    text-align: center;
+}

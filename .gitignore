@@ -32,6 +32,9 @@ report.html
 # hand must not dirty the tree.
 /image/
 
+# MkDocs build output (make docs-build).
+/site/
+
 # The native device's settings store -- its data flash, as a file. Written in
 # the working directory by `make bench-device` unless STATEMACHINED_STORE names
 # somewhere else; the tests give each device one under their own tmp_path.

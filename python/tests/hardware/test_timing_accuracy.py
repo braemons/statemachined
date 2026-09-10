@@ -64,16 +64,43 @@ RATE_ERROR_BUDGET_PARTS_PER_MILLION = 500
 DURATION_JITTER_BUDGET_MICROSECONDS = 300
 
 #: Entry action to a transition firing on the line it drove, through the
-#: jumper. Measured 2026-09-09 over 300 trials: **bimodal**, about 1150 us
-#: (55%) and about 1950 us (38%), median 1196, p95 1957, max 1960.
+#: jumper, measured **inside a running trial** -- the state is reached from a
+#: dwell, so no command is anywhere near it. Measured 2026-09-09 over 60
+#: trials: **100 us exactly**, min = max = median, sd 0.
 #:
-#: That is 12 to 20 scan periods for a chain that touches nothing but GPIO and,
-#: on the face of it, should answer within two. The budgets below are set from
-#: the measurement so this suite is a regression test today; the gap itself is
-#: a finding and not a settled cost -- if it is ever explained and closed, these
-#: come down with it.
-RESPONSE_LATENCY_MEDIAN_BUDGET_MICROSECONDS = 2500
-RESPONSE_LATENCY_WORST_BUDGET_MICROSECONDS = 6000
+#: That is one scan period, which is the floor: the pin is driven at the end of
+#: one scan and read at the start of the next, and there is nothing else in the
+#: path. It was 223 us until the `visit` stream was moved out of the scan
+#: interrupt -- building that line cost ~120 us, the scan overran its own tick,
+#: and the next scan landed late. docs/operations/hardware.md has both halves.
+#:
+#: A budget of three periods rather than one: an exact figure asserted exactly
+#: is a test that fails on the first board with a slightly different clock.
+RESPONSE_LATENCY_BUDGET_MICROSECONDS = 300
+
+#: The same wait when the state is entered by the `start` command instead.
+#: Measured 2026-09-09 over 60 trials: median 809 us, max 1561.
+#:
+#: Not the response path -- that is 100 us, above, same graph and same jumper.
+#: It is what `on_start` costs the foreground before the scan that begins the
+#: run can happen: the trial now starts on that scan, together with its pins, so
+#: this is honest about when the trial began rather than being an error in what
+#: it reports. It was 1196 us and bimodal when the timestamp came off the link
+#: instead.
+START_ENTERED_LATENCY_BUDGET_MICROSECONDS = 4000
+
+#: The same cost with the response path removed entirely: an entry state with
+#: no actions and a 0 ms timeout, so its reported duration is nothing but the
+#: gap between the `start` command arriving and the first scan that could act on
+#: it. Measured 2026-09-09 over 60 trials: median 812 us, max 1562.
+#:
+#: This is the one to watch, and what is left in it is the device's own
+#: foreground: parsing the command and building the `started` reply, during
+#: which the engine is held. It is a fixed offset on the first state of every
+#: trial and invisible against a foreperiod of tens of milliseconds. Shrinking
+#: it further means splitting `receive()` so only dispatch happens inside the
+#: hold -- see the note at the top of firmware/src/main.cpp.
+START_COMMAND_OVERHEAD_BUDGET_MICROSECONDS = 2500
 
 #: How far apart two lines raised by the *same* entry action are seen. A scan
 #: gathers a whole port at once, so this should be nothing; a budget of one scan
@@ -134,6 +161,30 @@ def a_line_answering_itself(device, version: int, outputs: list[int]):
         mask |= 1 << LOOPBACK[line]
     graph.transition(target=1, all=mask)
     graph.state(1, terminal=int(Outcome.HIT), timeout=None)
+    assert graph.end()[Field.MSG_TYPE] == MsgType.SET_OK
+    return graph
+
+
+def a_line_answering_itself_mid_trial(device, version: int, outputs: list[int]):
+    """The same wait, reached from a dwell rather than from the `start` command.
+
+    The difference between this and `a_line_answering_itself` is the whole of
+    the response-latency finding: identical pins, identical predicate, and 228
+    us against 1196. Timing the second state of a trial rather than the first
+    is what takes the link out of the measurement.
+    """
+    graph = SingleGraphSetUploader(device.session, version=version)
+    graph.begin(n_states=3, entry=0)
+    graph.dist(0, kind="fixed", a=20)
+    graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})
+    graph.state(1, terminal=None, timeout=None)
+    for line in outputs:
+        graph.action("entry", line=line, kind="high")
+    mask = 0
+    for line in outputs:
+        mask |= 1 << LOOPBACK[line]
+    graph.transition(target=2, all=mask)
+    graph.state(2, terminal=int(Outcome.HIT), timeout=None)
     assert graph.end()[Field.MSG_TYPE] == MsgType.SET_OK
     return graph
 
@@ -251,29 +302,76 @@ def test_a_drawn_random_duration_lands_inside_the_range_it_was_drawn_from(device
 
 
 def test_the_board_answers_its_own_line_within_the_measured_latency(device, loopback):
-    """Entry action to transition, over many trials, through a jumper.
+    """Entry action to transition, mid-trial, through a jumper.
 
-    The number this test exists to hold is in the constant's comment, and it is
-    bimodal at roughly 1.15 ms and 1.95 ms rather than the two scan periods the
-    chain looks like it should take. The budget is set above the measurement so
-    this is a regression test rather than a claim that the figure is right.
+    The honest figure for the response path, and the one a paradigm depends on:
+    every response a subject makes arrives inside a running trial, not at the
+    instant a `start` command lands. Measured at 228 us with a spread of one
+    microsecond -- see the budget's comment.
     """
-    graph = a_line_answering_itself(device, version=44, outputs=[0])
+    graph = a_line_answering_itself_mid_trial(device, version=44, outputs=[0])
     latencies = []
     for index in range(LATENCY_TRIALS):
-        result = run(device, graph, trial_id=4400 + index, cap_ms=1000)
+        result = run(graph=graph, device=device, trial_id=4400 + index, cap_ms=1000)
         assert result.outcome == Outcome.HIT, (
             "the board did not see the line it raised; check the D10 -> D6 jumper"
         )
-        assert result.visit(0).cause == "transition"
+        assert result.visit(1).cause == "transition"
+        latencies.append(result.visit(1).duration_us)
+
+    assert max(latencies) <= RESPONSE_LATENCY_BUDGET_MICROSECONDS, (
+        f"pin-to-transition latency mid-trial: {summarise(latencies)}"
+    )
+
+
+def test_a_state_entered_by_the_start_command_pays_the_links_overhead_on_top(device, loopback):
+    """The same wait, entered by `start`, and why the two figures differ.
+
+    Not a second measurement of the response path -- it is the same path -- but
+    of what `on_start` adds in front of it. It is asserted rather than merely
+    written down because it is a real offset on the first state of every trial,
+    and a change that made it worse would otherwise be invisible.
+    """
+    graph = a_line_answering_itself(device, version=48, outputs=[0])
+    latencies = []
+    for index in range(LATENCY_TRIALS):
+        result = run(graph=graph, device=device, trial_id=4800 + index, cap_ms=1000)
+        assert result.outcome == Outcome.HIT
         latencies.append(result.visit(0).duration_us)
 
-    median = statistics.median(latencies)
-    assert median <= RESPONSE_LATENCY_MEDIAN_BUDGET_MICROSECONDS, (
-        f"median response latency {median:.0f} us: {summarise(latencies)}"
+    assert max(latencies) <= START_ENTERED_LATENCY_BUDGET_MICROSECONDS, (
+        f"a state entered by `start` answered its own line in {summarise(latencies)}"
     )
-    assert max(latencies) <= RESPONSE_LATENCY_WORST_BUDGET_MICROSECONDS, (
-        f"worst response latency {max(latencies)} us: {summarise(latencies)}"
+
+
+def test_the_start_command_stamps_a_trial_about_a_millisecond_before_it_runs(device):
+    """The offset with the response path taken out of it altogether.
+
+    An entry state with no actions and a 0 ms timeout leaves on the first scan
+    that sees it, so its whole reported duration is the gap between the
+    timestamp `service_link()` took and the first `advance_trial()` after the
+    EngineHold came down. No pin, no conditioner, no predicate.
+
+    This is the measurement that located the finding, so it is the one that
+    would notice it being fixed: if `on_start` ever stamps the trial where the
+    trial starts, this drops to about one scan period.
+    """
+    graph = SingleGraphSetUploader(device.session, version=49)
+    graph.begin(n_states=2, entry=0)
+    graph.dist(0, kind="fixed", a=0)
+    graph.state(0, terminal=None, timeout={"dist": 0, "target": 1})
+    graph.state(1, terminal=int(Outcome.HIT), timeout=None)
+    assert graph.end()[Field.MSG_TYPE] == MsgType.SET_OK
+
+    overheads = []
+    for index in range(REPEAT_TRIALS):
+        result = run(device, graph, trial_id=4900 + index, cap_ms=1000)
+        assert result.outcome == Outcome.HIT
+        overheads.append(result.visit(0).duration_us)
+
+    assert max(overheads) <= START_COMMAND_OVERHEAD_BUDGET_MICROSECONDS, (
+        f"`start` stamped the trial {summarise(overheads)} before the first scan "
+        "that could act on it; see docs/operations/hardware.md"
     )
 
 
@@ -285,15 +383,15 @@ def test_two_lines_raised_together_are_seen_together(device, loopback):
     difference here is a scan that samples its ports at different moments, and
     it would make "both levers held" mean "both levers held, give or take".
     """
-    one = a_line_answering_itself(device, version=45, outputs=[0])
+    one = a_line_answering_itself_mid_trial(device, version=45, outputs=[0])
     one_line = [
-        run(device, one, trial_id=4500 + index, cap_ms=1000).visit(0).duration_us
+        run(device, one, trial_id=4500 + index, cap_ms=1000).visit(1).duration_us
         for index in range(REPEAT_TRIALS)
     ]
 
-    both = a_line_answering_itself(device, version=46, outputs=[0, 1])
+    both = a_line_answering_itself_mid_trial(device, version=46, outputs=[0, 1])
     two_lines = [
-        run(device, both, trial_id=4600 + index, cap_ms=1000).visit(0).duration_us
+        run(device, both, trial_id=4600 + index, cap_ms=1000).visit(1).duration_us
         for index in range(REPEAT_TRIALS)
     ]
 

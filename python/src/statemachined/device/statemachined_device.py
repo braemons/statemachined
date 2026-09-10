@@ -62,6 +62,7 @@ from .message_framing import DeviceRefusedTheCommand
 from .message_vocabulary import Field, MsgType
 from .request_response_session import (
     PROTOCOL_VERSION,
+    NoReplyInTime,
     RequestResponseSession,
     random_seed,
 )
@@ -142,6 +143,10 @@ class StatemachinedDevice:
         #: the middle of whatever else the link is doing.
         self.on_trial_result = on_trial_result or (lambda result: None)
         self._result_collector = TrialResultCollector()
+        #: The last unsolicited `started` -- a trial the *line* began, which
+        #: nothing asked for and so has no reply anybody is waiting on.
+        #: `wait_for_line_start` is what reads it.
+        self.last_line_start: dict | None = None
 
         self._link: SerialLink | None = None
         self._session: RequestResponseSession | None = None
@@ -249,6 +254,8 @@ class StatemachinedDevice:
         self.connection_count += 1
         self.armed_trial_id = None
         self.armed_graph_name = None
+        # Whatever the previous session was armed on went away with it.
+        self.last_line_start = None
 
         # Before the pin map, because the pin map is the thing that would
         # otherwise make the wrong board look right.
@@ -432,6 +439,8 @@ class StatemachinedDevice:
         *,
         cap_milliseconds: int = 0,
         start_source: str = "serial",
+        start_line: int | None = None,
+        timers: int | None = None,
         distribution_patches: list[dict] | None = None,
     ) -> dict:
         """Arm the device for one trial of one graph.
@@ -439,6 +448,19 @@ class StatemachinedDevice:
         `graph_name`, never an index. The daemon built the set, so the daemon
         knows which slot the name is in -- and an index on the caller's side
         would be a cache to get wrong across a re-upload.
+
+        `start_line` is required when `start_source` admits `"line"`, and is the
+        input line whose **rising edge** starts the trial. An edge rather than a
+        level, so a line still high from whatever came before does not start the
+        run the moment it is armed. The device refuses a line it does not have
+        or one the wiring has disabled, because a trial waiting on an edge that
+        cannot happen looks exactly like a subject who has not responded yet.
+
+        `timers` is this trial's global-timer enable mask, overriding the
+        device's for exactly one trial -- the parallel to `graph_name`, so a
+        trial type selects its timers the way it selects its graph, on a message
+        that was going to be sent anyway. Absent leaves the device's own mask
+        (`set_enabled_timers`) in force.
         """
         session = self._require_session()
         compiled = self._require_committed_graph_set()
@@ -448,6 +470,10 @@ class StatemachinedDevice:
             "graph_index": compiled.slot_for_graph_name(graph_name),
             "start": start_source,
         }
+        if start_line is not None:
+            fields["start_line"] = start_line
+        if timers is not None:
+            fields["timers"] = timers
         if cap_milliseconds:
             fields["cap_ms"] = cap_milliseconds
         if distribution_patches:
@@ -547,6 +573,46 @@ class StatemachinedDevice:
         wear made visible.
         """
         return self._require_session().request(MsgType.SAVE, timeout=max(self.timeout, 5.0))
+
+    def set_enabled_timers(self, enabled: int) -> dict:
+        """Which global timers may run, as a bitmask over timer indices.
+
+        The device-level setting, which holds between trials -- where a
+        free-running timer is doing most of its work. A single trial can
+        override it with `configure_trial(timers=...)`, which is reverted when
+        that trial ends.
+
+        Refused while a trial is armed or running, like `wiring` and for the
+        same reason: it changes what the scan does, and a timer switched off
+        under a running trial would move a timing that trial's record could not
+        account for.
+        """
+        session = self._require_session()
+        return session.request(MsgType.TIMERS, timeout=self.timeout, enable=enabled)
+
+    def wait_for_line_start(self, trial_id: int, timeout: float = 60.0) -> dict:
+        """Sit until the line the armed trial waits on rises.
+
+        The timeout is long by default and is not the trial's cap: what is being
+        waited for here is a subject or a stimulus PC, not the device, and a
+        device that has nothing to say is the normal case rather than a fault.
+        Raises `NoReplyInTime` if the edge does not come, which is a real
+        answer -- it says the trial never ran.
+        """
+        session = self._require_session()
+        deadline = time.monotonic() + timeout
+        while True:
+            started = self.last_line_start
+            if started is not None and started.get("trial_id") == trial_id:
+                self.last_line_start = None
+                return started
+            if time.monotonic() >= deadline:
+                raise NoReplyInTime(
+                    f"trial {trial_id} was armed on a line that did not rise within {timeout:g}s"
+                )
+            raw = session.link.read_line()
+            if raw is not None:
+                session.receive(raw)
 
     def wait_for_trial_result(self, timeout: float = 15.0) -> TrialResultRecord:
         """Collect the chunked result and read it back into names.
@@ -714,6 +780,13 @@ class StatemachinedDevice:
         collector. Everything else is handed on untouched.
         """
         message_type = message.get(Field.MSG_TYPE)
+        if message_type == MsgType.STARTED:
+            # A trial the line began. Remembered as well as handed on, so a
+            # caller that armed on a line has something to wait for: nothing was
+            # asked, so there is no reply for it to block on.
+            self.last_line_start = message
+            self.on_unsolicited_message(message)
+            return
         if message_type in (MsgType.RESULT_BEGIN, MsgType.RESULT_PATH, MsgType.RESULT_END):
             if line:
                 self._collect_result_chunk(line, message)
