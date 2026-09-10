@@ -221,14 +221,13 @@ lint-python:                ## ruff over the package and its tests (reports pre-
 typecheck:                  ## ty over the package
 	uv run --project python --group dev ty check --project python
 
-# The trial loop across both daemons: triald picks a trial and arms this one,
-# the firmware runs it, and triald reads what this daemon published. Separate
-# from test-python because it is the one suite that needs another repo at all.
-# Without the group the tests skip themselves and say why.
-.PHONY: test-e2e
-test-e2e: test              ## the trial loop end to end, with a real triald observing
-	uv run --project python --group test --group e2e pytest \
-		python/tests/integration/test_a_whole_trial_with_triald.py $(ARGS)
+# The trial loop across both daemons is **not** here. It lives in the contracts
+# repo (`rig/`, and `make rig-local` runs it against local checkouts), with the
+# other tests that are about more than one daemon. Running it from here meant
+# installing triald to test this daemon -- a dependency group naming another
+# repository, and a lockfile pin on its main branch -- for a test that is not
+# about this daemon alone. Nothing in this package imports triald or knows it
+# exists, and now nothing in its build does either.
 
 # Pinned to match .github/workflows/ci.yml. clang-format's output changes
 # between major versions, and `BasedOnStyle: Google` in .clang-format resolves

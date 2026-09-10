@@ -215,7 +215,6 @@ saved and loaded from the web UI. See `docs/reference/api.md` §8.
 ```sh
 make test-integration   # builds the native device, then drives whole sessions
 make test-daemon        # the same, skipping the integration half if unbuilt
-make test-e2e           # the trial loop with a real triald at the other end
 ```
 
 `tests/unit/` is arithmetic and translation: the framing, the compiler checked
@@ -254,23 +253,25 @@ entries are gone and disconnected, rather than handed a shorter answer that
 looks complete — and it can fetch any trial it missed with
 `GET /api/trace/trial/{id}`.
 
-## The end-to-end suite, with triald
+## The handover to triald, and where it is tested
 
-`make test-e2e` runs one whole trial across both daemons: triald picks the trial
-and hands out its number, arms this daemon for exactly that number, starts it,
-watches the trace go by, pulls that trial's events by id and turns them into an
-outcome in its own record. It is the only test that the two halves fit.
+One whole trial across both daemons — triald picks the trial and hands out its
+number, arms this daemon for exactly that number, starts it, watches the trace
+go by, pulls that trial's events by id and turns them into an outcome in its own
+record — is tested in the **contracts** repo, `rig/`, alongside the tests that
+run all three daemons. `make rig-local` there runs it against local checkouts.
 
-The dependency is test-only and one way: this daemon knows nothing about triald,
-and triald is imported here because the expensive fixture — the firmware built
-for this machine — is here. triald is a FastAPI app and so is this one, so both
-run in this process over Starlette's `TestClient`, which routes by path and
-ignores the host: no subprocess, no port, no teardown race, and each side builds
-exactly the URL it would build on a real network.
+It used to run from here, and the argument for that was the expensive fixture:
+the firmware built for this machine is in this repository. The argument against
+it turned out to be larger. A test of a handover is not a test of this daemon,
+and paying for it here meant a dependency group installing triald, a lockfile
+pin on triald's main branch, and a CI job fetching another repository — for a
+suite that could then only ever run against whichever triald commit the lock had
+captured.
 
-It is a separate group and a separate target because triald is a separate repo.
-Without it the tests skip themselves and say so, so `make test-daemon` on a
-fresh checkout never fails for want of another one.
+Nothing in this package imports triald, has a setting naming it, or makes any
+outbound call at all. That was always true of the code; it is now true of the
+build as well.
 
 See the contracts repo, `INTERACTIONS.md` §5.1 and §8.
 
