@@ -395,9 +395,9 @@ separate costs stacked on one measurement, and none of them was the pin path.
 
 | | before | after |
 |---|---|---|
-| Pin → transition, mid-trial | 223 µs | **100 µs**, sd 0 |
-| The same wait, entered by `start` | 1 196 µs (bimodal) | see below |
-| `start` stamp → first scan, no pins at all | 1 117 µs | ~1 scan period |
+| Pin → transition, mid-trial | 223 µs | **100 µs** — min = max = median, sd 0 |
+| The same wait, entered by `start` | 1 196 µs (bimodal) | 809 µs median, 1 561 max |
+| `start` stamp → first scan, no pins at all | 1 117 µs | 812 µs median, 1 562 max |
 
 **First: the `start` command's timestamp.** `entered_us` was stamped from the
 timestamp `service_link()` took off the link *before* it raised the
@@ -438,17 +438,31 @@ overrunning it. **The fix is what makes the scan rate a lever at all**: with the
 formatting out of the interrupt, the response path is one period, so 20 kHz
 would be 50 µs and 50 kHz 20 µs, against a measured scan floor of 8.2 µs.
 
-**The fix.** `advance_trial()` copies the completed `StateVisit` into a
-32-deep ring and returns; `drain_visits()`, called from `loop()`, does the JSON
-and the CRC. Two further things follow from it:
+**The fix.** `advance_trial()` copies the completed `StateVisit` into a 32-deep
+ring and returns. `drain_outbound()`, called from `loop()`, does the JSON and the
+CRC — **and the result too**: `emit_result()` moved out of the trial loop with
+it, since a `result_begin` plus its `result_path` chunks plus a `result_end` is
+the largest burst of formatting the device does, and it was on the interrupt for
+the same reason the visits were. `advance_trial()` now flags the ended run and
+the foreground sends it, after the visits it summarises. Three further things
+follow:
 
-- **`ReplySink::send_line()` is no longer reachable from an interrupt.** It
-  spins when the transmit queue is full, which is correct from the foreground
+- **`ReplySink::send_line()` is no longer reachable from an interrupt at all.**
+  It spins when the transmit queue is full, which is correct from the foreground
   and a deadlock from the ISR — the queue only drains through USB work the
   foreground has to run. A graph of eight states with 0 ms timeouts stalled a
-  `start` at 10 kHz, and the 20 kHz build stopped answering USB altogether and
-  needed a double-tap reset. Both are consistent with that spin; neither has
-  been reproduced since the move, and neither was *proven* to be it.
+  `start` at 10 kHz; a 20 kHz build stopped answering USB and needed a
+  double-tap reset; and an intermediate version of this very change, which left
+  `emit_result()` calling the visit drain from inside the trial loop, wedged the
+  board the same way while every host and integration test passed — because on
+  the host `advance_trial()` is an ordinary call and there is no interrupt to
+  deadlock. That is the argument for the rule rather than for care: nothing that
+  formats a line runs in the trial loop.
+
+- **Draining is paced.** `loop()` sends one visit per pass, interleaved with the
+  transmit drain. Emptying a full ring in one pass hands the queue more lines
+  than it holds and `send_line()` spins waiting for the wire — 21 such stalls on
+  the reference board, against a budget of zero.
 - **A full ring drops the newest visit and counts it**, reported as
   `scan.visits_dropped` in `state_report`. Dropping the newest rather than the
   oldest is what keeps the ring single-producer/single-consumer and therefore
@@ -464,10 +478,131 @@ hold a trial: a graph with a loop produces far more visits than it has states,
 and the thing that must hold a whole trial is `kMaxPath`.
 
 **What this means for a paradigm.** The response path is one scan period —
-100 µs at 10 kHz, deterministic to the microsecond, and it follows the scan rate
-if that is ever raised. A state entered by `start` still pays the link's
-overhead in *when it begins*, but no longer in what it reports: its `entered_us`
-is the scan's clock and coincides with its own pins.
+100 µs at 10 kHz, min = max = median over 60 trials, and it follows the scan
+rate if that is ever raised. A state entered by `start` still pays the link's
+overhead in *when it begins* — 812 µs of foreground, median — but no longer in
+what it reports: its `entered_us` is the scan's clock and coincides with its own
+pins. The remaining 812 µs is `receive()` parsing the command and building the
+`started` reply with the engine held, and the note at the top of
+`firmware/src/main.cpp` says what shrinking it would take.
+
+### Starting a trial on a line
+
+A trial armed with `start` of `"line"` or `"both"` begins on the rising edge of
+`start_line`, in the scan that sees it. See docs/reference/protocol.md §3.4 for the
+shape; what matters here is the timing and what it costs.
+
+**It is the cheapest start there is**, and cheaper than the serial one by the
+whole of the link's foreground: the edge, the trial's `entered_us` and the pins
+its entry action drives are one call in the scan, so the path from pin to first
+output is one scan period — the same 100 µs measured above for a mid-trial
+response, and for the same reason. There is no equivalent of the serial path's
+812 µs, because no foreground work is in the path at all. Telling the host is
+the part that waits: the unsolicited `started` is formatted by `loop()`, like
+every other line this device sends, and it lands a pass or so after the trial is
+already running.
+
+**Not verified on this board.** The eight-wire loopback cannot produce the edge
+this needs. A trial is only armed while none is running, and the only thing that
+moves an input on this harness is a *running* trial's output — so there is no
+sequence of loopback trials that raises a line while the board is waiting for
+one. It is covered at the unit tier instead, where the conditioned word is the
+test's to write (`tests/core/protocol/test_host_link_session.cpp`, eight cases:
+the edge, a line already high at arm time, one edge starting one trial, `"both"`
+racing both ways, the three refusals, and disarming on link loss).
+
+Confirming it on silicon needs a signal the board does not generate: a bench
+supply, a function generator, or a jumper from a second board's output into the
+start line. What to expect — the `started` arrives with `"by":"line"`, its `at_us`
+equal to the first visit's `entered_us`, and the entry action's pin up one scan
+period after the edge.
+
+### Global timers, and what they cost the scan
+
+A global timer runs beside the state machine: it holds one bit of the input word
+high while it runs, optionally drives one real output line alongside, and
+outlives the trial that started it. See `docs/reference/protocol.md` §3.2
+(`graph_timer`) for the model and `firmware/core/graph/global_timer.h` for what
+it takes from VStim and what from Bpod.
+
+**They are what makes a line start testable on this rig.** The eight-wire
+loopback cannot produce the edge a `start: "line"` trial waits for, because a
+trial is only armed while none is running and the only thing that moves an input
+on that harness is a *running* trial's output. A timer breaks the deadlock: a
+trial's last state starts one, the trial ends, and the timer raises its line
+while the board sits armed. That chain is asserted in
+`tests/core/protocol/test_host_link_session.cpp` ("a global timer outlives the
+trial that started it, and starts the next one"), which plays the loopback
+itself.
+
+**Cost per scan.** Two early-outs keep it off the hot path, and both are rules
+this firmware already had:
+
+- Nothing running: `armed_` is zero, and the whole phase pass is one compare.
+- Input word unchanged: `holds()` is a pure function of the word, so no trigger
+  can have a false→true edge and the whole trigger pass is one compare. That is
+  `dev/PLAN.md`'s second rule, the same one that makes scanning predicates
+  affordable instead of indexing a Bpod-style matrix.
+
+So the common scan — a rig at rest between responses — costs two compares
+regardless of how many timers the set declares. Only a scan on which the word
+actually moved pays for the eight predicate evaluations.
+
+**SIMD does not apply here**, and it is worth writing down why so the question
+is not reopened. Neither target has a vector unit: the RA4M1 is a Cortex-M4 and
+the Teensy 4.1 an M7, and both have the ARM DSP extension (packed 8- and 16-bit
+lanes in a 32-bit register) rather than NEON. More to the point, the per-timer
+work is a phase switch, a deadline compare and an occasional distribution draw —
+branches, not arithmetic throughput. Vectorising it would mean making all eight
+timers do every branch's work unconditionally, which is strictly slower than
+skipping seven of them. The two early-outs above are the optimisation that was
+actually available.
+
+### Timer accuracy
+
+**No PWM.** A timer's output line is driven through the same `OutputUpdate` →
+port-register path as every other output on this device: binary high or low, on
+the scan. `analogWrite` appears nowhere in the firmware, and no hardware timer
+peripheral is involved. What `loops` and `gap` give is a square wave at
+millisecond resolution — usable down to a few hundred hertz, which is a valve or
+a shutter, not an LED dimmed to 40%. Intensity control would mean a GPT channel
+on the RA4M1 and a genuinely different feature; Bpod has it (`OnLevel`/`OffLevel`
+take 0–255 on its PWM channels) and this does not.
+
+**One edge.** Every duration is declared in whole milliseconds and served on the
+scan, so an edge lands on the first scan at or after its deadline: late by less
+than one scan period, and **never early**. At 10 kHz that is 0–100 µs, on top of
+the crystal error already measured for state durations (+8 to +88 µs, 66 ppm at
+1000 ms — see above; it is the same `micros()`).
+
+**Many edges — the part worth checking.** That per-edge lateness must not
+accumulate, and the arithmetic that decides whether it does is one line: the next
+phase's deadline is measured from **the deadline just met**, never from the scan
+that noticed it. Measuring from the scan folds each edge's lateness into the
+schedule and adds it up, which turns a bounded error into a wrong *rate* — a free
+running timer slowly losing time, invisible in any test short enough to eyeball.
+
+That was the first implementation here, and it was wrong. `test_global_timers.cpp`
+("a free-running timer does not drift") now pins it: against the old arithmetic
+the error grows about 90 µs per cycle, monotonically, reaching 4320 µs by the
+forty-eighth edge — 47 of its 48 checks fail. VStim avoids the same trap the same
+way and says so (`m_NextPulse_HR += m_Periode_HR`).
+
+The tests tick on a **107 µs** grid rather than a 10 kHz one on purpose. 100 µs
+divides a millisecond exactly, so a scan-aligned test would place every deadline
+on a scan boundary and hide the entire question; 107 is co-prime with 1000, so
+each deadline falls between two scans and is noticed late by a different amount,
+which is what a real board looks like.
+
+**Falling a whole cycle behind resyncs rather than catching up.** After a long
+stall the schedule restarts from now and the missed cycles are dropped, because
+emitting a burst of truncated pulses to make up ones nobody saw is worse than
+losing them — for a valve it would be a dose nobody ordered.
+
+**Not measured on the board.** The figures above are structural, not timed. The
+scan floor here is 8.2 µs against a 100 µs period, so there is room, but nobody
+has yet put a set with eight running timers on an Uno R4 and read `worst_gap`
+back. That is the measurement to take before relying on eight of them at 20 kHz.
 
 ### Flashing
 

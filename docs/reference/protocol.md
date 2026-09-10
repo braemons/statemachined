@@ -176,6 +176,7 @@ Eight message types, in this order:
 set_begin
   graph_dist        × n_distributions        (see below on where these may go)
   graph_begin       × n_graphs, in slot order
+    graph_timer       × global timers, if any (set-scope; see below)
     graph_state       × that graph's n_states, in index order
       graph_transition  × this state's transitions
       graph_action      × this state's entry and exit actions
@@ -315,7 +316,7 @@ a dropped message from a silently mis-indexed graph into a refusal.
 state: the run ends there, its record is closed, and the dwell is drawn on
 arrival and reported in that state's visit as `drawn_ms`. What it decides is
 when the _next_ run may start, and whether anything acts on it is a property of
-the device rather than of the graph — see §3.7. The same graph therefore runs
+the device rather than of the graph — see §3.8. The same graph therefore runs
 unchanged under a host that arms every trial itself, which is the point of
 putting the timing here and the authority there: an inter-trial interval is a
 paradigm decision that has to replay with the trial it followed, and who arms
@@ -368,12 +369,23 @@ tie-break an experimenter can reason about from reading the graph.
 }
 ```
 
-| Field  | Type                                  |                                                                           |
-| ------ | ------------------------------------- | ------------------------------------------------------------------------- |
-| `on`   | `"entry"` or `"exit"`                 | When it runs                                                              |
-| `line` | `u8`                                  | Output line. Must be below the device's `n_output_lines`                  |
-| `kind` | `"high"` `"low"` `"toggle"` `"pulse"` |                                                                           |
-| `ms`   | `u16`                                 | `pulse` only: how long it stays high. Must be non-zero. Ignored otherwise |
+| Field   | Type                                                                             |                                                                                       |
+| ------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `on`    | `"entry"` or `"exit"`                                                            | When it runs                                                                          |
+| `line`  | `u8`                                                                             | Output line. Must be below the device's `n_output_lines`. Not sent by the timer kinds |
+| `kind`  | `"high"` `"low"` `"toggle"` `"pulse"` `"timer_start"` `"timer_cancel"`           |                                                                                       |
+| `ms`    | `u16`                                                                            | `pulse` only: how long it stays high. Must be non-zero. Ignored otherwise             |
+| `timer` | `u8`                                                                             | `timer_start` / `timer_cancel` only: which global timer. Must be below `max_timers`   |
+
+**`timer_start` and `timer_cancel` name a timer in `timer`, never a line in
+`line`.** They are two different index spaces with two different sizes, and the
+device bounds-checks them separately — a timer index validated against the
+output lines would let a set name a timer that does not exist and then do
+nothing at the moment it mattered. Refused as `bad_field` on `timer`.
+
+A `timer_start` on a timer that is already running is ignored rather than
+restarting it, so a state re-entered in a loop cannot keep pushing the same
+timer's end further away. See `graph_timer` below.
 
 **`pulse` is "high for at most `ms`", not "high for exactly `ms`".** It comes
 down on the device's own clock, at scan resolution, or when the state is left —
@@ -410,6 +422,84 @@ only one of the two comes down on its own.
 by the device, whatever the exit cause and whether or not the graph said so. An
 exit action is for what the graph wants _in addition_; a valve left open because
 a graph forgot one is not a failure mode this protocol admits.
+
+#### `graph_timer`
+
+A timer that runs **beside** the state machine rather than inside it.
+
+```json
+{
+  "msg_type": "graph_timer",
+  "message_id": 9,
+  "i": 0,
+  "width": 2,
+  "delay": 1,
+  "gap": 3,
+  "line": 0,
+  "loops": 3,
+  "none": 16,
+  "crc": "...."
+}
+```
+
+| Field         | Type   |                                                                                                                                                            |
+| ------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `i`           | `u8`   | Timer index. Must equal the number already declared — timers arrive in order, so a set cannot leave a hole an action could name                             |
+| `width`       | `u8`   | Distribution index: how long it stays high. **Required** — a timer that is never high is a line that never moves                                            |
+| `delay`       | `u8`   | Distribution index: onset delay between trigger and first pulse. Bpod's `OnsetDelay`                                                                        |
+| `gap`         | `u8`   | Distribution index: dead time between pulses when `loops` > 1. Bpod's `LoopInterval`                                                                        |
+| `line`        | `u8`   | A real output line driven alongside the timer's own bit. Optional: a timer that only gates a transition needs no pin                                        |
+| `loops`       | `u8`   | Pulses per trigger. Absent means 1. **`0` runs until something stops it**                                                                                   |
+| `all` `any` `none` | `u32` | What triggers it — the same three masks, over the same word, as a `graph_transition`. All absent means it is started only by a `timer_start` action     |
+| `active_low`  | `bool` | Drive `line` low while running rather than high. Applies to the pin only, never to the timer's own bit                                                      |
+| `trial_bound` | `bool` | Stop when the run that started it ends. Absent means it runs on                                                                                             |
+
+**A running timer is an input line that is high.** Timer _n_ holds input line
+`first_timer_line + n` (from `hello_ack`'s `caps`) high for as long as it runs.
+That is the whole design, and everything else follows from it:
+
+- A transition waits on a timer exactly as it waits on a lever. "When the
+  foreperiod timer ends" is `"none": <that line's bit>`; "while it is still
+  running, and the left lever is down" is a combination. No event vocabulary
+  exists for timers, on the wire or in the firmware, because none is needed.
+- `hold` and `level` apply to a timer as they apply to any other line.
+- **A timer can trigger another timer**, because the timers' own bits are in the
+  word the triggers are evaluated against. Bpod's `OnsetTrigger` and VStim's
+  divider chain, arrived at by writing nothing.
+
+Timers are counted **down from the top** of the 32-line word so that real lines
+grow up from zero and timers grow down from the end. `first_timer_line` is
+therefore not derivable from `n_input_lines`, and a host must read it rather
+than compute it — the point being that a graph means the same thing on a board
+with eight input lines and one with twenty.
+
+**Timers are set-scope, not graph-scope**, despite arriving inside a
+`graph_begin` block. The nesting is about ordering only: a timer names
+distributions, so it has to arrive after them. What it means is device-wide,
+because a timer outlives the run that started it and a run belongs to one graph.
+
+**Lifetime.** A timer keeps running when the trial that started it ends, unless
+it declared `trial_bound`. That is what lets one raise a line while the device
+sits between trials — which is the only way anything on a loopback rig can
+produce the edge a `start: "line"` trial waits for (§3.4). A new trial's start
+cancels whatever is still running, so a timer cannot leak into the run after
+next, and `fail_safe` stops all of them.
+
+**Accuracy.** Durations are whole milliseconds, served on the scan: an edge lands
+on the first scan at or after its deadline, so it is late by less than one scan
+period and never early. That lateness does **not** accumulate — each phase's
+deadline is measured from the deadline just met rather than from the scan that
+noticed it, so the Nth edge of a free-running timer is one scan late, not N. A
+timer that falls a whole cycle behind resyncs and drops the missed cycles rather
+than emitting a burst to catch up. See `docs/operations/hardware.md`, "Timer
+accuracy".
+
+There is no PWM. The line is driven high or low, never to an intensity.
+
+**Triggering.** The trigger fires on the predicate's false→true edge, like a
+transition, and never on the first word after a set is committed — there is no
+previous word for it to have been an edge against. A trigger arriving while the
+timer is already running is ignored.
 
 #### `graph_end`
 
@@ -481,7 +571,19 @@ The per-trial message. Arms the device for exactly one trial.
 | `graph_index` | `u8`                         | Which graph of the set this trial runs. **This is the switch**: every graph is already on the device, so changing paradigm between two trials is one field on a message that was going to be sent anyway. Absent means `0`. Out of range is refused with `bad_index` |
 | `cap_ms`      | `i32`                        | Wall-clock cap on the whole trial. `0` or absent means the device default. Validation cannot tell a 10 s foreperiod from a hang, so this stays regardless of the graph                                                                                               |
 | `start`       | `"serial"` `"line"` `"both"` | What may start the trial once armed                                                                                                                                                                                                                                  |
+| `start_line`  | `u8`                         | The input line whose **rising edge** starts the trial. Required when `start` admits `"line"`, ignored otherwise. Refused with `bad_index` if the board does not have that line, or if the wiring has it disabled                                                      |
+| `timers`      | `u32`                        | Optional. Which global timers this trial runs, one bit per timer index. **Overrides the device's mask for exactly this trial** and is reverted when it ends, like `patch`. Absent leaves the device's own in force  |
 | `patch`       | array                        | Optional per-trial overrides of distribution parameters, by pool index. Only `a`, `b`, `c` may be patched; `kind` may not. Reverted when the trial ends                                                                                                              |
+
+`timers` is to a timer what `graph_index` is to a graph: the field a trial type
+uses to select one, on a message the device was going to receive anyway, so
+mapping a trial type onto a set of timers costs nothing in the inter-trial
+interval. It is an override rather than a setting for the same reason `patch` is
+— a mask that outlived its trial would be a timer running, or not running, that
+nobody could account for afterwards. The device-level mask is `timers` (§3.6).
+
+VStim carries the same two things separately: `m_TimerActive` switches a timer
+on for the rig, and `m_StimList` says which trials it takes part in.
 
 `patch` indices are into the set's shared distribution pool, like every other
 distribution index. It is why a set does not have to be re-uploaded when only
@@ -511,6 +613,49 @@ Answered with `armed`, or `error`.
 `start` is refused unless the device is armed for that `trial_id` and the
 configured `start` source admits serial. **No trial runs that the device was not
 confirmed configured for.**
+
+#### Starting on a line
+
+A trial armed with `start` of `"line"` or `"both"` begins on the **rising edge**
+of `start_line` — the scan at which that bit is set having been clear on the
+scan before.
+
+An edge and not a level, because the alternative is unusable: a line still
+asserted from whatever came before would start the trial on the first scan after
+`configure`, which is the host's timing rather than the subject's. So a line that
+is already high when the trial is armed starts nothing until it is released and
+asserted again.
+
+The bit is read from the **conditioned** word, so `invert` has been applied and a
+debounce, if that line has one, has already been waited out. It is the same edge
+the paradigm's own transitions would see.
+
+The device announces it with an unsolicited `started` — the same message the
+serial path replies with, minus `in_reply_to`:
+
+```json
+{"msg_type":"started","message_id":88,"trial_id":193,"at_us":41902133,"by":"line","line":3,"crc":"...."}
+```
+
+`by` is `"line"` or `"serial"`, on both forms, so a host reads one field rather
+than inferring the answer from whether the message carried an `in_reply_to`.
+
+**On this form `at_us` is the start of the trial**, not an acknowledgement of
+anything: it is the timestamp of the scan that saw the edge, which is the
+timestamp that same scan stamped the entry state's `entered_us` with. The edge,
+the timestamp and the pins the entry action drives are one call in the scan, so
+the latency from pin to first output is one scan period and nothing else. (The
+serial form's `at_us` means something weaker; see the note below.)
+
+One edge starts one trial. The arming is spent by the edge that uses it, so the
+line going high again mid-trial is an ordinary input like any other, and the next
+trial waits for its own `configure`. A link lost disarms a trial that is still
+waiting, so a board does not start a run for a host that has gone.
+
+A trial armed on a line that never rises simply waits. There is nothing to time
+out against on the device — `cap_ms` caps the trial, and the trial has not
+begun — so the host owns that deadline. Sending another `configure` re-arms and
+replaces it.
 
 `cancel` takes a `reason` of `"host"`, `"link_lost"`, `"abort_line"` or
 `"trial_timeout"`; only `"host"` is legal from the host, the others being the
@@ -580,7 +725,7 @@ The wiring is read into a copy and installed whole, so a message that turns out
 to be malformed halfway through leaves the board wired the way it was. A typo in
 a debounce must not take the safe levels with it.
 
-> **It survives a power cycle only if it is saved.** §3.8's `save` writes the
+> **It survives a power cycle only if it is saved.** §3.9's `save` writes the
 > wiring to the board's own storage, and the next boot reads it back before it
 > drives a single line — which is what makes a rig with an active-low valve
 > driver fail safe to _its_ levels rather than to all-low. A board that has
@@ -589,7 +734,35 @@ a debounce must not take the safe levels with it.
 > has to stay correct on its own. `hello_ack`'s `has_wiring` is how a host tells
 > a configured board from one running defaults.
 
-### 3.6 `pins`
+### 3.6 `timers`
+
+```json
+{ "msg_type": "timers", "message_id": 46, "enable": 5, "crc": "...." }
+```
+
+| Field    | Type  |                                                      |
+| -------- | ----- | ------------------------------------------------------ |
+| `enable` | `u32` | One bit per global timer index. `1` means it may run   |
+
+The device-level mask, which holds **between** trials — where a free-running
+timer is doing most of its work, and which a per-trial field could not describe.
+A single trial overrides it with `configure`'s `timers` (§3.3).
+
+Answered with `ack` carrying `enable` and `n_timers`, so a host never has to
+infer what took: a mask naming timers the committed set does not declare is
+accepted and simply has no effect, and the reply says what the device holds.
+
+**Disabling a timer that is running stops it and puts its line back**, rather
+than letting it finish. A timer holding a line up that the new configuration
+does not account for is not something a host can plan a trial around, and "it
+will drop in another 400 ms" is not an answer.
+
+Refused as `busy` while a trial is armed or running, exactly like `wiring` and
+for the same reason: it changes what the scan does, and a timer switched off
+under a running trial would move a timing that trial's record could not account
+for.
+
+### 3.7 `pins`
 
 ```json
 { "msg_type": "pins", "message_id": 9, "dir": "in", "crc": "...." }
@@ -622,7 +795,7 @@ thing. One direction always fits. A device whose labels somehow do not answers
 asked at any time — including during a trial, though a host with any sense asks
 once per connection.
 
-### 3.7 `autorun`
+### 3.8 `autorun`
 
 ```json
 {
@@ -652,7 +825,7 @@ dwell the terminal state it just reached declared (§3.2, `relight`).
 | `cap_ms`         | `i32`     | Wall-clock cap per run, as `configure`'s. It matters more here — nobody is watching for a graph that has hung                                                                                                                                                      |
 | `seed`           | hex `u64` | The stream every autorun trial's randomness is derived from. Carried here rather than taken from the session, because a self-driving board may never receive a `hello` and so may never be given one                                                               |
 | `first_trial_id` | `u32`     | Where the ids it assigns start, so a host can tell runs the board made on its own from its own                                                                                                                                                                     |
-| `start_now`      | bool      | Default `true`. `false` records that this board should drive itself **without starting it** — which is how a rig is set up, because §3.8's `save` is refused on a board that is running and a board arming its own trials is never idle. Enable, save, power cycle |
+| `start_now`      | bool      | Default `true`. `false` records that this board should drive itself **without starting it** — which is how a rig is set up, because §3.9's `save` is refused on a board that is running and a board arming its own trials is never idle. Enable, save, power cycle |
 
 Answered with `autorun_ok`, carrying `enabled`, `active`, `graph_index`,
 `cap_ms` and `next_trial_id`. **`enabled` and `active` are not the same fact:**
@@ -688,7 +861,7 @@ detach" rather than a fault: nothing is cancelled and nothing fails safe. A
 board that was _not_ told to drive itself behaves exactly as it always has — the
 trial is cancelled as `link_lost` and every line goes to its safe level.
 
-### 3.8 `save`
+### 3.9 `save`
 
 ```json
 { "msg_type": "save", "message_id": 11, "crc": "...." }
@@ -778,7 +951,9 @@ saved settings is not one.
     "max_distributions": 32,
     "max_choice_options": 32,
     "max_path": 255,
-    "max_graphs": 20
+    "max_graphs": 20,
+    "max_timers": 8,
+    "first_timer_line": 24
   },
   "crc": "...."
 }
@@ -790,6 +965,15 @@ resolution it is actually getting rather than the one the design hoped for.
 `caps` holds the device's compile-time capacities. The bridge checks a graph
 against them before uploading, which turns "refused at `graph_end`" into
 "refused before the first byte" — a better error at no cost.
+
+`first_timer_line` is the odd one out: it is not a capacity but a layout, and it
+is here because nothing else can tell a host where the timers' bits are. Global
+timer _n_ holds input line `first_timer_line + n` high while it runs (see
+`graph_timer` in §3.2), and the timers are counted **down from the top** of the
+32-line word so that real lines grow up from zero and timers grow down from the
+end. That is deliberate: a base relative to a board's own `n_input_lines` would
+silently renumber every timer when a graph moved between a board with eight
+input lines and one with twenty.
 
 They are **read, never assumed**, and `max_path` is the one where that has
 already mattered: the reference board briefly shipped two images, one of which
@@ -934,7 +1118,7 @@ host; two shapes for one fact is how the two drift apart.
 
 | Field      | Type  |                                                                                                                                                                                                                                                              |
 | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `trial_id` | `u32` | The id from `configure`. **`0` when there was no host-configured trial** — a line-started run before anything assigned an id. A board arming its own trials assigns them itself (§3.7), so those carry a real id. The trace is still worth having either way |
+| `trial_id` | `u32` | The id from `configure`. **`0` when there was no host-configured trial** — a line-started run before anything assigned an id. A board arming its own trials assigns them itself (§3.8), so those carry a real id. The trace is still worth having either way |
 | `seq`      | `u32` | The visit's ordinal within the run, from `0`. A gap is what makes a dropped visit **detectable** rather than a hole nobody notices                                                                                                                           |
 
 **Emitted when the state is left, not when it is entered**, because a visit's
@@ -980,7 +1164,15 @@ may parse it.
 `state_report` answers `state` with the current state index, uptime, the
 nested `graph` object (`has_set`, `set_version`, `n_graphs`, `index`),
 `has_wiring` as in §4.1, `autorun` — whether the board is arming its own trials
-(§3.7) — the counts of dropped and unusable lines, and a nested `scan` object.
+(§3.8) — the counts of dropped and unusable lines, and a nested `scan` object.
+
+The `scan` object also carries `timers_enabled` and `timers_running`. They are
+in there rather than at the top level because the top level of `state_report` is
+at the reader's member limit exactly, and `scan` is the object that already
+holds what the scan is doing. `timers_enabled` is the mask **in force now**, so
+during a trial that overrode it this is the trial's mask and not the device's.
+`timers_running` is one bit per timer actually in flight, onset delay included —
+a timer counting down its delay is running, it is simply not high yet.
 
 `link_state` is what the session is doing: `0` greeting (nothing but `hello` is
 answered), `1` idle, `2` armed, `3` running, `4` relighting — the dwell between
@@ -1029,7 +1221,7 @@ difference is a response window measured wrongly. A bridge should surface it.
 }
 ```
 
-The answer to §3.6. `pins[i]` is what is written on the board beside line `i` of
+The answer to §3.7. `pins[i]` is what is written on the board beside line `i` of
 that direction — silkscreen, not an Arduino pin number: `"A0"` is pin 14 to the
 core and `A0` to the person holding the wire, and only one of those is any use
 on a bench.

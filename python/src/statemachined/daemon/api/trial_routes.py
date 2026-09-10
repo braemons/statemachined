@@ -58,6 +58,10 @@ class ConfigureTrialRequest(BaseModel):
     #: validation cannot tell a ten-second foreperiod from a hang.
     cap_milliseconds: int = Field(default=0, ge=0)
     start_source: str = "serial"
+    #: The input line whose rising edge starts the trial. Required when
+    #: `start_source` admits `"line"`, ignored otherwise, and refused by the
+    #: device if the board does not have it or the wiring has it disabled.
+    start_line: int | None = Field(default=None, ge=0)
     distribution_patches: list[DistributionPatch] = Field(default_factory=list)
 
 
@@ -90,6 +94,7 @@ def configure_trial(request: Request, body: ConfigureTrialRequest) -> dict:
             graph_name=graph_name,
             cap_milliseconds=body.cap_milliseconds,
             start_source=body.start_source,
+            start_line=body.start_line,
             distribution_patches=_patches_as_wire_fields(service, body, graph_name),
         )
     except NoGraphSetCommitted as exc:

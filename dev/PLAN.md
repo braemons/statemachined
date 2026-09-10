@@ -760,15 +760,35 @@ the trial type store. **Open: which.**
 2. **Who authors a graph?** JSON by hand is fine for three states and unpleasant
    for fifteen. A Python builder in the bridge is cheap; a visual editor in
    triald's web UI is not, and triald has a no-build-step, no-CDN rule.
-3. **Global timers and counters — now the biggest open question.** I had
-   deferred these. Reading the firmware weakens that: Bpod gives each of them a
-   *dedicated transition matrix* (`GlobalTimerStartMatrix`, `GlobalTimerEndMatrix`,
-   `GlobalCounterMatrix`) and ships 16 timers and 8 counters by default. They are
-   first-class there, not bolted on, which is evidence that real paradigms need
-   them — "house light off for 5 s regardless of state", "abort the block after 3
-   consecutive errors". Counters arguably belong in triald, which owns counting.
-   Timers do not: a timer spanning states cannot live on the slow bus. **Proposal:
-   global timers in v1, counters deferred to triald.** Needs your call.
+3. **Global timers — settled and shipped. Counters still deferred.** The
+   proposal below was accepted: timers in v1, counters to triald.
+
+   What shipped is **not** Bpod's shape. Bpod gives timers a dedicated event
+   vocabulary (`GlobalTimer1_Start`, `GlobalTimer1_End`) and dedicated matrices
+   beside the input one, which is the same feature bought twice and part of why
+   it needs a Due. VStim's is better and is what we took: its `TimerQueue` of
+   sixteen (`VStimLib/Timer/`) reads an input virtual trigger line and writes an
+   output one, in the same flat 68-line space its intervals transition on
+   (`VStimLib/Shared/Constants.h`). So here **a running timer is an input line
+   that is high** — `timer_line(n)` in `firmware/core/config.h` — and the
+   predicate in `transition.h` waits on one exactly as it waits on a lever. No
+   new matching path exists anywhere, which is what kept the cost to two
+   compares on a scan where nothing moved.
+
+   Also from VStim, and not from Bpod: the trigger is a **predicate**, so a
+   timer can start another timer (Bpod's `OnsetTrigger`, written by writing
+   nothing); `active_low` is `m_PulsePolarity`; `trial_bound` is `m_TrialBound`,
+   per timer rather than per device; and `loops` + `gap` is both Bpod's
+   `Loop`/`LoopInterval` and the split reward in `Valve.cpp`, whose whole point
+   is delivering an exact total volume in pieces.
+
+   Deliberately **not** ported: VStim's `FrequencyDivider`, which counts input
+   pulses. Counting is what this item assigns to triald, and a divider is a
+   counter with an output stage.
+
+   Eight rather than sixteen, because each one costs a bit of the 32-line input
+   word and the reference board has eight real input lines. `caps.max_timers`
+   and `caps.first_timer_line` say so on the wire, so a host reads both.
 4. **Analogue inputs.** Lick detection is often capacitive or a beam-break, both
    digital, but a load cell or a photodiode is not. A threshold-crossing input
    would fold into the same input word with no change to the condition model.

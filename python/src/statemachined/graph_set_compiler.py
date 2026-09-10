@@ -80,6 +80,12 @@ class DeviceCapabilities(BaseModel):
     max_choice_options: int = Field(ge=0)
     max_path: int = Field(gt=0)
     max_graphs: int = Field(gt=0, default=1)
+    max_timers: int = Field(ge=0, default=0)
+    #: Which input line the first global timer holds high. Not derivable from
+    #: the line count: the timers are counted down from the top of the word, so
+    #: that a graph means the same thing on a board with eight inputs and one
+    #: with twenty. The device reports it because nothing else can know it.
+    first_timer_line: int = Field(ge=0, default=24)
 
     #: Not part of `caps` on the wire -- they are top-level members of
     #: `hello_ack` -- but they belong to the same question, so
@@ -234,8 +240,20 @@ def _distribution_wire_fields(index: int, distribution: DurationDistribution) ->
 
 
 def _output_action_wire_fields(
-    action: OutputActionSpecification, when: str, line_map: LineMap, graph_name: str
+    action: OutputActionSpecification,
+    when: str,
+    line_map: LineMap,
+    graph_name: str,
+    timer_index_by_name: dict[str, int],
 ) -> dict[str, object]:
+    if action.kind in ("timer_start", "timer_cancel"):
+        # `timer`, not `line`: two index spaces of different sizes, and the
+        # device bounds-checks them separately for that reason.
+        if action.timer not in timer_index_by_name:
+            raise GraphSetCompilationError(
+                f"graph {graph_name!r}: no global timer called {action.timer!r}"
+            )
+        return {"on": when, "kind": action.kind, "timer": timer_index_by_name[action.timer]}
     try:
         line_index = line_map.output_line_index_for_name(action.line)
     except ValueError as exc:
@@ -244,6 +262,28 @@ def _output_action_wire_fields(
     if action.kind == "pulse":
         fields["ms"] = action.pulse_ms
     return fields
+
+
+def _predicate_mask(
+    line_names: list[str],
+    line_map: LineMap,
+    timer_index_by_name: dict[str, int],
+    first_timer_line: int,
+) -> int:
+    """The mask a predicate over these names becomes, timers included.
+
+    A timer name and an input line name live in one namespace here because they
+    live in one word on the device -- a running timer *is* a high input line.
+    Timers are looked up first so that a rig which happens to name a line after
+    a timer cannot silently shadow it; the compiler refuses that below.
+    """
+    mask = 0
+    for name in line_names:
+        if name in timer_index_by_name:
+            mask |= 1 << (first_timer_line + timer_index_by_name[name])
+        else:
+            mask |= 1 << line_map.input_line_index_for_name(name)
+    return mask
 
 
 def _state_wire_fields(
@@ -313,6 +353,34 @@ def compile_graph_set_for_device(
             "a set names the same graph twice: " + ", ".join(sorted(duplicate_names))
         )
 
+    # Timer names are pooled across the set, in declaration order, because the
+    # device's timers are. A timer outlives the run that started it, so it
+    # cannot belong to one graph -- the nesting in the source is about where its
+    # distributions are declared, nothing more. See model/graph_definition.py.
+    timer_index_by_name: dict[str, int] = {}
+    for graph in graphs:
+        for timer_name in graph.timers:
+            if timer_name in timer_index_by_name:
+                raise GraphSetCompilationError(
+                    f"a set declares the global timer {timer_name!r} twice"
+                )
+            timer_index_by_name[timer_name] = len(timer_index_by_name)
+    if len(timer_index_by_name) > capabilities.max_timers:
+        raise GraphSetCompilationError(
+            f"this session declares {len(timer_index_by_name)} global timers and the "
+            f"board holds {capabilities.max_timers}"
+        )
+    # One namespace, because the device has one word: a predicate naming a timer
+    # and a predicate naming a lever compile to bits of the same mask. A rig
+    # whose input line shares a timer's name would make every such predicate
+    # ambiguous, so it is refused here rather than resolved by a rule nobody
+    # would remember.
+    shadowed = sorted(set(timer_index_by_name) & {line.name for line in line_map.input_lines})
+    if shadowed:
+        raise GraphSetCompilationError(
+            "these names are both an input line and a global timer: " + ", ".join(shadowed)
+        )
+
     pool = _SharedDistributionPool()
     compiled_graphs: list[CompiledGraph] = []
     graph_upload_messages: list[UploadMessage] = []
@@ -337,6 +405,50 @@ def compile_graph_set_for_device(
                 },
             )
         )
+
+        # Timers before states, because a state's actions may name one, and
+        # after the distributions this graph declares, because a timer names
+        # those. The device checks both, so the order here is what keeps a
+        # legal set from being refused for the wrong reason.
+        for timer_name, timer in graph.timers.items():
+            fields: dict[str, object] = {
+                "i": timer_index_by_name[timer_name],
+                "width": distribution_pool_index_by_name[timer.width],
+            }
+            if timer.delay is not None:
+                fields["delay"] = distribution_pool_index_by_name[timer.delay]
+            if timer.gap is not None:
+                fields["gap"] = distribution_pool_index_by_name[timer.gap]
+            if timer.line:
+                try:
+                    fields["line"] = line_map.output_line_index_for_name(timer.line)
+                except ValueError as exc:
+                    raise GraphSetCompilationError(
+                        f"graph {graph.name!r}, timer {timer_name!r}: {exc}"
+                    ) from None
+            if timer.when is not None:
+                for predicate_key, names in (
+                    ("all", timer.when.all),
+                    ("any", timer.when.any),
+                    ("none", timer.when.none),
+                ):
+                    if not names:
+                        continue
+                    try:
+                        fields[predicate_key] = _predicate_mask(
+                            names, line_map, timer_index_by_name, capabilities.first_timer_line
+                        )
+                    except ValueError as exc:
+                        raise GraphSetCompilationError(
+                            f"graph {graph.name!r}, timer {timer_name!r}: {exc}"
+                        ) from None
+            if timer.loops != 1:
+                fields["loops"] = timer.loops
+            if timer.active_low:
+                fields["active_low"] = True
+            if timer.trial_bound:
+                fields["trial_bound"] = True
+            graph_upload_messages.append(UploadMessage(MsgType.GRAPH_TIMER, fields))
 
         transition_targets_by_state_index: list[list[str]] = []
         graph_transition_count = 0
@@ -369,7 +481,15 @@ def compile_graph_set_for_device(
                     if not line_names:
                         continue
                     try:
-                        fields[predicate_key] = line_map.input_line_mask_for_names(line_names)
+                        # Timers are in this word too, so "when the foreperiod
+                        # timer ends" is `none: [foreperiod]` and needs no
+                        # vocabulary of its own.
+                        fields[predicate_key] = _predicate_mask(
+                            line_names,
+                            line_map,
+                            timer_index_by_name,
+                            capabilities.first_timer_line,
+                        )
                     except ValueError as exc:
                         raise GraphSetCompilationError(
                             f"graph {graph.name!r}, state {state.name!r}: {exc}"
@@ -389,7 +509,9 @@ def compile_graph_set_for_device(
                     graph_upload_messages.append(
                         UploadMessage(
                             MsgType.GRAPH_ACTION,
-                            _output_action_wire_fields(action, when, line_map, graph.name),
+                            _output_action_wire_fields(
+                                action, when, line_map, graph.name, timer_index_by_name
+                            ),
                         )
                     )
                     graph_output_action_count += 1

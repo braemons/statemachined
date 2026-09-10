@@ -33,6 +33,8 @@ def reference_board_capabilities(**overrides) -> DeviceCapabilities:
         "max_choice_options": 32,
         "max_path": 255,
         "max_graphs": 20,
+        "max_timers": 8,
+        "first_timer_line": 24,
         "input_line_count": 8,
         "output_line_count": 8,
     }
@@ -424,3 +426,141 @@ def test_the_compiled_graph_can_read_a_result_back():
     compiled = compile_one(graph_named("go-nogo")).graphs_by_slot[0]
     assert compiled.state_names_by_index == ["Wait", "Cue", "Hit", "Aborted"]
     assert compiled.transition_target_names_by_state_index == [["Aborted"], ["Hit"], [], []]
+
+
+# --------------------------------------------------------- global timers ---
+
+
+def a_graph_with_a_timer(**timer_overrides) -> GraphDefinition:
+    """One state, one timer, and enough distributions to name."""
+    timer = {"width": "open", "delay": "foreperiod", "line": "reward_valve"}
+    timer.update(timer_overrides)
+    return GraphDefinition.model_validate(
+        {
+            "name": "with-a-timer",
+            "entry": "done",
+            "distributions": {
+                "foreperiod": {"kind": "fixed", "duration_ms": 200},
+                "open": {"kind": "fixed", "duration_ms": 40},
+            },
+            "timers": {"reward": timer},
+            "states": [
+                {
+                    "name": "done",
+                    "outcome": "HIT",
+                    "on_entry": [{"kind": "timer_start", "timer": "reward"}],
+                }
+            ],
+        }
+    )
+
+
+def messages_of(compiled, msg_type) -> list[dict]:
+    return [m.fields for m in compiled.upload_messages if m.msg_type == msg_type]
+
+
+def test_a_timer_becomes_a_graph_timer_message_naming_pooled_distributions():
+    compiled = compile_graph_set_for_device(
+        [a_graph_with_a_timer()], rig_line_map(), reference_board_capabilities(), set_version=1
+    )
+    timers = messages_of(compiled, MsgType.GRAPH_TIMER)
+    assert len(timers) == 1
+    # Distributions by pool index, the output line by rig index, and nothing
+    # sent for the fields that were left at their defaults.
+    assert timers[0] == {"i": 0, "width": 1, "delay": 0, "line": 3}
+
+
+def test_a_timer_start_action_names_a_timer_and_not_a_line():
+    # Two index spaces of different sizes. The device bounds-checks them
+    # separately, so the wire has to say which one it means.
+    compiled = compile_graph_set_for_device(
+        [a_graph_with_a_timer()], rig_line_map(), reference_board_capabilities(), set_version=1
+    )
+    actions = messages_of(compiled, MsgType.GRAPH_ACTION)
+    assert actions == [{"on": "entry", "kind": "timer_start", "timer": 0}]
+
+
+def test_the_timer_message_precedes_the_states_that_name_it():
+    compiled = compile_graph_set_for_device(
+        [a_graph_with_a_timer()], rig_line_map(), reference_board_capabilities(), set_version=1
+    )
+    order = [m.msg_type for m in compiled.upload_messages]
+    assert order.index(MsgType.GRAPH_TIMER) < order.index(MsgType.GRAPH_STATE)
+    # And after the distributions it names, which the device checks.
+    assert order.index(MsgType.GRAPH_DIST) < order.index(MsgType.GRAPH_TIMER)
+
+
+def test_a_predicate_may_name_a_timer_because_a_running_timer_is_a_high_line():
+    # The whole design in one assertion: "when the reward timer ends" is
+    # `none: [reward]`, and it compiles to a bit of the same mask a lever does.
+    graph = GraphDefinition.model_validate(
+        {
+            "name": "waits-on-a-timer",
+            "entry": "wait",
+            "distributions": {"open": {"kind": "fixed", "duration_ms": 40}},
+            "timers": {"reward": {"width": "open"}},
+            "states": [
+                {
+                    "name": "wait",
+                    "transitions": [{"when": {"none": ["reward"], "all": ["lever_left"]}, "goto": "done"}],
+                },
+                {"name": "done", "outcome": "HIT"},
+            ],
+        }
+    )
+    compiled = compile_graph_set_for_device(
+        [graph], rig_line_map(), reference_board_capabilities(), set_version=1
+    )
+    transitions = messages_of(compiled, MsgType.GRAPH_TRANSITION)
+    assert transitions[0]["none"] == 1 << 24  # first_timer_line + 0
+    assert transitions[0]["all"] == 1 << 4  # lever_left, in the same word
+
+
+def test_a_timer_the_board_cannot_hold_is_refused_with_both_numbers():
+    graph = a_graph_with_a_timer()
+    with pytest.raises(GraphSetCompilationError, match="1 global timers and the board holds 0"):
+        compile_graph_set_for_device(
+            [graph],
+            rig_line_map(),
+            reference_board_capabilities(max_timers=0),
+            set_version=1,
+        )
+
+
+def test_a_timer_sharing_a_name_with_an_input_line_is_refused():
+    # One namespace, because the device has one word. Resolving the collision by
+    # a precedence rule would make every predicate naming it ambiguous to read.
+    graph = GraphDefinition.model_validate(
+        {
+            "name": "shadowed",
+            "entry": "done",
+            "distributions": {"open": {"kind": "fixed", "duration_ms": 40}},
+            "timers": {"abort": {"width": "open"}},
+            "states": [{"name": "done", "outcome": "HIT"}],
+        }
+    )
+    with pytest.raises(GraphSetCompilationError, match="both an input line and a global timer"):
+        compile_graph_set_for_device(
+            [graph], rig_line_map(), reference_board_capabilities(), set_version=1
+        )
+
+
+def test_an_action_naming_a_timer_that_does_not_exist_is_refused():
+    graph = GraphDefinition.model_validate(
+        {
+            "name": "bad-action",
+            "entry": "done",
+            "distributions": {"open": {"kind": "fixed", "duration_ms": 40}},
+            "states": [
+                {
+                    "name": "done",
+                    "outcome": "HIT",
+                    "on_entry": [{"kind": "timer_start", "timer": "nobody"}],
+                }
+            ],
+        }
+    )
+    with pytest.raises(GraphSetCompilationError, match="no global timer called 'nobody'"):
+        compile_graph_set_for_device(
+            [graph], rig_line_map(), reference_board_capabilities(), set_version=1
+        )

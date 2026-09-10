@@ -23,6 +23,7 @@
 #include "graph/graph_set.h"
 #include "io/settings_store.h"
 #include "io/wiring.h"
+#include "machine/global_timers.h"
 #include "protocol/framing.h"
 #include "protocol/graph_builder.h"
 #include "protocol/json.h"
@@ -157,6 +158,51 @@ class HostLinkSession {
   /// outcome without having to ask.
   OutputUpdate advance_trial(LineBitmask word, Microseconds now_us);
 
+  /// Serialise and send whatever visits advance_trial() has recorded since the
+  /// last call. **Belongs in the foreground, next to the other link work.**
+  ///
+  /// This used to happen inside advance_trial() itself, which on a board means
+  /// inside the scan ISR -- and building a ~130 byte JSON line with a CRC on it
+  /// costs about 120 us there. That does not merely add jitter: the scan
+  /// overruns its own tick, so the *next* scan lands late, and the state
+  /// machine's response to a line went from one scan period to 220 us. Measured
+  /// both ways on an Uno R4 Minima: 222 us with the stream on the ISR, exactly
+  /// 100 us with it off, and insensitive to how much else the entry action did.
+  /// See docs/operations/hardware.md, "Response latency and duration accuracy".
+  ///
+  /// It also put ReplySink::send_line() -- which spins when the transmit queue
+  /// is full -- on the interrupt, which is the one context its own contract
+  /// says it must not be on. Both go away by moving the formatting here: the
+  /// ISR copies sixteen bytes into a ring and returns.
+  /// Send whatever the trial loop has produced and not yet put on the wire:
+  /// the visits, then the result of a run that has ended. **The one call the
+  /// foreground owes the device every pass.**
+  ///
+  /// Everything that formats a line lives behind this, and that is the point.
+  /// `advance_trial()` is the timer interrupt on a board; ReplySink::send_line()
+  /// spins when the transmit queue is full; and a spin inside an interrupt,
+  /// waiting on the foreground that drains that queue, does not end. Keeping
+  /// both the visit stream and the result out here is what makes that
+  /// unreachable rather than unlikely -- and it is what took the board's answer
+  /// to a line from 220 us to one scan period. See drain_visits().
+  ///
+  /// `max_visit_lines` paces the visit half; the result follows once the ring
+  /// is empty, however many passes that takes.
+  void drain_outbound(uint8_t max_visit_lines = 0);
+
+  /// `max_lines` of 0 means "everything waiting". Pass a small number from a
+  /// loop that also pushes bytes at the link: emptying a full ring in one pass
+  /// hands the transmit queue more lines than it holds, and ReplySink::send_line
+  /// then spins waiting for the wire -- 21 such stalls on the reference board,
+  /// where the budget for them is zero. One per pass, interleaved with the
+  /// drain, moves the same lines with none.
+  void drain_visits(uint8_t max_lines = 0);
+
+  /// Visits the ring had no room for. Reported in `state_report` beside the
+  /// scan's own health, because it is the same question -- is this device
+  /// keeping up -- and the host can already see the gap in `seq`.
+  uint32_t dropped_visits() const { return dropped_visits_; }
+
   /// The host is gone -- the port closed, or the heartbeat lapsed. Cancels a
   /// trial in flight as `link_lost` and returns the outputs that owes, which
   /// the caller should apply along with fail_safe().
@@ -277,8 +323,8 @@ class HostLinkSession {
   // reply, which is what makes a retry decidable for the bridge.
   void on_hello(const JsonObject& m, uint16_t message_id, Microseconds now_us);
   void on_upload_message(const JsonObject& m, JsonSpan covered, uint16_t message_id,
-                         MsgType type);
-  void on_configure(const JsonObject& m, uint16_t message_id);
+                         Microseconds now_us, MsgType type);
+  void on_configure(const JsonObject& m, uint16_t message_id, Microseconds now_us);
   void on_start(const JsonObject& m, uint16_t message_id, Microseconds now_us);
   void on_cancel(const JsonObject& m, uint16_t message_id, Microseconds now_us);
   void on_ping(uint16_t message_id, Microseconds now_us);
@@ -319,7 +365,14 @@ class HostLinkSession {
   void send_orphan_error(const char* code, const char* message, const char* context);
   void send_ack(uint16_t message_id);
   void emit_result();
-  void emit_visit(const StateVisit& v, uint32_t seq);
+  /// The unsolicited `started` for a trial the line began. Foreground only --
+  /// the edge that sets `line_start_pending_` is found in the trial loop.
+  void emit_line_started();
+
+  /// Take a completed visit from whoever is advancing the trial. Cheap on
+  /// purpose: a struct copy and two index bumps, because on a board this is the
+  /// scan ISR. The formatting is drain_visits()' job.
+  void record_visit(const StateVisit& v, uint32_t seq);
 
   /// Points the runner's visit sink back here. Called wherever `runner_` is
   /// rebuilt -- which is on every commit and every configure, because
@@ -332,17 +385,64 @@ class HostLinkSession {
   /// state's output actions, which the scan applies.
   OutputUpdate start_autorun_trial(LineBitmask word, Microseconds now_us);
 
+  /// Which state a trial that has been started but not yet scanned is in: the
+  /// live graph's entry state, per-graph, or kNoState if there is no graph.
+  /// What state_report answers while `start_pending_` is up.
+  StateIndex entry_state_of_live_graph() const;
+
+  /// Complete a `start` the scan has not reached yet, and return what its entry
+  /// state owes the pins. A no-op, returning nothing, if none is pending.
+  ///
+  /// The ordinary path is advance_trial(), which is the whole point: a trial
+  /// begins on the scan that drives its entry action's pins. But a cancel or a
+  /// link loss can arrive inside that window -- under one scan period, and only
+  /// from a host that did not wait for `started` -- and a cancel has to have a
+  /// trial to cancel, or the run ends with no account of it. So it is started
+  /// here, on the spot, and ended by the caller exactly as any other running
+  /// trial is.
+  OutputUpdate start_now_if_pending(Microseconds now_us);
+
   /// The machine reports a visit; the session says whose trial it was. A
   /// separate object rather than making the session a VisitSink, so that
   /// `on_visit` is not part of what a caller can reach.
   class VisitRelay : public VisitSink {
    public:
     explicit VisitRelay(HostLinkSession* s) : session_(s) {}
-    void on_visit(const StateVisit& v, uint32_t seq) override { session_->emit_visit(v, seq); }
+    void on_visit(const StateVisit& v, uint32_t seq) override {
+      session_->record_visit(v, seq);
+    }
 
    private:
     HostLinkSession* session_;
   };
+
+  /// The machine applies a TimerStart or TimerCancel action; the bank does the
+  /// work. Separate from the session for the same reason VisitRelay is: the
+  /// callback is the machine's business and not part of the session's surface.
+  ///
+  /// The outputs it produces are accumulated rather than returned, because the
+  /// machine has no way to give them back -- it is midway through building its
+  /// own OutputUpdate. advance_trial() merges them in on the same scan, so a
+  /// timer's line and the entry action beside it move together.
+  class TimerRelay : public TimerActionSink {
+   public:
+    explicit TimerRelay(HostLinkSession* s) : session_(s) {}
+    void on_timer_action(uint8_t timer, bool start, Microseconds now_us) override {
+      session_->run_timer_action(timer, start, now_us);
+    }
+
+   private:
+    HostLinkSession* session_;
+  };
+
+  void run_timer_action(uint8_t timer, bool start, Microseconds now_us);
+
+  /// Put the device's own enable mask back after a trial that overrode it.
+  /// A no-op when `configure` did not, which is the common case.
+  void revert_timer_patch(Microseconds now_us);
+
+  /// `timers`: which global timers may run. See GlobalTimerBank::set_enabled.
+  void on_timers(const JsonObject& m, uint16_t message_id, Microseconds now_us);
 
   /// Finish, frame and send whatever is in the transmit buffer, remembering it
   /// as the answer to `message_id` so a retry can be answered from the cache.
@@ -371,11 +471,52 @@ class HostLinkSession {
 
   TrialRunner runner_;
   VisitRelay visit_relay_{this};
+  TimerRelay timer_relay_{this};
+
+  /// The global timers. Here rather than in StateMachine because they outlive
+  /// the run: the session builds a new TrialRunner per trial, which would reset
+  /// them at every boundary. See machine/global_timers.h.
+  GlobalTimerBank timers_;
+  /// Outputs a TimerStart or TimerCancel action produced while the machine was
+  /// midway through its own update, waiting to be merged into the same scan's.
+  OutputUpdate timer_action_ops_;
+
+  /// The enable mask the device holds between trials, and the one this trial
+  /// was configured with.
+  ///
+  /// Two, so that `configure`'s override lasts exactly one trial and the device
+  /// goes back to what it was told at rig level -- the same discipline as a
+  /// distribution `patch`, and for the same reason: a mask that outlived its
+  /// trial would be a timer running, or not running, that nobody could account
+  /// for afterwards.
+  uint32_t timers_enabled_ = 0xFFFFFFFFu;
+  bool timers_patched_ = false;
   LinkState state_ = LinkState::Greeting;
 
   uint64_t session_seed_ = 0;
   uint32_t armed_trial_id_ = 0;
   bool start_from_serial_ = true;
+
+  /// The armed trial starts on the rising edge of `start_line_`, and has not
+  /// seen it yet. Cleared the moment that edge starts the run, so one edge
+  /// starts one trial and a line left high does not start the next.
+  bool start_from_line_ = false;
+  uint8_t start_line_ = 0;
+
+  /// A run the *line* began and the host has not been told about.
+  ///
+  /// The host did not ask for this one, so nothing is waiting on a reply and
+  /// the only way it learns the trial is in flight is an unsolicited `started`.
+  /// Flagged rather than sent for the reason every other line on this device is
+  /// flagged rather than sent: the edge is detected in the trial loop, which on
+  /// a board is the timer ISR, and send_line() spins there forever. Sent by
+  /// drain_outbound(), from the foreground.
+  bool line_start_pending_ = false;
+
+  /// The scan that saw the edge -- which for a line start is the real start of
+  /// the trial, not an acknowledgement of a command. Held because the
+  /// foreground that sends it runs a pass or so later.
+  Microseconds line_started_at_us_ = 0;
 
   /// Has anybody said hello? The gate on every other command, and emphatically
   /// not the same question as `state_`: a board driving itself from storage is
@@ -405,11 +546,59 @@ class HostLinkSession {
   ScanHealth scan_;
   LineBitmask last_word_ = 0;
 
-  /// Outputs owed by a start() that happened between scans. The entry state's
-  /// actions are returned by TrialRunner::start(), which is called from the
-  /// link, and the only thing that drives pins is advance_trial(), which is
-  /// called from the timer. Without this they are returned to nobody.
+  /// Outputs owed to the pins by something that happened between scans -- a
+  /// cancel, a fail-safe, a start that beat the scan. The link's thread of
+  /// control drives nothing; advance_trial() does. Without this they would be
+  /// returned to nobody.
   OutputUpdate pending_ops_;
+
+  /// Visits recorded but not yet sent.
+  ///
+  /// Deep enough to cover the longest the foreground can go without draining,
+  /// which is one link command -- about 2.5 ms, or 25 scans at 10 kHz, against
+  /// the worst gap of 22 measured on a board. Not sized to hold a trial: a
+  /// graph with a loop produces far more visits than it has states, and the
+  /// record that must be complete is `result_path` (kMaxPath), which is built
+  /// from the machine's own record and never from this.
+  static constexpr uint8_t kVisitRingDepth = 32;
+
+  struct PendingVisit {
+    StateVisit visit;
+    uint32_t seq = 0;
+    /// Captured at record time, not at send time: by the time this is
+    /// serialised the trial may have ended and `state_` moved on, and a visit
+    /// that reported trial 0 because it was sent late would join to nothing.
+    uint32_t trial_id = 0;
+  };
+
+  PendingVisit visit_ring_[kVisitRingDepth];
+  /// One producer (whoever advances the trial) writes only `head`, one consumer
+  /// (drain_visits) writes only `tail`. That is what makes this safe with no
+  /// critical section, on a device where the producer is an interrupt -- and it
+  /// is why a full ring drops the *newest* visit rather than the oldest, which
+  /// would need the producer to move `tail` too. Either way the host sees a
+  /// counted gap in `seq`; only this one needs no lock.
+  volatile uint8_t visit_head_ = 0;
+  volatile uint8_t visit_tail_ = 0;
+  uint32_t dropped_visits_ = 0;
+
+  /// A run that has ended and whose result has not been sent. Set by the trial
+  /// loop, cleared by drain_outbound(). One pass of the foreground long, and
+  /// the autorun relight waits for it so that the next run cannot reset the
+  /// record the result is built from.
+  bool result_pending_ = false;
+
+  /// A `start` the host has been told about and the scan has not run yet.
+  ///
+  /// The gap is one scan period, and it exists on purpose: the trial begins on
+  /// the scan, so that its `entered_us` and the pins its entry action drives
+  /// are the same instant rather than a millisecond apart. See on_start() for
+  /// the measurement that made this necessary, and start_now_if_pending() for
+  /// the one path that closes the gap early.
+  ///
+  /// `state_` is Running throughout -- the host was told the trial started, and
+  /// `runner_.running()` is the question about the engine, not about the wire.
+  bool start_pending_ = false;
 };
 
 }  // namespace statemachined

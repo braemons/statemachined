@@ -95,6 +95,15 @@ OutputUpdate StateMachine::apply_actions(OutputActionIndex first, uint8_t count,
   LineBitmask level = driven_;
   for (uint8_t i = 0; i < count; ++i) {
     const OutputAction& a = set_->output_actions[first + i];
+    // A timer, not a line. `output_line` is a timer index for these two kinds,
+    // so it must not reach the shift below -- the two index spaces have
+    // different sizes, and treating a timer index as a line would drive a pin
+    // nobody asked for.
+    if (addresses_a_timer(a.kind)) {
+      if (timers_ != nullptr)
+        timers_->on_timer_action(a.output_line, a.kind == OutputActionKind::TimerStart, now_us);
+      continue;
+    }
     const LineBitmask bit = 1u << a.output_line;
     bool high;
     switch (a.kind) {

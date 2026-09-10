@@ -199,6 +199,10 @@ int main() {
 
     const LineBitmask word = input_conditioner.apply(hal::read_inputs(), now_us);
     apply_output_update(session.advance_trial(word, now_us));
+    // The visit stream is formatted outside the trial loop on a board, because
+    // there it is an interrupt. Same call here so the host build's byte stream
+    // is the board's byte stream.
+    session.drain_outbound();
     drain_reply_queue();
 
     timespec scan_period{0, kScanPeriodNanoseconds};

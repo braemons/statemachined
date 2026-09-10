@@ -31,6 +31,7 @@
 #include <cstdint>
 
 #include "config.h"
+#include "graph/global_timer.h"
 #include "graph/output_action.h"
 #include "graph/state.h"
 #include "graph/transition.h"
@@ -68,10 +69,18 @@ struct GraphSet {
 
   uint8_t n_choice_options = 0;
 
+  /// Global timers are per *set*, not per graph, because they outlive the run
+  /// that started them and a run belongs to one graph. That is also VStim's
+  /// arrangement: its TimerQueue sits beside the interval sequence rather than
+  /// inside it, and its timers are configured with the rig rather than with the
+  /// paradigm. See graph/global_timer.h.
+  uint8_t n_timers = 0;
+
   State states[kMaxStates];
   Transition transitions[kMaxTransitions];
   OutputAction output_actions[kMaxOutputActions];
   RandomDistribution distributions[kMaxDistributions];
+  GlobalTimer timers[kMaxTimers];
 
   /// Backing store for every Choice distribution's options, shared the way the
   /// other pools are. A RandomDistribution's `opts` and `weights` point in

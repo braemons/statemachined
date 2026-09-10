@@ -34,6 +34,7 @@ add_library(statemachined_engine
   firmware/core/random/random_distribution.cpp
   firmware/core/io/input_conditioner.cpp
   firmware/core/machine/state_machine.cpp
+  firmware/core/machine/global_timers.cpp
   firmware/core/trial/trial_runner.cpp
 )
 target_include_directories(statemachined_engine PUBLIC firmware/core)

@@ -45,6 +45,7 @@ class MsgType(StrEnum):
     GRAPH_STATE = "graph_state"
     GRAPH_TRANSITION = "graph_transition"
     GRAPH_ACTION = "graph_action"
+    GRAPH_TIMER = "graph_timer"
     GRAPH_END = "graph_end"
     CONFIGURE = "configure"
     START = "start"
@@ -52,6 +53,7 @@ class MsgType(StrEnum):
     PING = "ping"
     STATE = "state"
     WIRING = "wiring"
+    TIMERS = "timers"
     PINS = "pins"
     AUTORUN = "autorun"
     SAVE = "save"
@@ -90,6 +92,16 @@ UNSOLICITED = frozenset(
         MsgType.VISIT,
     }
 )
+
+#: Types that are a *reply* when they carry `in_reply_to` and an event when they
+#: do not.
+#:
+#: `started` is the only one, and it is one because a trial can begin two ways:
+#: the host asked, and this answers its `start`; or the line the trial was armed
+#: on rose, and nobody asked at all. Same message, same fields, and `by` says
+#: which -- but a reader matching on `in_reply_to` would take the second for a
+#: reply to a command it never sent and report it as junk.
+UNSOLICITED_WHEN_UNPROMPTED = frozenset({MsgType.STARTED})
 
 
 class ErrorCode(StrEnum):

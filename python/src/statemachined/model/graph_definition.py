@@ -142,12 +142,31 @@ class OutputActionSpecification(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    line: str = Field(min_length=1)
-    kind: Literal["high", "low", "toggle", "pulse"]
+    #: The output line, for the four kinds that move one. Empty for the two
+    #: that address a global timer instead.
+    line: str = ""
+    kind: Literal["high", "low", "toggle", "pulse", "timer_start", "timer_cancel"]
     pulse_ms: int | None = None
+    #: The global timer this action starts or cancels, by name. Bpod carries the
+    #: same thing as a pseudo-output in its output matrix, so that there is one
+    #: action vocabulary rather than two.
+    timer: str = ""
 
     @model_validator(mode="after")
-    def _refuse_a_pulse_with_no_width(self) -> OutputActionSpecification:
+    def _refuse_an_action_that_names_the_wrong_thing(self) -> OutputActionSpecification:
+        addresses_a_timer = self.kind in ("timer_start", "timer_cancel")
+        if addresses_a_timer:
+            if not self.timer:
+                raise ValueError(f"a {self.kind!r} action needs a timer")
+            if self.line:
+                raise ValueError(f"a {self.kind!r} action names a timer, not the line {self.line!r}")
+            if self.pulse_ms is not None:
+                raise ValueError(f"pulse_ms means nothing to a {self.kind!r} action")
+            return self
+        if not self.line:
+            raise ValueError(f"a {self.kind!r} action needs a line")
+        if self.timer:
+            raise ValueError(f"a {self.kind!r} action moves a line, not the timer {self.timer!r}")
         if self.kind == "pulse":
             if self.pulse_ms is None or self.pulse_ms <= 0:
                 # A zero-width pulse raises a line and schedules its fall for
@@ -160,6 +179,51 @@ class OutputActionSpecification(BaseModel):
         elif self.pulse_ms is not None:
             raise ValueError(f"pulse_ms means nothing to a {self.kind!r} action on {self.line!r}")
         return self
+
+
+# -------------------------------------------------------- global timers ---
+
+
+class GlobalTimerSpecification(BaseModel):
+    """A timer that runs beside the state machine rather than inside it.
+
+    **A running timer is an input line that is high.** A transition waits on one
+    exactly as it waits on a lever -- `when: {none: [<timer name>]}` is "when
+    that timer ends" -- so there is no separate event vocabulary anywhere, on
+    the wire or here. That is VStim's arrangement (`VStimLib/Timer/`): its
+    timers read and write the same flat space of virtual trigger lines that its
+    intervals transition on.
+
+    A timer outlives the run that started it unless it says `trial_bound`, which
+    is what lets one drive a line while the device sits between trials.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: What starts it, or nothing -- in which case only a `timer_start` action
+    #: does. The same three masks as a transition, over input lines and other
+    #: timers alike, so timers chain without anything being written for it.
+    when: TransitionPredicate | None = None
+    #: How long it stays high, by distribution name. The one duration it cannot
+    #: do without: a timer that is never high is a line that never moves.
+    width: str = Field(min_length=1)
+    #: How long after the trigger before it goes high. Bpod's `OnsetDelay`.
+    delay: str | None = None
+    #: Dead time between pulses when `loops` asks for more than one. Bpod's
+    #: `LoopInterval`, and the closed half of VStim's split reward.
+    gap: str | None = None
+    #: A real output line driven alongside the timer's own bit. Optional: a
+    #: timer that only gates a transition needs no pin.
+    line: str = ""
+    #: Pulses per trigger. 0 runs until something stops it -- VStim's
+    #: FrequencyGenerator.
+    loops: int = Field(default=1, ge=0, le=255)
+    #: Drive `line` low while running rather than high, for a rig whose "on" is
+    #: not "high". VStim's `m_PulsePolarity`. The timer's own bit is unaffected.
+    active_low: bool = False
+    #: Stop when the run that started it ends, instead of running on. VStim's
+    #: `m_TrialBound`.
+    trial_bound: bool = False
 
 
 # ---------------------------------------------------------- transitions ---
@@ -364,6 +428,11 @@ class GraphDefinition(BaseModel):
     name: str = Field(min_length=1)
     entry: str = Field(min_length=1)
     distributions: dict[str, DurationDistribution] = Field(default_factory=dict)
+    #: Global timers, by name. Declared on a graph because that is where the
+    #: distributions they name are declared, but *pooled across the set* by the
+    #: compiler and device-scope in effect -- a timer outlives the run that
+    #: started it, so it cannot belong to one graph.
+    timers: dict[str, GlobalTimerSpecification] = Field(default_factory=dict)
     states: list[StateDefinition] = Field(min_length=1)
 
     @property
