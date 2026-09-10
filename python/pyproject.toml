@@ -15,6 +15,37 @@ version = "0.0.0"
 description = "Owns one statemachined device: the wire, the graphs, and the API over both"
 requires-python = ">=3.11"
 license = "LGPL-3.0-or-later"
+# LGPL rather than the GPL the firmware is under, and for the same reason
+# vstimd's client is: a paradigm script imports this, and copyleft reaching into
+# a lab's own code is a barrier the device itself does not have. LICENSE here is
+# the LGPL; the GPLv3 it builds on is the repository root's.
+license-files = ["LICENSE"]
+# This is the page on PyPI. `twine check --strict` fails without it rather than
+# publishing a project with a blank description, which is how a package ends up
+# on an index looking abandoned on the day it was released.
+readme = "README.md"
+authors = [{ name = "Joscha Schmiedt", email = "joscha.schmiedt@gmail.com" }]
+keywords = [
+    "neuroscience",
+    "electrophysiology",
+    "behaviour",
+    "state-machine",
+    "trial",
+    "arduino",
+    "daemon",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Framework :: FastAPI",
+    "Typing :: Typed",
+]
 # **Three tiers, three extras, one distribution.** What you install depends on
 # which way you want to drive a board, and the import tree says the same thing:
 #
@@ -79,6 +110,12 @@ serve = [
 
 [project.scripts]
 statemachined = "statemachined.command_line_interface:main"
+
+[project.urls]
+Homepage = "https://github.com/braemons/statemachined"
+Repository = "https://github.com/braemons/statemachined"
+"Bug Tracker" = "https://github.com/braemons/statemachined/issues"
+Documentation = "https://statemachined.readthedocs.io"
 
 # pytest is a dependency of the test suites, not of the package, so it lives in
 # a group rather than in `dependencies`: `uv run --project` installs it for
