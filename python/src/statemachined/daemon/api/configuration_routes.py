@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Reading and changing what the box is. docs/reference/api.md §8.
 
 The rig config only: the device, the directories, where triald is. **Not** the

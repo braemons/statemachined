@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """One refusal shape, and the rule that every refusal names what to change.
 
 The wire's errors follow that rule -- `PROTOCOL.md` §5, where every `error`

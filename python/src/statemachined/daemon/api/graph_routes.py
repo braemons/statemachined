@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """The store, the validator, and the one call that uploads a session's set.
 
 docs/reference/api.md §4. `POST /api/session/graphs` is the important one and the slow one:

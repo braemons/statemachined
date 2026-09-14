@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // What every panel has in common: a shadow root, a `base` attribute, a way to
 // poll without leaking a timer, and one honest place for a refusal to land.

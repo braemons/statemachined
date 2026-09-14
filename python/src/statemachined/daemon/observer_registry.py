@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Who is watching this rig, while they are watching it.
 
 **This daemon reports to nobody.** It publishes what it did -- every state a

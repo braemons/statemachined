@@ -282,12 +282,14 @@ Also: **VStim** (Andreas Kreiter, Cognitive Neurophysiology Lab, Bremen), whose
 ## License
 
 **Firmware, core, tests and tools: [GPLv3-or-later](LICENSE).
-The Python package, `python/src/`: [LGPLv3-or-later](python/LICENSE)**, so an
-experiment importing it is not placed under copyleft — the same split, and the
-same reason, as vstimd's client. The split is by *what is importable*, not by
-directory: `python/tests/` is a test suite and stays GPL. That the importable
-half now includes a client and a way to drive a board directly does not change
-the line; it is the same argument reaching further. Every source file carries an
+The importable Python library — `model/`, `client/`, `device/`,
+`graph_set_compiler.py`: [LGPLv3-or-later](python/LICENSE)**, so an experiment
+importing it is not placed under copyleft — the same split, and the same reason,
+as vstimd's client. **The daemon — `daemon/` (API and web UI) and the command
+line that serves it: [AGPLv3-or-later](python/LICENSE.AGPL)**, like vstimd and
+triald: it is a network service, and whoever runs a modified one for others owes
+them its source. The split is by *what the code is*, not by directory:
+`python/tests/` is a test suite and stays GPL. Every source file carries an
 `SPDX-License-Identifier`.
 
 The GPL here is a *choice*, not an inheritance: no Bpod source is copied,

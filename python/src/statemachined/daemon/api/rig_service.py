@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """What outlives a request: the device, the store, the trace, and the lock.
 
 A router answers one question and forgets. This holds the things that cannot be

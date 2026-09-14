@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Opening and closing a session. docs/reference/api.md §4.
 
 A session is one run of an experiment: the graphs it will use, put on the device

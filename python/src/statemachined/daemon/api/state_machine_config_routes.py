@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """The saved configs: what this rig is wired like, and what it can run.
 
 docs/reference/api.md §8. The half of the configuration a person owns -- the line map and

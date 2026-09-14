@@ -90,7 +90,7 @@ statemachined/
 ├── emulation/                 unchanged
 ├── daemon/                    the Python daemon — was bridge/
 │   ├── pyproject.toml            name = "statemachined", version sentinel 0.0.0
-│   ├── LICENSE                   LGPL-3.0-or-later, moved from bridge/
+│   ├── LICENSE                   LGPL-3.0-or-later, moved from bridge/ (daemon/ is AGPL: LICENSE.AGPL)
 │   ├── src/statemachined/
 │   │   ├── command_line_interface.py   `statemachined serve`, and the bench commands
 │   │   ├── board_pin_labels.py         pin labels per board, for what the CLI prints

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """The HTTP surface, as docs/reference/api.md specifies it.
 
 One router per subject, and a `RigService` underneath them that owns the device.

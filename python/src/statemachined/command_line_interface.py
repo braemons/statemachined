@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """The command line, one subcommand per step of docs/operations/bringup.md.
 
 Nothing here sends a command the operator did not ask for. In particular no

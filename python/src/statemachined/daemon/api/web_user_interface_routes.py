@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Serving the web UI, and the `/elements/` contract. docs/developer/daemon.md §5.
 
 No build step, no framework, no CDN -- triald's rule, for triald's reason: a rig

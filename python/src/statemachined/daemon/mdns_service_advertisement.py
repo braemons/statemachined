@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Telling the network this rig exists. docs/developer/daemon.md §5.
 
 vstimd advertises `_vstimd._tcp` with a stable `id=` TXT record *"so clients can

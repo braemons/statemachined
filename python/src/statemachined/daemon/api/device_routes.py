@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """What board is attached, what it can hold, and which pin is the left lever.
 
 docs/reference/api.md §3. The half of this API that exists for a person rather than for

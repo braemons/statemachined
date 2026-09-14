@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """The FastAPI application, assembled from the routers.
 
 Small on purpose. Everything with a decision in it is in a router or in

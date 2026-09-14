@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // `<statemachined-monitor>` -- the wire itself, both directions, as it goes.
 //

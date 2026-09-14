@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Recording the trace into a named file. docs/reference/api.md §9.
 
 Four verbs and a store. What is being recorded is the trace, which is running

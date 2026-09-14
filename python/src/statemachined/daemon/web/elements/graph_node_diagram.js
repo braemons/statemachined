@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // A graph, drawn. Read-only in v1 (docs/developer/daemon.md §5).
 //

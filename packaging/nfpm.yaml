@@ -47,7 +47,7 @@ description: |
   for all of it. One daemon per device.
 vendor: braemons
 homepage: https://github.com/braemons/statemachined
-license: LGPL-3.0-or-later
+license: AGPL-3.0-or-later AND LGPL-3.0-or-later AND GPL-3.0-or-later
 section: science
 priority: optional
 

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """Being the daemon: the HTTP API, the web UI, the stores and the trace.
 
 The `[serve]` tier, and the only one with a web framework in it. What is here

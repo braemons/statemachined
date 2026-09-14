@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """A recording: a named, deliberate selection out of the always-on trace.
 
 docs/reference/api.md §9. The trace (`device/state_visit_trace.py`) is always on and always

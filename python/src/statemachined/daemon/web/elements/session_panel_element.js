@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // `<statemachined-session>` -- the set a session will use, the trial running
 // now, and what the last one did.

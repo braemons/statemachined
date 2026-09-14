@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """What the box is, as opposed to what it is doing today.
 
 `/etc/braemons/statemachined-rig-config.toml`, hand-edited, a package conffile,

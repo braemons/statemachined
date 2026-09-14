@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: LGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // `<statemachined-configs>` -- what this rig is wired like, saved and loaded.
 //

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """The trial loop: triald drives, statemachined reports.
 
 docs/reference/api.md §5. Three calls in the critical path of every trial, and they are

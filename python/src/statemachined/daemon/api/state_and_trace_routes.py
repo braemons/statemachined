@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: LGPL-3.0-or-later
+# SPDX-License-Identifier: AGPL-3.0-or-later
 """What the machine is doing now, and everything it has done.
 
 docs/reference/api.md §6 and §7. Two streams with opposite rules, and the difference is the
