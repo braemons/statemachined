@@ -46,7 +46,8 @@ class ReplySink {
 /// graph against this board's capacities before uploading a byte of it.
 struct DeviceIdentity {
   const char* board = "native";
-  const char* firmware_version = "0.1.0";
+  /// Stamped at build time; see protocol/firmware_version.h.
+  const char* firmware_version = "0.0.0";
   uint8_t input_line_count = kMaxLines;
   uint8_t output_line_count = kMaxOutputLines;
   /// Measured at boot on a real board, not declared, so the host learns the

@@ -51,6 +51,7 @@ from ...device.state_visit_trace import (
     StateVisitTrace,
 )
 from ..event_recording import EventRecorder
+from ..firmware_manifest import compare_firmware, installed_firmware_version
 from ...graph_set_compiler import CompiledGraphSet
 from ..graph_store import GraphStore
 from ...model.graph_definition import GraphDefinition
@@ -205,11 +206,17 @@ class RigService:
     def connect(self) -> dict:
         with self.device_lock:
             hello_ack = self.supervisor.connect_and_greet()
+        # Recorded, not refused: a board running another build still runs, and
+        # whether that is acceptable is the operator's call. What must not
+        # happen is nobody being able to find out afterwards.
+        firmware = compare_firmware(hello_ack.get("fw"), installed_firmware_version())
         self.trace.append(
             KIND_LINK_CONNECTED,
             target=self.configuration.device_target,
             board=hello_ack.get("board"),
             firmware_version=hello_ack.get("fw"),
+            installed_firmware_version=firmware["installed"],
+            firmware_matches_package=firmware["matches"] if firmware["comparable"] else None,
             connection_count=self.supervisor.connection_count,
         )
         return hello_ack

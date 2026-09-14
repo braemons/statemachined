@@ -294,7 +294,8 @@ $(STAGE)/.stamp: $(shell find $(ROOT)/python/src $(ROOT)/firmware/core $(ROOT)/f
 stage-device:
 	@mkdir -p $(STAGE)$(PREFIX)/libexec
 	@if command -v cmake >/dev/null 2>&1 && command -v c++ >/dev/null 2>&1; then \
-	  cmake -S $(ROOT) -B $(BUILD)/device -DCMAKE_BUILD_TYPE=Release >/dev/null && \
+	  cmake -S $(ROOT) -B $(BUILD)/device -DCMAKE_BUILD_TYPE=Release \
+	    -DSTATEMACHINED_FIRMWARE_VERSION=$(VERSION) >/dev/null && \
 	  cmake --build $(BUILD)/device -j --target statemachined_native_device >/dev/null && \
 	  install -m 0755 $(BUILD)/device/statemachined_native_device \
 	    $(STAGE)$(PREFIX)/libexec/statemachined-device && \

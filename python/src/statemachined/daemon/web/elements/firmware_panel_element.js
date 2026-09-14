@@ -74,6 +74,13 @@ export class FirmwarePanelElement extends BasePanelElement {
         text: "no installed image to compare against",
       });
     }
+    if (versions.running_is_stamped === false) {
+      // 0.0.0: a build nobody stamped, which cannot be told from any other.
+      return this.make("span", {
+        class: "pill bad",
+        text: "unknown -- the board does not say which build it is",
+      });
+    }
     return versions.matches
       ? this.make("span", { class: "pill good", text: "yes" })
       : this.make("span", {

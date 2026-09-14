@@ -1299,11 +1299,16 @@ Pi with several USB devices, which `/dev/ttyACM0` does not.
 
 ### 6.3 Firmware in the package
 
-`make image` already builds both flashable images with a `MANIFEST.txt`
-recording the commit, sizes and checksums — because _"a board in a rack cannot be
-asked which commit it is running."_ The package installs that under
-`/usr/share/braemons/statemachined/firmware/`, and `GET /api/device/firmware`
-compares the running `fw` from `hello_ack` against it and warns on a mismatch.
+`make image` builds the flashable image with a `MANIFEST.txt` recording the
+version, commit, sizes and checksums. The version is the git tag
+(`packaging/scripts/git-version.sh`), and the same string is compiled into the
+firmware (`firmware/core/protocol/firmware_version.h`) and reported as `fw` in
+`hello_ack`, so a board can say which release it runs. `make image` refuses to
+build without one; an unstamped build reports `0.0.0`. The package installs the
+image and manifest under `/usr/share/braemons/statemachined/firmware/`, and
+`GET /api/device/firmware` compares the running `fw` against it. A mismatch is
+reported and recorded on the link trace entry, not refused: whether a board on
+another build may run is the operator's call.
 
 Flashing itself is deferred. When it lands it is a separate optional package
 pulling in `bossac`/`dfu-util`, because it means dropping the port, flashing, and

@@ -34,8 +34,10 @@ or skip the toolchain entirely and take the image CI publishes on every run:
 gh run download --name statemachined-uno_r4_minima-<sha>
 ```
 
-Check `MANIFEST.txt` against the commit you believe you are testing. A board in
-a rack cannot be asked what it is running, which is why that file exists.
+Check `MANIFEST.txt` against the version you believe you are testing. Once
+flashed, the board reports the same version as `fw` in its `hello_ack`
+(`statemachined hello`), and the daemon compares the two at
+`GET /api/device/firmware`.
 
 There is one image. There used to be two -- a bench build carrying a demo
 paradigm and a rig build with it compiled out -- and there is now nothing to

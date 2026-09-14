@@ -25,6 +25,7 @@
 #include <cstring>
 #include <ctime>
 
+#include "protocol/firmware_version.h"
 #include "hal.h"
 #include "io/input_conditioner.h"
 #include "io/reply_queue.h"
@@ -68,7 +69,7 @@ class QueueingReplySink : public ReplySink {
 DeviceIdentity native_device_identity() {
   DeviceIdentity identity;
   identity.board = "native";
-  identity.firmware_version = "0.0.0";
+  identity.firmware_version = firmware_version();
   identity.input_line_count = kMaxLines;
   identity.output_line_count = kMaxOutputLines;
   // Declared rather than measured, unlike a board's: there is no scan floor to

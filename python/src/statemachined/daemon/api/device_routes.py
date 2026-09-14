@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ...device.message_framing import DeviceRefusedTheCommand
 from ...model.line_map import LineMap
 from .http_errors import from_device_refusal, no_device_connected, refusal
+from ..firmware_manifest import compare_firmware, installed_firmware_version
 from .rig_service import NoActiveGraph, RigService
 
 router = APIRouter(prefix="/api/device", tags=["device"])
@@ -354,29 +355,6 @@ def read_firmware_versions(request: Request) -> dict:
     """
     service = service_of(request)
     running = (service.supervisor.hello_ack or {}).get("fw")
-    installed = _installed_firmware_version()
     if running is None:
         raise refusal(503, "not_connected", "no device is connected", "device")
-    return {
-        "running": running,
-        "installed": installed,
-        "matches": installed is not None and running == installed,
-    }
-
-
-def _installed_firmware_version() -> str | None:
-    """From the package's MANIFEST.txt, when there is one.
-
-    None on a checkout, which is not an error: `make image` writes the manifest
-    and the package installs it, so its absence means "nobody installed a
-    firmware image here", which is the truth on a developer's machine.
-    """
-    from pathlib import Path
-
-    manifest = Path("/usr/share/braemons/statemachined/firmware/MANIFEST.txt")
-    if not manifest.exists():
-        return None
-    for line in manifest.read_text().splitlines():
-        if line.startswith("version:"):
-            return line.split(":", 1)[1].strip()
-    return None
+    return compare_firmware(running, installed_firmware_version())

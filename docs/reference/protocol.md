@@ -935,7 +935,7 @@ saved settings is not one.
   "in_reply_to": 0,
   "proto": 1,
   "board": "uno_r4_minima",
-  "fw": "0.1.0",
+  "fw": "0.3.0~alpha1",
   "n_input_lines": 8,
   "n_output_lines": 8,
   "scan_hz": 10000,

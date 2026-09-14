@@ -11,7 +11,8 @@ BUILD ?= build
 
 .PHONY: test
 test: check-core            ## build and run the core unit tests
-	cmake -S . -B $(BUILD) -DCMAKE_BUILD_TYPE=Debug
+	cmake -S . -B $(BUILD) -DCMAKE_BUILD_TYPE=Debug \
+	  -DSTATEMACHINED_FIRMWARE_VERSION=$(STATEMACHINED_FIRMWARE_VERSION)
 	cmake --build $(BUILD) -j
 	ctest --test-dir $(BUILD) --output-on-failure
 
@@ -43,6 +44,16 @@ golden:                     ## the tests at -O0 and -O3, for reproducibility
 	done
 
 BOARD ?= uno_r4_minima
+
+# The version the firmware reports in hello_ack, from the git tag like every
+# other artifact (packaging/scripts/git-version.sh, which also honours
+# STATEMACHINED_VERSION). PlatformIO reads it from the environment. A checkout
+# with no reachable tag builds the 0.0.0 sentinel; `image`, which is what gets
+# flashed onto rigs, refuses to.
+ifndef STATEMACHINED_FIRMWARE_VERSION
+STATEMACHINED_FIRMWARE_VERSION := $(shell packaging/scripts/git-version.sh 2>/dev/null || echo 0.0.0)
+endif
+export STATEMACHINED_FIRMWARE_VERSION
 
 .PHONY: firmware
 firmware:                   ## build for the reference board
@@ -79,7 +90,8 @@ bringup:                    ## talk to a board: make bringup ARGS="state"
 # without it, and it is a fraction of `make test`: one binary, no ctest.
 .PHONY: integration-device
 integration-device:         ## build build/statemachined_native_device on its own
-	cmake -S . -B $(BUILD) -DCMAKE_BUILD_TYPE=Debug
+	cmake -S . -B $(BUILD) -DCMAKE_BUILD_TYPE=Debug \
+	  -DSTATEMACHINED_FIRMWARE_VERSION=$(STATEMACHINED_FIRMWARE_VERSION)
 	cmake --build $(BUILD) -j --target statemachined_native_device
 
 # The bench: the daemon, its API and its web UI, in front of a device. This is
@@ -319,6 +331,9 @@ IMAGE_SHA ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 
 .PHONY: image
 image:                      ## build the flashable image, with a manifest
+	@if [ "$(STATEMACHINED_FIRMWARE_VERSION)" = 0.0.0 ]; then \
+	  echo "make image: no version. Run packaging/scripts/git-version.sh to see why," >&2; \
+	  echo "  or pass STATEMACHINED_VERSION=<version>." >&2; exit 1; fi
 	rm -rf $(IMAGE_DIR)
 	mkdir -p $(IMAGE_DIR)
 	$(MAKE) firmware
@@ -327,6 +342,7 @@ image:                      ## build the flashable image, with a manifest
 	@{ \
 	  echo "statemachined firmware for the $(BOARD)"; \
 	  echo; \
+	  echo "version: $(STATEMACHINED_FIRMWARE_VERSION)"; \
 	  echo "commit: $(IMAGE_SHA)"; \
 	  echo "built:  $$(date -u +%Y-%m-%dT%H:%M:%SZ)"; \
 	  echo "pio:    $$(pio --version)"; \

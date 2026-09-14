@@ -79,3 +79,9 @@ target_link_libraries(statemachined_native_device
   PRIVATE statemachined_core statemachined_hal_native)
 target_compile_options(statemachined_native_device
   PRIVATE -Wall -Wextra -Wpedantic -Werror)
+# The version it reports in hello_ack, from the git tag like the board build's.
+# packaging/Makefile passes it; unset, the device reports the 0.0.0 sentinel. See
+# firmware/core/protocol/firmware_version.h.
+set(STATEMACHINED_FIRMWARE_VERSION "" CACHE STRING "version the native device reports")
+target_compile_definitions(statemachined_native_device
+  PRIVATE "STATEMACHINED_FIRMWARE_VERSION=\"${STATEMACHINED_FIRMWARE_VERSION}\"")

@@ -161,8 +161,9 @@ is a file you can edit, and there is one binary to flash.
 
 Every CI run publishes that binary as an artifact
 (`statemachined-uno_r4_minima-<sha>`), so a board can be brought up without a
-toolchain, with a `MANIFEST.txt` recording the commit, sizes and checksums — a
-board in a rack cannot be asked which commit it is running. `make image` builds
+toolchain, with a `MANIFEST.txt` recording the version, commit, sizes and
+checksums. The board reports the same version in its `hello_ack`, and the daemon
+compares the two. `make image` builds
 the same thing locally.
 
 ## Drive it from Python

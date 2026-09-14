@@ -68,6 +68,7 @@
 #include "io/input_conditioner.h"
 #include "io/reply_queue.h"
 #include "io/settings_store.h"
+#include "protocol/firmware_version.h"
 #include "protocol/host_link_session.h"
 #include "trial/trial_runner.h"
 
@@ -228,7 +229,7 @@ FlashSettingsPort g_settings;
 DeviceIdentity make_identity() {
   DeviceIdentity id;
   id.board = "uno_r4_minima";
-  id.firmware_version = "0.1.0";
+  id.firmware_version = firmware_version();
   id.input_line_count = kBoardInputLines;
   id.output_line_count = kBoardOutputLines;
   id.measured_scan_hz = g_health.hz;
