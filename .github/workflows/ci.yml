@@ -66,10 +66,10 @@ jobs:
       - run: make test-python
 
   # There is no job here for the trial loop across both daemons. It lives in the
-  # contracts repo, in `rig/`, with the tests that are about the three daemons
+  # contracts repo, in `e2e-tests/`, with the tests that are about the three daemons
   # together -- a test needing two of them has no honest home inside either, and
   # the one that used to be here cost this repository a lockfile pin on triald's
-  # main branch. See contracts/rig/tests/test_the_handover_to_triald.py.
+  # main branch. See contracts/e2e-tests/tests/test_the_handover_to_triald.py.
 
   reproducibility:
     name: golden vectors are byte-identical across compilers
