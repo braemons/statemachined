@@ -1,0 +1,103 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+syntax = "proto3";
+
+package braemons.v1;
+
+// How a trial ended — the `.tdr` outcome taxonomy.
+//
+// **This enum is the taxonomy.** It was a JSON file with five vendored copies
+// and a checker that read source code with regexes
+// (`contracts/INTERACTIONS.md` §6); it is now a protobuf enum, which is the
+// thing that file was imitating. It is vendored into statemachined
+// byte-identically, which is the same arrangement with a better file format.
+//
+// **`braemons.v1`, and not `triald.v1`, because neither daemon owns it.**
+// statemachined reports an outcome and triald records one; the taxonomy is the
+// agreement between them, and a package named after one of the two would make
+// the other import its neighbour's interface to say what a trial did. It is
+// the only thing in `braemons.v1` today, and the bar for a second is the same:
+// a type that two daemons must agree on and neither is the authority for.
+//
+// The *addresses* are not prefixed — an rpc is `triald.v1.Trial/ReportOutcome`,
+// because that is a string a person types at a terminal, and there is exactly
+// one triald on a rig. A family prefix there would be justified by a collision
+// that cannot happen.
+//
+// **The numbers are a wire contract and are never renumbered.** They are in
+// every `.tdr` the lab has written and every analysis script that reads one.
+// Extending is fine; a value once used is used for ever. Protobuf already says
+// this about field numbers, which is most of the reason to write the taxonomy
+// here instead of in prose beside a JSON array.
+//
+// **The names are a wire contract too**, because outcomes cross between daemons
+// by name: protobuf's JSON mapping puts the value's name on the wire. A rename
+// is a breaking change to exactly the degree a renumber would be. §5.2 is what
+// ignoring that cost — code 8 was spelled two ways, so one outcome was
+// unparseable at the far end and any graph written from the other vocabulary
+// was refused at compile, by a person with both spellings in front of them.
+//
+// **No prefix on the value names**, against proto convention and deliberately.
+// The mapping puts the name on the wire, and every `.tdr` file, every analysis
+// script and every other copy of this table says `HIT`. §7 records that a
+// scientist should be able to send `"HIT"` rather than `1`; this is where that
+// survives.
+//
+// Three facts about each outcome are **not** here — whether a graph may declare
+// it, whether it is accepted by default, and who assigns it. Each is used by
+// exactly one daemon: the first is statemachined's graph compiler, the other
+// two are triald's acceptance policy and its counters table. They live where
+// they are used, and `tools/check_outcomes.py` holds each of them to this
+// enum so that adding a code here cannot leave one of them behind.
+//
+// There is no backwards compatibility with VStim anywhere in braemons. Where a
+// VStim spelling was wrong it was corrected (code 8), and codes past 10 are
+// ours.
+enum TrialOutcome {
+  // A start signal was required and never delivered.
+  //
+  // First because proto3 requires the zero value first; the taxonomy's own
+  // order starts at UNDETERMINED.
+  NOT_STARTED = 0;
+
+  // Nothing decided yet — the trial is still in flight. Nobody assigns it,
+  // which is why no counters column and no acceptance flag exists for it.
+  UNDETERMINED = -1;
+
+  // The correct response, in the window.
+  HIT = 1;
+
+  // A response, in the window, and the wrong one.
+  WRONG_RESPONSE = 2;
+
+  // The correct response on an early-release occasion.
+  EARLY_HIT = 3;
+
+  // The wrong response on an early-release occasion.
+  EARLY_WRONG_RESPONSE = 4;
+
+  // Responded before the window opened.
+  EARLY = 5;
+
+  // Responded after the window closed.
+  LATE = 6;
+
+  // Gaze left the fixation window.
+  EYE_ERROR = 7;
+
+  // A start signal arrived in an interval that is not a start interval.
+  //
+  // Corrected from VStim's spelling, which is the drift §5.2 records.
+  UNEXPECTED_START_SIGNAL = 8;
+
+  // The wrong start signal was given.
+  WRONG_START_SIGNAL = 9;
+
+  // Aborted by the experimenter.
+  CANCELLED = 10;
+
+  // The trial was started and nothing ever said how it ended.
+  //
+  // Assigned by the decision authority rather than by whoever ran the trial —
+  // it is what the trial cap produces — so no graph declares it.
+  NEVER_FINISHED = 11;
+}

@@ -20,6 +20,18 @@ test: check-core            ## build and run the core unit tests
 check-core:                 ## enforce the portable core's constraints
 	@./tools/check-core-purity.sh
 
+.PHONY: check-proto
+# `proto/braemons/v1/` is the `.tdr` outcome taxonomy, vendored byte-identically
+# from `contracts/vendored/proto/` because neither this daemon nor triald owns
+# it. The checker holds the firmware enum, the Python enum and the graph
+# editor's menu to it, reading all four as text so it runs with nothing
+# installed — which is why it is here rather than only in the test suite.
+#
+# `proto/statemachined/v1/` — this daemon's own interface — does not exist yet;
+# when it does, protoc joins this target.
+check-proto:                ## the taxonomy, and every copy of it in this repository
+	@python3 tools/check_outcomes.py
+
 # Exported rather than set per-recipe so a local run fails the same way CI does:
 # a leak or an unsigned overflow should stop the run, not scroll past.
 export UBSAN_OPTIONS ?= halt_on_error=1:print_stacktrace=1
@@ -407,7 +419,7 @@ docs-build:                 ## build the static docs site to site/
 # Everything CI runs, in the order it runs it, minus the toolchain installs.
 # The point is that a red build can be reproduced with one command.
 .PHONY: ci
-ci: check-core test sanitize golden format-check test-python firmware  ## everything CI runs, except emulation
+ci: check-core check-proto test sanitize golden format-check test-python firmware  ## everything CI runs, except emulation
 
 .PHONY: clean
 clean:
