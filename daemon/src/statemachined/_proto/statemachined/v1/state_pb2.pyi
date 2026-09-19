@@ -35,18 +35,18 @@ class RigState(_message.Message):
     def __init__(self, connected: _Optional[bool] = ..., link_state: _Optional[int] = ..., running: _Optional[bool] = ..., trial_id: _Optional[int] = ..., graph: _Optional[str] = ..., state_name: _Optional[str] = ..., state_index: _Optional[int] = ..., input_word: _Optional[int] = ..., output_word: _Optional[int] = ..., scan: _Optional[_Union[_device_pb2.ScanHealth, _Mapping]] = ..., newest_trace_entry_number: _Optional[int] = ...) -> None: ...
 
 class TraceEntry(_message.Message):
-    __slots__ = ("entry_number", "kind", "device_microseconds", "trial_id", "payload")
+    __slots__ = ("entry_number", "kind", "recorded_host_time", "trial_id", "payload")
     ENTRY_NUMBER_FIELD_NUMBER: _ClassVar[int]
     KIND_FIELD_NUMBER: _ClassVar[int]
-    DEVICE_MICROSECONDS_FIELD_NUMBER: _ClassVar[int]
+    RECORDED_HOST_TIME_FIELD_NUMBER: _ClassVar[int]
     TRIAL_ID_FIELD_NUMBER: _ClassVar[int]
     PAYLOAD_FIELD_NUMBER: _ClassVar[int]
     entry_number: int
     kind: str
-    device_microseconds: int
+    recorded_host_time: str
     trial_id: int
     payload: _struct_pb2.Struct
-    def __init__(self, entry_number: _Optional[int] = ..., kind: _Optional[str] = ..., device_microseconds: _Optional[int] = ..., trial_id: _Optional[int] = ..., payload: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
+    def __init__(self, entry_number: _Optional[int] = ..., kind: _Optional[str] = ..., recorded_host_time: _Optional[str] = ..., trial_id: _Optional[int] = ..., payload: _Optional[_Union[_struct_pb2.Struct, _Mapping]] = ...) -> None: ...
 
 class TraceWindow(_message.Message):
     __slots__ = ("entries", "newest_entry_number", "oldest_entry_number_still_held", "ring_capacity", "lost_entries_before")

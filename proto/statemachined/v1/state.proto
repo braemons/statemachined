@@ -55,8 +55,18 @@ message RigState {
 message TraceEntry {
   int64 entry_number = 1;
   string kind = 2;
-  int64 device_microseconds = 3;
+
+  // When **this daemon** recorded it. Its own clock, and deliberately not an
+  // estimate of the device's: a visit's own device timestamp is in the
+  // payload, and conflating the two is how a trace stops being joinable to a
+  // record.
+  string recorded_host_time = 3;
+
+  // The trial this belongs to, when it belongs to one. Plenty do not — a line
+  // edge, a link event, a refusal.
   optional int64 trial_id = 4;
+
+  // Everything else the entry carried.
   google.protobuf.Struct payload = 5;
 }
 

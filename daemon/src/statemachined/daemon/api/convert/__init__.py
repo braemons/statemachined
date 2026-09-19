@@ -33,11 +33,45 @@ arrangement, and reading one should teach you the others.
 """
 
 from .device import (
+    committed_set_to_wire,
     device_capacities_to_wire,
     device_state_to_wire,
     line_map_view_to_wire,
     line_monitor_entry_to_wire,
     scan_health_to_wire,
+)
+from .documents import (
+    config_summaries_to_wire,
+    config_summary_to_wire,
+    graph_summaries_to_wire,
+    graph_summary_to_wire,
+    graph_validation_to_wire,
+    stored_file_to_wire,
+)
+from .recording import (
+    manifest_to_wire,
+    recording_entries_to_wire,
+    recordings_to_wire,
+    segment_to_wire,
+)
+from .rig_configuration import (
+    rig_configuration_patch_from_wire,
+    rig_configuration_to_wire,
+    rig_configuration_update_to_wire,
+)
+from .session import (
+    active_graph_to_wire,
+    loaded_config_to_wire,
+    open_session_result_to_wire,
+    session_state_to_wire,
+)
+from .state import (
+    observer_to_wire,
+    observers_to_wire,
+    rig_state_to_wire,
+    state_frame_to_wire,
+    trace_entry_to_wire,
+    trace_window_to_wire,
 )
 from .trial import (
     configure_trial_from_wire,
@@ -47,13 +81,37 @@ from .trial import (
 )
 
 __all__ = [
+    "active_graph_to_wire",
+    "committed_set_to_wire",
+    "config_summaries_to_wire",
+    "config_summary_to_wire",
     "configure_trial_from_wire",
     "device_capacities_to_wire",
     "device_state_to_wire",
     "distribution_patches_from_wire",
+    "graph_summaries_to_wire",
+    "graph_summary_to_wire",
+    "graph_validation_to_wire",
     "line_map_view_to_wire",
     "line_monitor_entry_to_wire",
+    "loaded_config_to_wire",
+    "manifest_to_wire",
+    "observer_to_wire",
+    "observers_to_wire",
+    "open_session_result_to_wire",
+    "recording_entries_to_wire",
+    "recordings_to_wire",
+    "rig_configuration_patch_from_wire",
+    "rig_configuration_to_wire",
+    "rig_configuration_update_to_wire",
+    "rig_state_to_wire",
     "scan_health_to_wire",
+    "segment_to_wire",
+    "session_state_to_wire",
+    "state_frame_to_wire",
     "state_visit_to_wire",
+    "stored_file_to_wire",
+    "trace_entry_to_wire",
+    "trace_window_to_wire",
     "trial_result_to_wire",
 ]

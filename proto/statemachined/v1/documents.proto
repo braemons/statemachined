@@ -93,6 +93,8 @@ message StateMachineConfigSummary {
   string description = 4;
   string board = 5;
   repeated string graph_names = 6;
+  int32 input_line_count = 7;
+  int32 output_line_count = 8;
 }
 
 message StateMachineConfigSummaries {

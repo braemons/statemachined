@@ -276,3 +276,201 @@ def test_nothing_attached_means_no_level_at_all() -> None:
     )
     assert view.input_lines[0].line_index == 3
     assert not view.input_lines[0].HasField("is_high_now")
+
+
+# -- the trace ------------------------------------------------------------------
+
+
+def test_a_trace_entry_keeps_what_the_message_does_not_name() -> None:
+    """The set of entry kinds grows with the firmware, so everything beyond the
+    four named keys crosses as payload rather than being dropped."""
+    entry = {
+        "entry_number": 4,
+        "kind": "visit",
+        "recorded_host_time": "2026-01-01T00:00:00Z",
+        "trial_id": 7,
+        "state": "Foreperiod",
+        "entered_device_microseconds": 1234,
+    }
+    message = convert.trace_entry_to_wire(entry)
+    assert (message.entry_number, message.kind, message.trial_id) == (4, "visit", 7)
+    assert dict(message.payload) == {
+        "state": "Foreperiod",
+        "entered_device_microseconds": 1234,
+    }
+
+
+def test_an_entry_that_belongs_to_no_trial_says_so() -> None:
+    """A line edge, a link event, a refusal: plenty of entries have no trial,
+    and trial 0 is a real trial."""
+    message = convert.trace_entry_to_wire({"entry_number": 1, "kind": "link"})
+    assert not message.HasField("trial_id")
+    assert convert.trace_entry_to_wire(
+        {"entry_number": 1, "kind": "trial_begin", "trial_id": 0}
+    ).HasField("trial_id")
+
+
+def test_something_a_struct_cannot_hold_arrives_as_itself() -> None:
+    """A sink that appended an object protobuf cannot carry would otherwise
+    raise *inside* the stream, thousands of entries in."""
+    message = convert.trace_entry_to_wire({"entry_number": 1, "kind": "odd", "thing": {1, 2}})
+    assert "thing" in dict(message.payload)
+
+
+def test_a_window_says_what_fell_out_of_the_ring() -> None:
+    lost = convert.trace_window_to_wire(
+        [],
+        newest_entry_number=500,
+        oldest_entry_number_still_held=100,
+        ring_capacity=400,
+        lost_entries_before=100,
+    )
+    assert lost.lost_entries_before == 100
+
+    intact = convert.trace_window_to_wire(
+        [],
+        newest_entry_number=5,
+        oldest_entry_number_still_held=0,
+        ring_capacity=400,
+        lost_entries_before=None,
+    )
+    assert not intact.HasField("lost_entries_before")
+
+
+# -- the rig's state ------------------------------------------------------------
+
+
+def test_zero_is_a_real_answer_for_every_optional_of_the_state() -> None:
+    """Trial 0, state 0, and an input word of 0 with nothing pressed."""
+    message = convert.rig_state_to_wire(
+        connected=True,
+        state_report={"trial_id": 0, "current_state": 0, "io": {"in": 0, "out": 0}},
+        armed_graph_name="fixation",
+        state_name="Foreperiod",
+        newest_trace_entry_number=9,
+    )
+    assert message.HasField("trial_id") and message.trial_id == 0
+    assert message.HasField("state_index") and message.state_index == 0
+    assert message.HasField("input_word") and message.input_word == 0
+
+
+def test_an_unresolved_state_name_is_absent_rather_than_empty() -> None:
+    """Resolving an index needs the committed set. There is no state called
+    nothing, so a name this daemon could not resolve must not look like one."""
+    message = convert.rig_state_to_wire(
+        connected=True,
+        state_report={"current_state": 2},
+        armed_graph_name=None,
+        state_name=None,
+        newest_trace_entry_number=0,
+    )
+    assert message.state_index == 2
+    assert not message.HasField("state_name")
+
+
+def test_the_state_and_the_device_report_the_same_scan() -> None:
+    """One conversion, so `State/ReadState` and `Device/ReadDevice` cannot
+    disagree about how the board is keeping time."""
+    scan = {"hz": 9871, "overruns": 4, "worst_gap": 2, "tx_stalls": 0}
+    from_state = convert.rig_state_to_wire(
+        connected=True,
+        state_report={"scan": scan},
+        armed_graph_name=None,
+        state_name=None,
+        newest_trace_entry_number=0,
+    ).scan
+    assert from_state == convert.scan_health_to_wire(scan)
+
+
+# -- the stores -----------------------------------------------------------------
+
+
+def test_a_graph_that_will_not_parse_is_listed_with_its_reason() -> None:
+    summary = convert.graph_summary_to_wire(
+        {"name": "broken", "readable": False, "detail": "line 3: expected a name"}
+    )
+    assert summary.readable is False
+    assert "line 3" in summary.detail
+
+
+def test_the_two_stores_say_unreadable_differently_and_the_wire_says_it_once() -> None:
+    """The graph store reports `readable: False` and the config store reports
+    `unreadable: <why>`. They grew apart; the message has one shape."""
+    assert convert.config_summary_to_wire({"name": "a", "unreadable": "boom"}).readable is False
+    assert convert.config_summary_to_wire({"name": "b"}).readable is True
+
+
+def test_warnings_survive_a_valid_graph() -> None:
+    """Legal, uploads, runs — and probably narrower than its author thinks."""
+    result = convert.graph_validation_to_wire(
+        {
+            "valid": True,
+            "pool_usage": 12,
+            "pool_capacity": 64,
+            "warnings": ["Go is unreachable"],
+        }
+    )
+    assert result.valid is True
+    assert list(result.warnings) == ["Go is unreachable"]
+
+
+# -- recordings -----------------------------------------------------------------
+
+
+def test_a_segment_that_was_never_written_to_has_no_entry_numbers() -> None:
+    """A recording started and paused before anything happened. Entry number 0
+    is real, so the two must stay distinguishable."""
+    assert not convert.segment_to_wire({"entry_count": 0}).HasField("from_entry_number")
+    assert convert.segment_to_wire({"from_entry_number": 0}).HasField("from_entry_number")
+
+
+def test_a_manifest_that_will_not_parse_crosses_as_itself() -> None:
+    message = convert.manifest_to_wire({"name": "run1", "unreadable": "bad json at line 2"})
+    assert message.name == "run1"
+    assert "bad json" in message.unreadable
+    assert message.entry_count == 0
+
+
+def test_the_recordings_list_separates_the_one_being_written() -> None:
+    message = convert.recordings_to_wire(
+        [{"name": "old"}], active={"name": "now", "state": "recording"}
+    )
+    assert message.HasField("active") and message.active.name == "now"
+    assert [each.name for each in message.recordings] == ["old"]
+
+    assert not convert.recordings_to_wire([], active=None).HasField("active")
+
+
+# -- the rig configuration ------------------------------------------------------
+
+
+def test_an_empty_string_is_a_setting_a_patch_can_make() -> None:
+    """`expected_board=""` means "accept whatever answers", which is a
+    decision and not the absence of one."""
+    from statemachined._proto.statemachined.v1 import rig_configuration_pb2
+
+    patch = rig_configuration_pb2.RigConfigurationPatch(expected_board="")
+    assert convert.rig_configuration_patch_from_wire(patch) == {"expected_board": ""}
+    assert (
+        convert.rig_configuration_patch_from_wire(rig_configuration_pb2.RigConfigurationPatch())
+        == {}
+    )
+
+
+def test_a_patch_can_only_reach_the_fields_that_may_change_while_running() -> None:
+    """Everything else decides something that has already happened — where the
+    trace ring lives, which port is bound."""
+    from statemachined.daemon.api.convert.rig_configuration import PATCHABLE
+
+    assert "trace_directory" not in PATCHABLE
+    assert "device_target" in PATCHABLE
+
+
+def test_the_update_always_says_it_lasts_only_until_restart() -> None:
+    from statemachined.daemon.rig_configuration import RigConfiguration
+
+    update = convert.rig_configuration_update_to_wire(
+        RigConfiguration(device_target="loop://"), reconnected=True
+    )
+    assert update.until_restart is True
+    assert update.configuration.device_target == "loop://"

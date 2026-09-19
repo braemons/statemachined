@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n statemachined/v1/documents.proto\x12\x10statemachined.v1\"(\n\nStoredFile\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\"\x1f\n\x0fReadFileRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\"!\n\x11\x44\x65leteFileRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\"\x19\n\tFileDraft\x12\x0c\n\x04text\x18\x01 \x01(\t\"b\n\x0cGraphSummary\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08readable\x18\x02 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x13\n\x0bstate_count\x18\x04 \x01(\x05\x12\r\n\x05\x65ntry\x18\x05 \x01(\t\"@\n\x0eGraphSummaries\x12.\n\x06graphs\x18\x01 \x03(\x0b\x32\x1e.statemachined.v1.GraphSummary\"m\n\x0fGraphValidation\x12\r\n\x05valid\x18\x01 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\x12\x12\n\npool_usage\x18\x03 \x01(\x05\x12\x15\n\rpool_capacity\x18\x04 \x01(\x05\x12\x10\n\x08warnings\x18\x05 \x03(\t\"\x84\x01\n\x19StateMachineConfigSummary\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08readable\x18\x02 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\x12\r\n\x05\x62oard\x18\x05 \x01(\t\x12\x13\n\x0bgraph_names\x18\x06 \x03(\t\"k\n\x1bStateMachineConfigSummaries\x12<\n\x07\x63onfigs\x18\x01 \x03(\x0b\x32+.statemachined.v1.StateMachineConfigSummary\x12\x0e\n\x06loaded\x18\x02 \x01(\tb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n statemachined/v1/documents.proto\x12\x10statemachined.v1\"(\n\nStoredFile\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\"\x1f\n\x0fReadFileRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\"!\n\x11\x44\x65leteFileRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\"\x19\n\tFileDraft\x12\x0c\n\x04text\x18\x01 \x01(\t\"b\n\x0cGraphSummary\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08readable\x18\x02 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x13\n\x0bstate_count\x18\x04 \x01(\x05\x12\r\n\x05\x65ntry\x18\x05 \x01(\t\"@\n\x0eGraphSummaries\x12.\n\x06graphs\x18\x01 \x03(\x0b\x32\x1e.statemachined.v1.GraphSummary\"m\n\x0fGraphValidation\x12\r\n\x05valid\x18\x01 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\x12\x12\n\npool_usage\x18\x03 \x01(\x05\x12\x15\n\rpool_capacity\x18\x04 \x01(\x05\x12\x10\n\x08warnings\x18\x05 \x03(\t\"\xb9\x01\n\x19StateMachineConfigSummary\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08readable\x18\x02 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\x12\r\n\x05\x62oard\x18\x05 \x01(\t\x12\x13\n\x0bgraph_names\x18\x06 \x03(\t\x12\x18\n\x10input_line_count\x18\x07 \x01(\x05\x12\x19\n\x11output_line_count\x18\x08 \x01(\x05\"k\n\x1bStateMachineConfigSummaries\x12<\n\x07\x63onfigs\x18\x01 \x03(\x0b\x32+.statemachined.v1.StateMachineConfigSummary\x12\x0e\n\x06loaded\x18\x02 \x01(\tb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -46,7 +46,7 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_GRAPHVALIDATION']._serialized_start=357
   _globals['_GRAPHVALIDATION']._serialized_end=466
   _globals['_STATEMACHINECONFIGSUMMARY']._serialized_start=469
-  _globals['_STATEMACHINECONFIGSUMMARY']._serialized_end=601
-  _globals['_STATEMACHINECONFIGSUMMARIES']._serialized_start=603
-  _globals['_STATEMACHINECONFIGSUMMARIES']._serialized_end=710
+  _globals['_STATEMACHINECONFIGSUMMARY']._serialized_end=654
+  _globals['_STATEMACHINECONFIGSUMMARIES']._serialized_start=656
+  _globals['_STATEMACHINECONFIGSUMMARIES']._serialized_end=763
 # @@protoc_insertion_point(module_scope)

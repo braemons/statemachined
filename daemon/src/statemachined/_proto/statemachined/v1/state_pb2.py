@@ -26,7 +26,7 @@ from google.protobuf import struct_pb2 as google_dot_protobuf_dot_struct__pb2
 from statemachined._proto.statemachined.v1 import device_pb2 as statemachined_dot_v1_dot_device__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1cstatemachined/v1/state.proto\x12\x10statemachined.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1dstatemachined/v1/device.proto\"\xe8\x02\n\x08RigState\x12\x11\n\tconnected\x18\x01 \x01(\x08\x12\x12\n\nlink_state\x18\x02 \x01(\x05\x12\x0f\n\x07running\x18\x03 \x01(\x08\x12\x15\n\x08trial_id\x18\x04 \x01(\x03H\x00\x88\x01\x01\x12\r\n\x05graph\x18\x05 \x01(\t\x12\x17\n\nstate_name\x18\x06 \x01(\tH\x01\x88\x01\x01\x12\x18\n\x0bstate_index\x18\x07 \x01(\x05H\x02\x88\x01\x01\x12\x17\n\ninput_word\x18\x08 \x01(\x03H\x03\x88\x01\x01\x12\x18\n\x0boutput_word\x18\t \x01(\x03H\x04\x88\x01\x01\x12*\n\x04scan\x18\n \x01(\x0b\x32\x1c.statemachined.v1.ScanHealth\x12!\n\x19newest_trace_entry_number\x18\x0b \x01(\x03\x42\x0b\n\t_trial_idB\r\n\x0b_state_nameB\x0e\n\x0c_state_indexB\r\n\x0b_input_wordB\x0e\n\x0c_output_word\"\x9b\x01\n\nTraceEntry\x12\x14\n\x0c\x65ntry_number\x18\x01 \x01(\x03\x12\x0c\n\x04kind\x18\x02 \x01(\t\x12\x1b\n\x13\x64\x65vice_microseconds\x18\x03 \x01(\x03\x12\x15\n\x08trial_id\x18\x04 \x01(\x03H\x00\x88\x01\x01\x12(\n\x07payload\x18\x05 \x01(\x0b\x32\x17.google.protobuf.StructB\x0b\n\t_trial_id\"\xd2\x01\n\x0bTraceWindow\x12-\n\x07\x65ntries\x18\x01 \x03(\x0b\x32\x1c.statemachined.v1.TraceEntry\x12\x1b\n\x13newest_entry_number\x18\x02 \x01(\x03\x12&\n\x1eoldest_entry_number_still_held\x18\x03 \x01(\x03\x12\x15\n\rring_capacity\x18\x04 \x01(\x05\x12 \n\x13lost_entries_before\x18\x05 \x01(\x03H\x00\x88\x01\x01\x42\x16\n\x14_lost_entries_before\"=\n\x10ReadTraceRequest\x12\x1a\n\x12since_entry_number\x18\x01 \x01(\x03\x12\r\n\x05limit\x18\x02 \x01(\x05\"/\n\x11WatchTraceRequest\x12\x1a\n\x12since_entry_number\x18\x01 \x01(\x03\")\n\x15ReadTrialTraceRequest\x12\x10\n\x08trial_id\x18\x01 \x01(\x03\"M\n\nTrialTrace\x12\x10\n\x08trial_id\x18\x01 \x01(\x03\x12-\n\x07\x65ntries\x18\x02 \x03(\x0b\x32\x1c.statemachined.v1.TraceEntry\"\xb4\x01\n\x08Observer\x12\x13\n\x0bobserver_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0e\n\x06stream\x18\x03 \x01(\t\x12\x0f\n\x07\x61\x64\x64ress\x18\x04 \x01(\t\x12!\n\x19\x63onnected_at_unix_seconds\x18\x05 \x01(\x01\x12\x19\n\x11\x63onnected_seconds\x18\x06 \x01(\x01\x12\x11\n\tdelivered\x18\x07 \x01(\x03\x12\x13\n\x0b\x66\x65ll_behind\x18\x08 \x01(\x08\"I\n\tObservers\x12-\n\tobservers\x18\x01 \x03(\x0b\x32\x1a.statemachined.v1.Observer\x12\r\n\x05\x63ount\x18\x02 \x01(\x05\"T\n\nStateFrame\x12\x10\n\x08sequence\x18\x01 \x01(\x03\x12+\n\x05state\x18\x02 \x01(\x0b\x32\x1a.statemachined.v1.RigStateH\x00\x42\x07\n\x05\x66rameb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1cstatemachined/v1/state.proto\x12\x10statemachined.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1dstatemachined/v1/device.proto\"\xe8\x02\n\x08RigState\x12\x11\n\tconnected\x18\x01 \x01(\x08\x12\x12\n\nlink_state\x18\x02 \x01(\x05\x12\x0f\n\x07running\x18\x03 \x01(\x08\x12\x15\n\x08trial_id\x18\x04 \x01(\x03H\x00\x88\x01\x01\x12\r\n\x05graph\x18\x05 \x01(\t\x12\x17\n\nstate_name\x18\x06 \x01(\tH\x01\x88\x01\x01\x12\x18\n\x0bstate_index\x18\x07 \x01(\x05H\x02\x88\x01\x01\x12\x17\n\ninput_word\x18\x08 \x01(\x03H\x03\x88\x01\x01\x12\x18\n\x0boutput_word\x18\t \x01(\x03H\x04\x88\x01\x01\x12*\n\x04scan\x18\n \x01(\x0b\x32\x1c.statemachined.v1.ScanHealth\x12!\n\x19newest_trace_entry_number\x18\x0b \x01(\x03\x42\x0b\n\t_trial_idB\r\n\x0b_state_nameB\x0e\n\x0c_state_indexB\r\n\x0b_input_wordB\x0e\n\x0c_output_word\"\x9a\x01\n\nTraceEntry\x12\x14\n\x0c\x65ntry_number\x18\x01 \x01(\x03\x12\x0c\n\x04kind\x18\x02 \x01(\t\x12\x1a\n\x12recorded_host_time\x18\x03 \x01(\t\x12\x15\n\x08trial_id\x18\x04 \x01(\x03H\x00\x88\x01\x01\x12(\n\x07payload\x18\x05 \x01(\x0b\x32\x17.google.protobuf.StructB\x0b\n\t_trial_id\"\xd2\x01\n\x0bTraceWindow\x12-\n\x07\x65ntries\x18\x01 \x03(\x0b\x32\x1c.statemachined.v1.TraceEntry\x12\x1b\n\x13newest_entry_number\x18\x02 \x01(\x03\x12&\n\x1eoldest_entry_number_still_held\x18\x03 \x01(\x03\x12\x15\n\rring_capacity\x18\x04 \x01(\x05\x12 \n\x13lost_entries_before\x18\x05 \x01(\x03H\x00\x88\x01\x01\x42\x16\n\x14_lost_entries_before\"=\n\x10ReadTraceRequest\x12\x1a\n\x12since_entry_number\x18\x01 \x01(\x03\x12\r\n\x05limit\x18\x02 \x01(\x05\"/\n\x11WatchTraceRequest\x12\x1a\n\x12since_entry_number\x18\x01 \x01(\x03\")\n\x15ReadTrialTraceRequest\x12\x10\n\x08trial_id\x18\x01 \x01(\x03\"M\n\nTrialTrace\x12\x10\n\x08trial_id\x18\x01 \x01(\x03\x12-\n\x07\x65ntries\x18\x02 \x03(\x0b\x32\x1c.statemachined.v1.TraceEntry\"\xb4\x01\n\x08Observer\x12\x13\n\x0bobserver_id\x18\x01 \x01(\t\x12\x0c\n\x04name\x18\x02 \x01(\t\x12\x0e\n\x06stream\x18\x03 \x01(\t\x12\x0f\n\x07\x61\x64\x64ress\x18\x04 \x01(\t\x12!\n\x19\x63onnected_at_unix_seconds\x18\x05 \x01(\x01\x12\x19\n\x11\x63onnected_seconds\x18\x06 \x01(\x01\x12\x11\n\tdelivered\x18\x07 \x01(\x03\x12\x13\n\x0b\x66\x65ll_behind\x18\x08 \x01(\x08\"I\n\tObservers\x12-\n\tobservers\x18\x01 \x03(\x0b\x32\x1a.statemachined.v1.Observer\x12\r\n\x05\x63ount\x18\x02 \x01(\x05\"T\n\nStateFrame\x12\x10\n\x08sequence\x18\x01 \x01(\x03\x12+\n\x05state\x18\x02 \x01(\x0b\x32\x1a.statemachined.v1.RigStateH\x00\x42\x07\n\x05\x66rameb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -36,21 +36,21 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_RIGSTATE']._serialized_start=112
   _globals['_RIGSTATE']._serialized_end=472
   _globals['_TRACEENTRY']._serialized_start=475
-  _globals['_TRACEENTRY']._serialized_end=630
-  _globals['_TRACEWINDOW']._serialized_start=633
-  _globals['_TRACEWINDOW']._serialized_end=843
-  _globals['_READTRACEREQUEST']._serialized_start=845
-  _globals['_READTRACEREQUEST']._serialized_end=906
-  _globals['_WATCHTRACEREQUEST']._serialized_start=908
-  _globals['_WATCHTRACEREQUEST']._serialized_end=955
-  _globals['_READTRIALTRACEREQUEST']._serialized_start=957
-  _globals['_READTRIALTRACEREQUEST']._serialized_end=998
-  _globals['_TRIALTRACE']._serialized_start=1000
-  _globals['_TRIALTRACE']._serialized_end=1077
-  _globals['_OBSERVER']._serialized_start=1080
-  _globals['_OBSERVER']._serialized_end=1260
-  _globals['_OBSERVERS']._serialized_start=1262
-  _globals['_OBSERVERS']._serialized_end=1335
-  _globals['_STATEFRAME']._serialized_start=1337
-  _globals['_STATEFRAME']._serialized_end=1421
+  _globals['_TRACEENTRY']._serialized_end=629
+  _globals['_TRACEWINDOW']._serialized_start=632
+  _globals['_TRACEWINDOW']._serialized_end=842
+  _globals['_READTRACEREQUEST']._serialized_start=844
+  _globals['_READTRACEREQUEST']._serialized_end=905
+  _globals['_WATCHTRACEREQUEST']._serialized_start=907
+  _globals['_WATCHTRACEREQUEST']._serialized_end=954
+  _globals['_READTRIALTRACEREQUEST']._serialized_start=956
+  _globals['_READTRIALTRACEREQUEST']._serialized_end=997
+  _globals['_TRIALTRACE']._serialized_start=999
+  _globals['_TRIALTRACE']._serialized_end=1076
+  _globals['_OBSERVER']._serialized_start=1079
+  _globals['_OBSERVER']._serialized_end=1259
+  _globals['_OBSERVERS']._serialized_start=1261
+  _globals['_OBSERVERS']._serialized_end=1334
+  _globals['_STATEFRAME']._serialized_start=1336
+  _globals['_STATEFRAME']._serialized_end=1420
 # @@protoc_insertion_point(module_scope)
