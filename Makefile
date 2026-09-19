@@ -33,10 +33,52 @@ check-core:                 ## enforce the portable core's constraints
 # `contracts/vendored/proto/` because neither this daemon nor triald owns it;
 # the checker holds the firmware enum, the Python enum and the graph editor's
 # menu to it, reading all four as text so it runs with nothing installed.
+# `proto/statemachined/v1/` is the interface; this is what turns it into the
+# types the daemon works in. The output is **committed**, so a checkout builds
+# with no protoc and an interface change arrives as a diff a reviewer can read
+# (`contracts/DAEMON_LAYOUT.md`).
+#
+# **The import rewrite is why this is a target and not a command.** protoc
+# roots a generated module's imports at the proto path, so the stubs reach each
+# other as `from statemachined.v1 import ...` — and `statemachined` is this
+# package, so that resolves only through a `__path__` trick no static checker
+# can follow. It cannot work at all for `from braemons.v1 import ...`, which
+# has no package here to hang off. One sed over three file kinds fixes both,
+# and `check-proto` compares the rewritten output so nothing drifts back.
+PROTO_OUT := daemon/src/statemachined/_proto
+PROTOS    := $(wildcard proto/statemachined/v1/*.proto) $(wildcard proto/braemons/v1/*.proto)
+
+.PHONY: proto generate-into
+proto:                      ## regenerate daemon/src/statemachined/_proto/ from proto/
+	@$(MAKE) --no-print-directory generate-into OUT=$(PROTO_OUT)
+	@echo "$(PROTO_OUT)/"
+
+generate-into:
+	@mkdir -p $(OUT)
+	@uv run --project daemon --group dev python -m grpc_tools.protoc \
+	  --proto_path=proto \
+	  --python_out=$(OUT) --pyi_out=$(OUT) --grpc_python_out=$(OUT) \
+	  $(PROTOS)
+	@find $(OUT) -name '*.py' -o -name '*.pyi' | xargs sed -i \
+	  -e 's/^from statemachined\.v1 import /from statemachined._proto.statemachined.v1 import /' \
+	  -e 's/^from braemons\.v1 import /from statemachined._proto.braemons.v1 import /'
+
 check-proto:                ## the proto compiles, and every copy of the taxonomy agrees
 	@protoc --proto_path=proto --descriptor_set_out=/dev/null \
 	  proto/statemachined/v1/*.proto proto/braemons/v1/*.proto
-	@echo "  proto: $$(grep -ch 'rpc ' proto/statemachined/v1/service.proto) rpcs in $$(grep -ch '^service ' proto/statemachined/v1/service.proto) services"
+	@echo "  proto: $$(grep -c '^  rpc ' proto/statemachined/v1/service.proto) rpcs in $$(grep -c '^service ' proto/statemachined/v1/service.proto) services"
+	@# Against a fresh generation rather than against git: a *new* generated
+	@# file is untracked, and `git diff` says nothing at all about an untracked
+	@# file — which is exactly when a generator is least trusted.
+	@rm -rf build/proto-check
+	@$(MAKE) --no-print-directory generate-into OUT=build/proto-check
+	@diff -r -x '__pycache__' build/proto-check $(PROTO_OUT) >/dev/null || { \
+	  echo "$(PROTO_OUT)/ is not what proto/ produces — the interface changed:"; \
+	  diff -rq -x '__pycache__' build/proto-check $(PROTO_OUT) || true; \
+	  echo "run 'make proto' and commit the result with the change that caused it."; \
+	  exit 1; \
+	}
+	@rm -rf build/proto-check
 	@python3 tools/check_outcomes.py
 
 # Exported rather than set per-recipe so a local run fails the same way CI does:
