@@ -174,36 +174,70 @@ message LineMapView {
   repeated string board_output_pins = 5;
 }
 
-// One edge seen on a line, as the monitor recorded it.
-message LineMonitorEntry {
+// One line in or out of the serial port, in the protocol's own words.
+//
+// **"Line" here is a line of text, not a GPIO line.** The two meanings collide
+// throughout this repository — `LineMap` is wiring and `DeviceLineMonitor` is
+// the port — so the interface says `Serial` where it means the port and keeps
+// `line` for the wire only inside this message, where the neighbouring
+// `direction` makes it unambiguous.
+//
+// What this is for is the moment the layers stop agreeing: the line map says
+// the valve is line 3, the valve is not opening, and the question is whether
+// this daemon ever sent the command. Nothing else can answer it.
+message SerialMonitorEntry {
   int64 entry_number = 1;
-  int64 device_microseconds = 2;
+
+  // `tx` or `rx`, from this daemon's point of view.
+  string direction = 2;
+
+  // The NDJSON exactly as it went, framing and all.
   string line = 3;
-  int32 index = 4;
-  bool high = 5;
-  bool is_input = 6;
+
+  string recorded_host_time = 4;
 }
 
-// A window of the line monitor's ring.
-//
-// `lost_entries_before` is the one place the ring's boundedness is visible
-// from outside: saying nothing would hand back a shorter answer that looks
-// complete.
-message LineMonitorWindow {
-  repeated LineMonitorEntry entries = 1;
+// A window of the serial monitor's ring.
+message SerialMonitorWindow {
+  repeated SerialMonitorEntry entries = 1;
   int64 newest_entry_number = 2;
   int64 oldest_entry_number_still_held = 3;
   int32 ring_capacity = 4;
   optional int64 lost_entries_before = 5;
 }
 
-message ReadLineMonitorRequest {
+message ReadSerialMonitorRequest {
   int64 since_entry_number = 1;
   int32 limit = 2;
 }
 
-message WatchLineMonitorRequest {
+message WatchSerialMonitorRequest {
   int64 since_entry_number = 1;
+}
+
+// What replacing the line map did.
+//
+// **Where it lands, and where it does not.** The map goes to the board and
+// into the loaded state-machine config *in memory*. It is not written to the
+// store until somebody saves that config, and this says so — because that is
+// the honest shape for a panel somebody is editing while watching a lamp: a
+// wiring change has to reach the board immediately to be *checked* against the
+// wire, and an edit that reached the disk on every keystroke would make
+// "revert" mean nothing.
+message WriteLineMapResult {
+  LineMapView line_map = 1;
+
+  // False when nothing is attached. The map is still kept, and still applies
+  // the moment a board greets.
+  bool pushed_to_device = 2;
+
+  // Always false today, and named rather than omitted: a UI has to be able to
+  // tell somebody their edit is one restart away from being lost.
+  bool saved_to_the_store = 3;
+
+  // Which config the map went into, or empty when none is loaded — a rig with
+  // no config takes the map anyway and has nowhere to save it.
+  string state_machine_config = 4;
 }
 
 // What the board is running, and what could be flashed onto it.

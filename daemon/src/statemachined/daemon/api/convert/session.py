@@ -78,6 +78,23 @@ def open_session_result_to_wire(
     )
 
 
+def loaded_config_result_to_wire(
+    *, loaded: str, wiring_pushed: bool, line_map, graph_names: list[str]
+) -> session_pb2.LoadedConfigResult:
+    """What loading a state-machine config did.
+
+    `wiring_pushed` is a real distinction rather than a courtesy: a config
+    loads with nothing attached, the line map is applied, and it reaches the
+    board the moment one greets. A caller that assumed the wiring was live
+    would be assuming a lamp it cannot see.
+    """
+    result = session_pb2.LoadedConfigResult(
+        loaded=loaded, wiring_pushed=wiring_pushed, graph_names=graph_names
+    )
+    result.line_map.CopyFrom(line_map)
+    return result
+
+
 def active_graph_to_wire(name: str | None) -> session_pb2.ActiveGraph:
     """Which graph a trial gets when it names none. Empty means nothing is
     selected, in which case a trial must name one."""

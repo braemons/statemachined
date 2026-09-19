@@ -196,12 +196,106 @@ def line_map_view_to_wire(
     return view
 
 
-def line_monitor_entry_to_wire(entry: dict) -> device_pb2.LineMonitorEntry:
-    return device_pb2.LineMonitorEntry(
+def serial_monitor_entry_to_wire(entry: dict) -> device_pb2.SerialMonitorEntry:
+    """One line of NDJSON in or out of the port.
+
+    A line of *text*. `DeviceLineMonitor` and `LineMap` both say "line" and
+    mean different things; the wire says `Serial` where it means the port.
+    """
+    return device_pb2.SerialMonitorEntry(
         entry_number=_int(entry, "entry_number"),
-        device_microseconds=_int(entry, "device_microseconds"),
+        direction=_text(entry, "direction"),
         line=_text(entry, "line"),
-        index=_int(entry, "index"),
-        high=bool(entry.get("high")),
-        is_input=bool(entry.get("is_input")),
+        recorded_host_time=_text(entry, "recorded_host_time"),
     )
+
+
+def serial_monitor_window_to_wire(
+    entries: list[dict],
+    *,
+    newest_entry_number: int,
+    oldest_entry_number_still_held: int,
+    ring_capacity: int,
+    lost_entries_before: int | None,
+) -> device_pb2.SerialMonitorWindow:
+    window = device_pb2.SerialMonitorWindow(
+        entries=[serial_monitor_entry_to_wire(entry) for entry in entries],
+        newest_entry_number=newest_entry_number,
+        oldest_entry_number_still_held=oldest_entry_number_still_held,
+        ring_capacity=ring_capacity,
+    )
+    if lost_entries_before is not None:
+        window.lost_entries_before = lost_entries_before
+    return window
+
+
+def firmware_versions_to_wire(comparison: dict) -> device_pb2.FirmwareVersions:
+    """What the board runs against what this package ships.
+
+    `running_is_stamped` and `comparable` are kept apart from `matches`
+    deliberately: an unstamped local build makes the comparison *meaningless*
+    rather than false, and a UI that showed a red cross for it would be lying
+    about a board nobody can compare.
+    """
+    return device_pb2.FirmwareVersions(
+        running=_text(comparison, "running"),
+        installed=_text(comparison, "installed"),
+        running_is_stamped=bool(comparison.get("running_is_stamped")),
+        comparable=bool(comparison.get("comparable")),
+        matches=bool(comparison.get("matches")),
+    )
+
+
+def autorun_to_wire(reply: dict) -> device_pb2.Autorun:
+    """What the board would do on its own.
+
+    `enabled` and `active` are not the same fact (`protocol.md` §3.7): a board
+    can be configured to arm its own trials and not be doing so right now.
+    """
+    return device_pb2.Autorun(
+        enabled=bool(reply.get("enabled")),
+        active=bool(reply.get("active")),
+        graph_name=_text(reply, "graph"),
+        slot=_int(reply, "slot"),
+        cap_milliseconds=_int(reply, "cap_ms"),
+        seed=_int(reply, "seed"),
+        next_trial_id=_int(reply, "next_trial_id"),
+    )
+
+
+def autorun_request_from_wire(request: device_pb2.WriteAutorunRequest) -> dict:
+    """Only what was set, for the same reason every patch works that way.
+
+    Left out, whatever the board already holds stands — which for a board
+    restored from its own storage is the seed that makes an unattended session
+    replay. A zero seed is a seed.
+    """
+    arguments: dict[str, Any] = {"cap_milliseconds": request.cap_milliseconds}
+    if request.HasField("graph_name"):
+        arguments["graph_name"] = request.graph_name
+    if request.HasField("seed"):
+        arguments["seed"] = request.seed
+    if request.HasField("first_trial_id"):
+        arguments["first_trial_id"] = request.first_trial_id
+    return arguments
+
+
+def write_line_map_result_to_wire(
+    view: device_pb2.LineMapView,
+    *,
+    pushed_to_device: bool,
+    state_machine_config: str,
+) -> device_pb2.WriteLineMapResult:
+    """Where the map landed, and where it did not.
+
+    `saved_to_the_store` is always false and is named rather than omitted: a UI
+    has to be able to tell somebody their edit is one restart away from being
+    lost.
+    """
+    result = device_pb2.WriteLineMapResult(
+        pushed_to_device=pushed_to_device,
+        saved_to_the_store=False,
+        state_machine_config=state_machine_config,
+    )
+    result.line_map.CopyFrom(view)
+    return result

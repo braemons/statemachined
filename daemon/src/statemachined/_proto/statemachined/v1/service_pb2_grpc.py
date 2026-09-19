@@ -636,17 +636,17 @@ class DeviceStub:
         self.WriteLineMapFile = channel.unary_unary(
                 '/statemachined.v1.Device/WriteLineMapFile',
                 request_serializer=statemachined_dot_v1_dot_documents__pb2.StoredFile.SerializeToString,
-                response_deserializer=statemachined_dot_v1_dot_device__pb2.LineMapView.FromString,
+                response_deserializer=statemachined_dot_v1_dot_device__pb2.WriteLineMapResult.FromString,
                 _registered_method=True)
-        self.ReadLineMonitor = channel.unary_unary(
-                '/statemachined.v1.Device/ReadLineMonitor',
-                request_serializer=statemachined_dot_v1_dot_device__pb2.ReadLineMonitorRequest.SerializeToString,
-                response_deserializer=statemachined_dot_v1_dot_device__pb2.LineMonitorWindow.FromString,
+        self.ReadSerialMonitor = channel.unary_unary(
+                '/statemachined.v1.Device/ReadSerialMonitor',
+                request_serializer=statemachined_dot_v1_dot_device__pb2.ReadSerialMonitorRequest.SerializeToString,
+                response_deserializer=statemachined_dot_v1_dot_device__pb2.SerialMonitorWindow.FromString,
                 _registered_method=True)
-        self.WatchLineMonitor = channel.unary_stream(
-                '/statemachined.v1.Device/WatchLineMonitor',
-                request_serializer=statemachined_dot_v1_dot_device__pb2.WatchLineMonitorRequest.SerializeToString,
-                response_deserializer=statemachined_dot_v1_dot_device__pb2.LineMonitorEntry.FromString,
+        self.WatchSerialMonitor = channel.unary_stream(
+                '/statemachined.v1.Device/WatchSerialMonitor',
+                request_serializer=statemachined_dot_v1_dot_device__pb2.WatchSerialMonitorRequest.SerializeToString,
+                response_deserializer=statemachined_dot_v1_dot_device__pb2.SerialMonitorEntry.FromString,
                 _registered_method=True)
         self.ReadFirmware = channel.unary_unary(
                 '/statemachined.v1.Device/ReadFirmware',
@@ -700,22 +700,23 @@ class DeviceServicer:
         raise NotImplementedError('Method not implemented!')
 
     def WriteLineMapFile(self, request, context):
-        """Replace the line map. Refused while a trial is armed or running: a line
-        map is what a trial's record *means*, and moving it mid-trial makes that
-        record a fiction.
+        """Replace the line map, from its text. Refused while a trial is armed or
+        running: a line map is what a trial's record *means*, and moving it
+        mid-trial makes that record a fiction.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def ReadLineMonitor(self, request, context):
-        """A window of the line monitor's ring: every edge seen on every line.
+    def ReadSerialMonitor(self, request, context):
+        """The last lines in and out of the serial port, in the protocol's own words.
+        Lines of *text*, not GPIO lines — see `SerialMonitorEntry`.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def WatchLineMonitor(self, request, context):
+    def WatchSerialMonitor(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -772,17 +773,17 @@ def add_DeviceServicer_to_server(servicer, server):
             'WriteLineMapFile': grpc.unary_unary_rpc_method_handler(
                     servicer.WriteLineMapFile,
                     request_deserializer=statemachined_dot_v1_dot_documents__pb2.StoredFile.FromString,
-                    response_serializer=statemachined_dot_v1_dot_device__pb2.LineMapView.SerializeToString,
+                    response_serializer=statemachined_dot_v1_dot_device__pb2.WriteLineMapResult.SerializeToString,
             ),
-            'ReadLineMonitor': grpc.unary_unary_rpc_method_handler(
-                    servicer.ReadLineMonitor,
-                    request_deserializer=statemachined_dot_v1_dot_device__pb2.ReadLineMonitorRequest.FromString,
-                    response_serializer=statemachined_dot_v1_dot_device__pb2.LineMonitorWindow.SerializeToString,
+            'ReadSerialMonitor': grpc.unary_unary_rpc_method_handler(
+                    servicer.ReadSerialMonitor,
+                    request_deserializer=statemachined_dot_v1_dot_device__pb2.ReadSerialMonitorRequest.FromString,
+                    response_serializer=statemachined_dot_v1_dot_device__pb2.SerialMonitorWindow.SerializeToString,
             ),
-            'WatchLineMonitor': grpc.unary_stream_rpc_method_handler(
-                    servicer.WatchLineMonitor,
-                    request_deserializer=statemachined_dot_v1_dot_device__pb2.WatchLineMonitorRequest.FromString,
-                    response_serializer=statemachined_dot_v1_dot_device__pb2.LineMonitorEntry.SerializeToString,
+            'WatchSerialMonitor': grpc.unary_stream_rpc_method_handler(
+                    servicer.WatchSerialMonitor,
+                    request_deserializer=statemachined_dot_v1_dot_device__pb2.WatchSerialMonitorRequest.FromString,
+                    response_serializer=statemachined_dot_v1_dot_device__pb2.SerialMonitorEntry.SerializeToString,
             ),
             'ReadFirmware': grpc.unary_unary_rpc_method_handler(
                     servicer.ReadFirmware,
@@ -913,7 +914,7 @@ class Device:
             target,
             '/statemachined.v1.Device/WriteLineMapFile',
             statemachined_dot_v1_dot_documents__pb2.StoredFile.SerializeToString,
-            statemachined_dot_v1_dot_device__pb2.LineMapView.FromString,
+            statemachined_dot_v1_dot_device__pb2.WriteLineMapResult.FromString,
             options,
             channel_credentials,
             insecure,
@@ -925,7 +926,7 @@ class Device:
             _registered_method=True)
 
     @staticmethod
-    def ReadLineMonitor(request,
+    def ReadSerialMonitor(request,
             target,
             options=(),
             channel_credentials=None,
@@ -938,9 +939,9 @@ class Device:
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/statemachined.v1.Device/ReadLineMonitor',
-            statemachined_dot_v1_dot_device__pb2.ReadLineMonitorRequest.SerializeToString,
-            statemachined_dot_v1_dot_device__pb2.LineMonitorWindow.FromString,
+            '/statemachined.v1.Device/ReadSerialMonitor',
+            statemachined_dot_v1_dot_device__pb2.ReadSerialMonitorRequest.SerializeToString,
+            statemachined_dot_v1_dot_device__pb2.SerialMonitorWindow.FromString,
             options,
             channel_credentials,
             insecure,
@@ -952,7 +953,7 @@ class Device:
             _registered_method=True)
 
     @staticmethod
-    def WatchLineMonitor(request,
+    def WatchSerialMonitor(request,
             target,
             options=(),
             channel_credentials=None,
@@ -965,9 +966,9 @@ class Device:
         return grpc.experimental.unary_stream(
             request,
             target,
-            '/statemachined.v1.Device/WatchLineMonitor',
-            statemachined_dot_v1_dot_device__pb2.WatchLineMonitorRequest.SerializeToString,
-            statemachined_dot_v1_dot_device__pb2.LineMonitorEntry.FromString,
+            '/statemachined.v1.Device/WatchSerialMonitor',
+            statemachined_dot_v1_dot_device__pb2.WatchSerialMonitorRequest.SerializeToString,
+            statemachined_dot_v1_dot_device__pb2.SerialMonitorEntry.FromString,
             options,
             channel_credentials,
             insecure,

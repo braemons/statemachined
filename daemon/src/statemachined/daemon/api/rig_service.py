@@ -438,6 +438,76 @@ class RigService:
 
     # ------------------------------------------------------ the active graph ---
 
+    def apply_configuration_changes(self, changes: dict) -> bool:
+        """Change the rig configuration, and do whatever the change implies.
+
+        **Until the daemon restarts.** Nothing here writes `/etc/braemons`: a
+        rig's configuration is a file somebody owns and reviews, and a daemon
+        that rewrote it would become the authority on what the hardware is and
+        would silently diverge from the conffile the next upgrade compares
+        against.
+
+        A changed target or a changed expectation re-greets the device rather
+        than waiting for the next reconnect: a board that is no longer the
+        expected one has to be found out about now, and the greeting is where
+        that is refused. Returns whether the link was reopened.
+        """
+        if not changes:
+            return False
+        matters = {"device_target", "expected_board"}
+        reopen = any(
+            name in matters and value != getattr(self.configuration, name)
+            for name, value in changes.items()
+        )
+        for name, value in changes.items():
+            setattr(self.configuration, name, value)
+        self.supervisor.target = self.configuration.device_target
+        self.supervisor.expected_board = self.configuration.expected_board
+        if reopen and self.supervisor.is_connected:
+            self.connect()
+            return True
+        return False
+
+    def apply_line_map(self, line_map: LineMap) -> tuple[LineMap, bool]:
+        """Rename lines and change the wiring, and say whether the board heard.
+
+        Renaming is free — names are this daemon's alone and never reach the
+        wire — and the rest is pushed to the device in the same call, because a
+        debounce that only this side knows about is a debounce that is wrong
+        after a reset.
+
+        **Resolved against the board before anything is kept**, so a map naming
+        a pin this board does not have is refused with the rig still running on
+        the map it had (`docs/reference/protocol.md` §3.6).
+
+        **Where it lands, and where it does not.** The map goes to the device
+        and into the loaded state-machine config *in memory*; it is not written
+        to the store until somebody saves that config. That is the honest shape
+        for a panel somebody is editing while watching a lamp — a wiring change
+        has to reach the board immediately to be checked against the wire, and
+        an edit that reached the disk on every keystroke would make "revert"
+        mean nothing.
+
+        A rig with no config loaded takes the map anyway and holds it in the
+        supervisor. It has nowhere to save it, which the caller is told.
+
+        Returns the resolved map and whether it reached the board.
+        """
+        supervisor = self.supervisor
+        resolved = (
+            line_map.resolved_against(supervisor.pin_map)
+            if supervisor.is_connected
+            else line_map
+        )
+        supervisor.line_map = line_map
+        supervisor.resolved_line_map = resolved
+        if self.state_machine_config is not None:
+            self.state_machine_config.line_map = line_map
+        if supervisor.is_connected:
+            with self.device_lock:
+                supervisor.push_wiring()
+        return resolved, supervisor.is_connected
+
     def select_active_graph(self, graph_name: str | None) -> str | None:
         """Say which graph a trial gets when it does not name one.
 

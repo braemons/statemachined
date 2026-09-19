@@ -56,8 +56,8 @@ RPC_FOR_ROUTE = {
     ("POST", "/api/device/save"): "Device/SaveSettings",
     ("GET", "/api/device/lines"): "Device/ReadLines",
     ("PATCH", "/api/device/lines"): "Device/WriteLineMapFile",
-    ("GET", "/api/device/monitor"): "Device/ReadLineMonitor",
-    ("WEBSOCKET", "/api/device/monitor/stream"): "Device/WatchLineMonitor",
+    ("GET", "/api/device/monitor"): "Device/ReadSerialMonitor",
+    ("WEBSOCKET", "/api/device/monitor/stream"): "Device/WatchSerialMonitor",
     ("GET", "/api/device/firmware"): "Device/ReadFirmware",
 
     ("GET", "/api/graphs"): "GraphStore/ListGraphs",

@@ -33,12 +33,17 @@ arrangement, and reading one should teach you the others.
 """
 
 from .device import (
+    autorun_request_from_wire,
+    autorun_to_wire,
     committed_set_to_wire,
     device_capacities_to_wire,
     device_state_to_wire,
+    firmware_versions_to_wire,
     line_map_view_to_wire,
-    line_monitor_entry_to_wire,
     scan_health_to_wire,
+    serial_monitor_entry_to_wire,
+    serial_monitor_window_to_wire,
+    write_line_map_result_to_wire,
 )
 from .documents import (
     config_summaries_to_wire,
@@ -61,6 +66,7 @@ from .rig_configuration import (
 )
 from .session import (
     active_graph_to_wire,
+    loaded_config_result_to_wire,
     loaded_config_to_wire,
     open_session_result_to_wire,
     session_state_to_wire,
@@ -82,6 +88,8 @@ from .trial import (
 
 __all__ = [
     "active_graph_to_wire",
+    "autorun_request_from_wire",
+    "autorun_to_wire",
     "committed_set_to_wire",
     "config_summaries_to_wire",
     "config_summary_to_wire",
@@ -89,11 +97,12 @@ __all__ = [
     "device_capacities_to_wire",
     "device_state_to_wire",
     "distribution_patches_from_wire",
+    "firmware_versions_to_wire",
     "graph_summaries_to_wire",
     "graph_summary_to_wire",
     "graph_validation_to_wire",
     "line_map_view_to_wire",
-    "line_monitor_entry_to_wire",
+    "loaded_config_result_to_wire",
     "loaded_config_to_wire",
     "manifest_to_wire",
     "observer_to_wire",
@@ -107,6 +116,8 @@ __all__ = [
     "rig_state_to_wire",
     "scan_health_to_wire",
     "segment_to_wire",
+    "serial_monitor_entry_to_wire",
+    "serial_monitor_window_to_wire",
     "session_state_to_wire",
     "state_frame_to_wire",
     "state_visit_to_wire",
@@ -114,4 +125,5 @@ __all__ = [
     "trace_entry_to_wire",
     "trace_window_to_wire",
     "trial_result_to_wire",
+    "write_line_map_result_to_wire",
 ]

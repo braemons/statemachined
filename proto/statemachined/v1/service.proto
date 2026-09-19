@@ -98,14 +98,15 @@ service Device {
   // Every line by name, resolved against the board, with its level right now.
   rpc ReadLines(ReadLinesRequest) returns (LineMapView);
 
-  // Replace the line map. Refused while a trial is armed or running: a line
-  // map is what a trial's record *means*, and moving it mid-trial makes that
-  // record a fiction.
-  rpc WriteLineMapFile(StoredFile) returns (LineMapView);
+  // Replace the line map, from its text. Refused while a trial is armed or
+  // running: a line map is what a trial's record *means*, and moving it
+  // mid-trial makes that record a fiction.
+  rpc WriteLineMapFile(StoredFile) returns (WriteLineMapResult);
 
-  // A window of the line monitor's ring: every edge seen on every line.
-  rpc ReadLineMonitor(ReadLineMonitorRequest) returns (LineMonitorWindow);
-  rpc WatchLineMonitor(WatchLineMonitorRequest) returns (stream LineMonitorEntry);
+  // The last lines in and out of the serial port, in the protocol's own words.
+  // Lines of *text*, not GPIO lines — see `SerialMonitorEntry`.
+  rpc ReadSerialMonitor(ReadSerialMonitorRequest) returns (SerialMonitorWindow);
+  rpc WatchSerialMonitor(WatchSerialMonitorRequest) returns (stream SerialMonitorEntry);
 
   // What the board is running, and what this package could flash onto it.
   rpc ReadFirmware(ReadFirmwareRequest) returns (FirmwareVersions);

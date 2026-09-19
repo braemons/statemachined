@@ -144,37 +144,33 @@ class LineMapView(_message.Message):
     board_output_pins: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, input_lines: _Optional[_Iterable[_Union[InputLine, _Mapping]]] = ..., output_lines: _Optional[_Iterable[_Union[OutputLine, _Mapping]]] = ..., pin_labels_came_from: _Optional[str] = ..., board_input_pins: _Optional[_Iterable[str]] = ..., board_output_pins: _Optional[_Iterable[str]] = ...) -> None: ...
 
-class LineMonitorEntry(_message.Message):
-    __slots__ = ("entry_number", "device_microseconds", "line", "index", "high", "is_input")
+class SerialMonitorEntry(_message.Message):
+    __slots__ = ("entry_number", "direction", "line", "recorded_host_time")
     ENTRY_NUMBER_FIELD_NUMBER: _ClassVar[int]
-    DEVICE_MICROSECONDS_FIELD_NUMBER: _ClassVar[int]
+    DIRECTION_FIELD_NUMBER: _ClassVar[int]
     LINE_FIELD_NUMBER: _ClassVar[int]
-    INDEX_FIELD_NUMBER: _ClassVar[int]
-    HIGH_FIELD_NUMBER: _ClassVar[int]
-    IS_INPUT_FIELD_NUMBER: _ClassVar[int]
+    RECORDED_HOST_TIME_FIELD_NUMBER: _ClassVar[int]
     entry_number: int
-    device_microseconds: int
+    direction: str
     line: str
-    index: int
-    high: bool
-    is_input: bool
-    def __init__(self, entry_number: _Optional[int] = ..., device_microseconds: _Optional[int] = ..., line: _Optional[str] = ..., index: _Optional[int] = ..., high: _Optional[bool] = ..., is_input: _Optional[bool] = ...) -> None: ...
+    recorded_host_time: str
+    def __init__(self, entry_number: _Optional[int] = ..., direction: _Optional[str] = ..., line: _Optional[str] = ..., recorded_host_time: _Optional[str] = ...) -> None: ...
 
-class LineMonitorWindow(_message.Message):
+class SerialMonitorWindow(_message.Message):
     __slots__ = ("entries", "newest_entry_number", "oldest_entry_number_still_held", "ring_capacity", "lost_entries_before")
     ENTRIES_FIELD_NUMBER: _ClassVar[int]
     NEWEST_ENTRY_NUMBER_FIELD_NUMBER: _ClassVar[int]
     OLDEST_ENTRY_NUMBER_STILL_HELD_FIELD_NUMBER: _ClassVar[int]
     RING_CAPACITY_FIELD_NUMBER: _ClassVar[int]
     LOST_ENTRIES_BEFORE_FIELD_NUMBER: _ClassVar[int]
-    entries: _containers.RepeatedCompositeFieldContainer[LineMonitorEntry]
+    entries: _containers.RepeatedCompositeFieldContainer[SerialMonitorEntry]
     newest_entry_number: int
     oldest_entry_number_still_held: int
     ring_capacity: int
     lost_entries_before: int
-    def __init__(self, entries: _Optional[_Iterable[_Union[LineMonitorEntry, _Mapping]]] = ..., newest_entry_number: _Optional[int] = ..., oldest_entry_number_still_held: _Optional[int] = ..., ring_capacity: _Optional[int] = ..., lost_entries_before: _Optional[int] = ...) -> None: ...
+    def __init__(self, entries: _Optional[_Iterable[_Union[SerialMonitorEntry, _Mapping]]] = ..., newest_entry_number: _Optional[int] = ..., oldest_entry_number_still_held: _Optional[int] = ..., ring_capacity: _Optional[int] = ..., lost_entries_before: _Optional[int] = ...) -> None: ...
 
-class ReadLineMonitorRequest(_message.Message):
+class ReadSerialMonitorRequest(_message.Message):
     __slots__ = ("since_entry_number", "limit")
     SINCE_ENTRY_NUMBER_FIELD_NUMBER: _ClassVar[int]
     LIMIT_FIELD_NUMBER: _ClassVar[int]
@@ -182,11 +178,23 @@ class ReadLineMonitorRequest(_message.Message):
     limit: int
     def __init__(self, since_entry_number: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
 
-class WatchLineMonitorRequest(_message.Message):
+class WatchSerialMonitorRequest(_message.Message):
     __slots__ = ("since_entry_number",)
     SINCE_ENTRY_NUMBER_FIELD_NUMBER: _ClassVar[int]
     since_entry_number: int
     def __init__(self, since_entry_number: _Optional[int] = ...) -> None: ...
+
+class WriteLineMapResult(_message.Message):
+    __slots__ = ("line_map", "pushed_to_device", "saved_to_the_store", "state_machine_config")
+    LINE_MAP_FIELD_NUMBER: _ClassVar[int]
+    PUSHED_TO_DEVICE_FIELD_NUMBER: _ClassVar[int]
+    SAVED_TO_THE_STORE_FIELD_NUMBER: _ClassVar[int]
+    STATE_MACHINE_CONFIG_FIELD_NUMBER: _ClassVar[int]
+    line_map: LineMapView
+    pushed_to_device: bool
+    saved_to_the_store: bool
+    state_machine_config: str
+    def __init__(self, line_map: _Optional[_Union[LineMapView, _Mapping]] = ..., pushed_to_device: _Optional[bool] = ..., saved_to_the_store: _Optional[bool] = ..., state_machine_config: _Optional[str] = ...) -> None: ...
 
 class FirmwareVersions(_message.Message):
     __slots__ = ("running", "installed", "running_is_stamped", "comparable", "matches")
