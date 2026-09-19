@@ -11,8 +11,8 @@ from statemachined.daemon.api.rig_service import RigService
 from statemachined.daemon.firmware_manifest import compare_firmware, installed_firmware_version
 from statemachined.model.line_map import LineMap
 
-from .refusals import Category, Refusal, answering, no_board_attached
-from .state_servicer import WATCH_PERIOD_SECONDS, _now
+from .refusals import Category, Refusal, answering, no_board_attached, reading
+from .state_servicer import WATCH_PERIOD_SECONDS
 
 
 class DeviceServicer(service_pb2_grpc.DeviceServicer):
@@ -34,10 +34,10 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
         )
 
     async def ReadDevice(self, request, context):
-        return await answering(context, lambda: _now(self._device_state()))
+        return await answering(context, lambda: self._device_state())
 
     async def OpenLink(self, request, context):
-        async def body():
+        def body():
             self.service.connect()
             return self._device_state()
 
@@ -62,7 +62,7 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
         )
 
     async def ReadLines(self, request, context):
-        return await answering(context, lambda: _now(self._line_map_view()))
+        return await answering(context, lambda: self._line_map_view())
 
     async def WriteLineMapFile(self, request, context):
         """Replace the line map, from its text.
@@ -74,7 +74,7 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
         field name here rather than uploaded and puzzled over on a bench.
         """
 
-        async def body():
+        def body():
             try:
                 line_map = LineMap.model_validate_json(request.text)
             except ValueError as problem:
@@ -102,7 +102,7 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
         return await answering(context, body)
 
     async def ReadSerialMonitor(self, request, context):
-        async def body():
+        def body():
             monitor = self.service.line_monitor
             oldest = monitor.oldest_entry_number_still_held()
             return convert.serial_monitor_window_to_wire(
@@ -123,7 +123,13 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
         monitor = self.service.line_monitor
         next_entry_number = request.since_entry_number
         while True:
-            entries = monitor.lines_since(next_entry_number, limit=500)
+            # Bound explicitly: the lambda runs on another thread, and
+            # `next_entry_number` is reassigned in this loop. It happens to be
+            # awaited immediately, which is exactly the kind of "happens to"
+            # that stops being true when somebody adds a line.
+            entries = await reading(
+                lambda since=next_entry_number: monitor.lines_since(since, limit=500)
+            )
             for entry in entries:
                 yield convert.serial_monitor_entry_to_wire(entry)
                 next_entry_number = entry["entry_number"] + 1
@@ -140,7 +146,7 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
         anything else this daemon does.
         """
 
-        async def body():
+        def body():
             running = (self.service.supervisor.hello_ack or {}).get("fw")
             if running is None:
                 raise no_board_attached("no board is connected, so nothing is running")
@@ -151,7 +157,7 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
         return await answering(context, body)
 
     async def ReadAutorun(self, request, context):
-        async def body():
+        def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached("autorun is the board's own setting")
             return convert.autorun_to_wire(self.service.read_autorun())
@@ -159,7 +165,7 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
         return await answering(context, body)
 
     async def WriteAutorun(self, request, context):
-        async def body():
+        def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached("autorun is the board's own setting")
             return convert.autorun_to_wire(
@@ -171,7 +177,7 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
         return await answering(context, body)
 
     async def SaveSettings(self, request, context):
-        async def body():
+        def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached()
             self.service.save_device_settings()

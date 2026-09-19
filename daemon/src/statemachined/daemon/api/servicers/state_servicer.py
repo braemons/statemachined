@@ -15,7 +15,7 @@ from statemachined._proto.statemachined.v1 import service_pb2_grpc, state_pb2
 from statemachined.daemon.api import convert
 from statemachined.daemon.api.rig_service import RigService
 
-from .refusals import answering
+from .refusals import answering, reading
 
 #: How often a watcher looks for a change. Coarse on purpose: this is a console
 #: refreshing, not a control loop, and the device's own scan is four orders of
@@ -52,7 +52,7 @@ class StateServicer(service_pb2_grpc.StateServicer):
         )
 
     async def ReadState(self, request, context):
-        return await answering(context, lambda: _now(self._state()))
+        return await answering(context, lambda: self._state())
 
     async def WatchState(self, request, context):
         """The current state at once, then one frame per change.
@@ -68,7 +68,7 @@ class StateServicer(service_pb2_grpc.StateServicer):
         sequence = 0
         previous = None
         while True:
-            state = self._state()
+            state = await reading(self._state)
             if previous is None or state != previous:
                 yield convert.state_frame_to_wire(sequence, state)
                 sequence += 1
@@ -76,7 +76,7 @@ class StateServicer(service_pb2_grpc.StateServicer):
             await asyncio.sleep(WATCH_PERIOD_SECONDS)
 
     async def ReadTrace(self, request, context):
-        async def body():
+        def body():
             trace = self.service.trace
             oldest = trace.oldest_entry_number_still_held()
             return convert.trace_window_to_wire(
@@ -106,7 +106,13 @@ class StateServicer(service_pb2_grpc.StateServicer):
         trace = self.service.trace
         next_entry_number = request.since_entry_number
         while True:
-            entries = trace.entries_since(next_entry_number, limit=500)
+            # Bound explicitly: the lambda runs on another thread, and
+            # `next_entry_number` is reassigned in this loop. It happens to be
+            # awaited immediately, which is exactly the kind of "happens to"
+            # that stops being true when somebody adds a line.
+            entries = await reading(
+                lambda since=next_entry_number: trace.entries_since(since, limit=500)
+            )
             for entry in entries:
                 yield convert.trace_entry_to_wire(entry)
                 next_entry_number = entry["entry_number"] + 1
@@ -114,7 +120,7 @@ class StateServicer(service_pb2_grpc.StateServicer):
                 await asyncio.sleep(WATCH_PERIOD_SECONDS)
 
     async def ReadTrialTrace(self, request, context):
-        async def body():
+        def body():
             return state_pb2.TrialTrace(
                 trial_id=request.trial_id,
                 entries=[
@@ -126,14 +132,9 @@ class StateServicer(service_pb2_grpc.StateServicer):
         return await answering(context, body)
 
     async def ReadObservers(self, request, context):
-        async def body():
+        def body():
             return convert.observers_to_wire(
                 [each.as_dict() for each in self.service.observers.observers()]
             )
 
         return await answering(context, body)
-
-
-async def _now(value):
-    """The already-computed answer, as the awaitable `answering` expects."""
-    return value

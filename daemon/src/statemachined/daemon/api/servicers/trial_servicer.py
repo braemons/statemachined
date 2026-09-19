@@ -20,7 +20,7 @@ class TrialServicer(service_pb2_grpc.TrialServicer):
         self.service = service
 
     async def Configure(self, request, context):
-        async def body():
+        def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached()
             arguments = convert.configure_trial_from_wire(request)
@@ -39,7 +39,7 @@ class TrialServicer(service_pb2_grpc.TrialServicer):
         return await answering(context, body)
 
     async def Start(self, request, context):
-        async def body():
+        def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached()
             started = self.service.start_trial(request.trial_id)
@@ -51,7 +51,7 @@ class TrialServicer(service_pb2_grpc.TrialServicer):
         return await answering(context, body)
 
     async def Cancel(self, request, context):
-        async def body():
+        def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached()
             acknowledgement = self.service.cancel_trial(request.trial_id)
@@ -77,7 +77,7 @@ class TrialServicer(service_pb2_grpc.TrialServicer):
         is the mistake the whole addressing scheme exists to prevent.
         """
 
-        async def body():
+        def body():
             result = self.service.last_trial_result
             if result is None:
                 raise Refusal(

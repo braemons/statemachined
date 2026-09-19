@@ -15,7 +15,7 @@ class ConfigurationServicer(service_pb2_grpc.ConfigurationServicer):
         self.service = service
 
     async def ReadConfiguration(self, request, context):
-        async def body():
+        def body():
             return convert.rig_configuration_to_wire(self.service.configuration)
 
         return await answering(context, body)
@@ -32,7 +32,7 @@ class ConfigurationServicer(service_pb2_grpc.ConfigurationServicer):
         would make the running daemon the authority on what the hardware is.
         """
 
-        async def body():
+        def body():
             report = self.service.read_device_state()
             if report.get("running") or report.get("link_state") == 2:
                 raise Refusal(
@@ -58,7 +58,7 @@ class ConfigurationServicer(service_pb2_grpc.ConfigurationServicer):
         touches nothing that could hang on a serial port that is not draining.
         """
 
-        async def body():
+        def body():
             return service_pb2.Health(
                 ok=True, device_connected=self.service.supervisor.is_connected
             )

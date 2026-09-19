@@ -17,10 +17,10 @@ message RigState {
 
   // The device's link state, as the device reports it: 0 idle, 1 armed,
   // 2 running.
-  int32 link_state = 2;
+  int32 link_state = 2 [json_name = "link_state"];
   bool running = 3;
 
-  optional int64 trial_id = 4;
+  optional int64 trial_id = 4 [json_name = "trial_id"];
 
   // The armed graph, by name.
   string graph = 5;
@@ -29,19 +29,19 @@ message RigState {
   // somebody watching a rig, and the daemon holds the graph. Absent when there
   // is no committed set to resolve it against, which is a different thing from
   // "state 0".
-  optional string state_name = 6;
-  optional int32 state_index = 7;
+  optional string state_name = 6 [json_name = "state_name"];
+  optional int32 state_index = 7 [json_name = "state_index"];
 
   // The device's input and output words, as bits. What a line monitor draws,
   // and the only way to check that a graph's line numbers reach the pins
   // somebody wired.
-  optional int64 input_word = 8;
-  optional int64 output_word = 9;
+  optional int64 input_word = 8 [json_name = "input_word"];
+  optional int64 output_word = 9 [json_name = "output_word"];
 
   ScanHealth scan = 10;
 
   // So a client can ask for what it has not seen without polling the ring.
-  int64 newest_trace_entry_number = 11;
+  int64 newest_trace_entry_number = 11 [json_name = "newest_trace_entry_number"];
 }
 
 // One thing that happened, as the trace recorded it.
@@ -53,18 +53,18 @@ message RigState {
 // itself, which is exactly what a trace is for. `kind` says what it is; a
 // reader that does not know a kind shows it as itself rather than dropping it.
 message TraceEntry {
-  int64 entry_number = 1;
+  int64 entry_number = 1 [json_name = "entry_number"];
   string kind = 2;
 
   // When **this daemon** recorded it. Its own clock, and deliberately not an
   // estimate of the device's: a visit's own device timestamp is in the
   // payload, and conflating the two is how a trace stops being joinable to a
   // record.
-  string recorded_host_time = 3;
+  string recorded_host_time = 3 [json_name = "recorded_host_time"];
 
   // The trial this belongs to, when it belongs to one. Plenty do not — a line
   // edge, a link event, a refusal.
-  optional int64 trial_id = 4;
+  optional int64 trial_id = 4 [json_name = "trial_id"];
 
   // Everything else the entry carried.
   google.protobuf.Struct payload = 5;
@@ -77,28 +77,28 @@ message TraceEntry {
 // complete, which is how a gap in a record becomes a gap in an analysis.
 message TraceWindow {
   repeated TraceEntry entries = 1;
-  int64 newest_entry_number = 2;
-  int64 oldest_entry_number_still_held = 3;
-  int32 ring_capacity = 4;
-  optional int64 lost_entries_before = 5;
+  int64 newest_entry_number = 2 [json_name = "newest_entry_number"];
+  int64 oldest_entry_number_still_held = 3 [json_name = "oldest_entry_number_still_held"];
+  int32 ring_capacity = 4 [json_name = "ring_capacity"];
+  optional int64 lost_entries_before = 5 [json_name = "lost_entries_before"];
 }
 
 message ReadTraceRequest {
-  int64 since_entry_number = 1;
+  int64 since_entry_number = 1 [json_name = "since_entry_number"];
   int32 limit = 2;
 }
 
 message WatchTraceRequest {
-  int64 since_entry_number = 1;
+  int64 since_entry_number = 1 [json_name = "since_entry_number"];
 }
 
 // The trace of one trial, joined by `trial_id`.
 message ReadTrialTraceRequest {
-  int64 trial_id = 1;
+  int64 trial_id = 1 [json_name = "trial_id"];
 }
 
 message TrialTrace {
-  int64 trial_id = 1;
+  int64 trial_id = 1 [json_name = "trial_id"];
   repeated TraceEntry entries = 2;
 }
 
@@ -110,22 +110,22 @@ message TrialTrace {
 // the list is for is the question a person asks when trials stop reaching
 // triald, which is otherwise answered with a packet capture.
 message Observer {
-  string observer_id = 1;
+  string observer_id = 1 [json_name = "observer_id"];
   // What it called itself, when it said. Empty when it did not.
   string name = 2;
   // Which stream it is on: the state stream or the trace.
   string stream = 3;
   string address = 4;
 
-  double connected_at_unix_seconds = 5;
-  double connected_seconds = 6;
+  double connected_at_unix_seconds = 5 [json_name = "connected_at_unix_seconds"];
+  double connected_seconds = 6 [json_name = "connected_seconds"];
 
   int64 delivered = 7;
 
   // Whether this observer has ever been dropped a frame because it could not
   // keep up. The number that answers "is the rig slow, or is that browser
   // tab".
-  bool fell_behind = 8;
+  bool fell_behind = 8 [json_name = "fell_behind"];
 }
 
 message Observers {

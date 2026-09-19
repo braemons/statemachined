@@ -53,7 +53,7 @@ message GraphSummary {
   bool readable = 2;
   // Why it could not be read. Empty when it could.
   string detail = 3;
-  int32 state_count = 4;
+  int32 state_count = 4 [json_name = "state_count"];
   string entry = 5;
 }
 
@@ -71,8 +71,8 @@ message GraphValidation {
   // Why not. Empty when it is.
   string detail = 2;
 
-  int32 pool_usage = 3;
-  int32 pool_capacity = 4;
+  int32 pool_usage = 3 [json_name = "pool_usage"];
+  int32 pool_capacity = 4 [json_name = "pool_capacity"];
 
   // Legal, uploads, runs — and probably narrower than its author thinks.
   // **Reported rather than refused**: a graph whose predicate can never be
@@ -92,9 +92,9 @@ message StateMachineConfigSummary {
   string detail = 3;
   string description = 4;
   string board = 5;
-  repeated string graph_names = 6;
-  int32 input_line_count = 7;
-  int32 output_line_count = 8;
+  repeated string graph_names = 6 [json_name = "graph_names"];
+  int32 input_line_count = 7 [json_name = "input_line_count"];
+  int32 output_line_count = 8 [json_name = "output_line_count"];
 }
 
 message StateMachineConfigSummaries {

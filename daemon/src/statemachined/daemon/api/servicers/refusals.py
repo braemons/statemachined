@@ -35,8 +35,9 @@ on them should be switching on the device's answer.
 
 from __future__ import annotations
 
+import asyncio
 import enum
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from typing import TypeVar
 
 import grpc
@@ -196,16 +197,41 @@ async def refuse(context, refusal: Refusal):
     )
 
 
-async def answering(context, work: Callable[[], Awaitable[_T]]) -> _T:
-    """Run one rpc's body, turning whatever it raises into a status.
+async def answering(context, work: Callable[[], _T]) -> _T:
+    """Run one rpc's body on a thread, turning whatever it raises into a status.
 
-    Every servicer method goes through here, so an exception raised six frames
-    down in the device layer reaches the caller as the refusal it is rather
-    than as an `INTERNAL` with a traceback in the log — and so that adding a
-    servicer does not mean remembering to catch anything.
+    Two jobs, and the second is easy to miss.
+
+    **Every exception becomes a status.** One raised six frames down in the
+    device layer reaches the caller as the refusal it is rather than as an
+    `INTERNAL` with a traceback in the log — and adding a servicer does not
+    mean remembering what to catch.
+
+    **`work` is synchronous, and runs off the event loop.** `RigService` is
+    threads and locks over a serial port: `configure_trial` waits for the board
+    to answer, and `open_session` waits for a whole graph set to upload. Called
+    directly from a coroutine, each of those would stall *every* other rpc on
+    the same loop — the state stream a console is watching, the trace triald is
+    subscribed to — for as long as the port took. On a rig that is a UI that
+    freezes whenever a trial arms.
+
+    The routes had this for free: Starlette runs a `def` handler in a
+    threadpool. Doing it here, once, is what keeps that property while the
+    transport changes.
     """
     try:
-        return await work()
+        return await asyncio.to_thread(work)
     except Exception as exception:
         await refuse(context, refusal_for(exception))
         raise  # unreachable: abort() raises. Here so the type is honest.
+
+
+async def reading(work: Callable[[], _T]) -> _T:
+    """One blocking read, off the event loop, with no refusal wrapper.
+
+    For the streams, whose bodies are `async def` generators rather than rpc
+    bodies: a generator that called `read_device_state()` directly would block
+    the loop on every frame, which is the same fault as above arriving once per
+    tick instead of once per call.
+    """
+    return await asyncio.to_thread(work)

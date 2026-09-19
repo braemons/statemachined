@@ -10,32 +10,32 @@ package statemachined.v1;
 // against a constant would mean a graph that fits in the tests and not on the
 // bench.
 message DeviceCapacities {
-  int32 max_line = 1;
-  int32 max_states = 2;
-  int32 max_transitions = 3;
-  int32 max_output_actions = 4;
-  int32 max_distributions = 5;
-  int32 max_choice_options = 6;
-  int32 max_path = 7;
-  int32 max_graphs = 8;
-  int32 max_timers = 9;
+  int32 max_line = 1 [json_name = "max_line"];
+  int32 max_states = 2 [json_name = "max_states"];
+  int32 max_transitions = 3 [json_name = "max_transitions"];
+  int32 max_output_actions = 4 [json_name = "max_output_actions"];
+  int32 max_distributions = 5 [json_name = "max_distributions"];
+  int32 max_choice_options = 6 [json_name = "max_choice_options"];
+  int32 max_path = 7 [json_name = "max_path"];
+  int32 max_graphs = 8 [json_name = "max_graphs"];
+  int32 max_timers = 9 [json_name = "max_timers"];
 
   // Which input line the first global timer holds high. Not derivable from the
   // line count: the timers are counted down from the top of the word, so that
   // a graph means the same thing on a board with eight inputs and one with
   // twenty. The device reports it because nothing else can know it.
-  int32 first_timer_line = 10;
+  int32 first_timer_line = 10 [json_name = "first_timer_line"];
 
-  int32 input_line_count = 11;
-  int32 output_line_count = 12;
+  int32 input_line_count = 11 [json_name = "input_line_count"];
+  int32 output_line_count = 12 [json_name = "output_line_count"];
 }
 
 // The graph set the board is holding right now.
 message CommittedGraphSet {
-  int32 set_version = 1;
-  repeated string graph_names = 2;
-  int32 pool_usage = 3;
-  int32 pool_capacity = 4;
+  int32 set_version = 1 [json_name = "set_version"];
+  repeated string graph_names = 2 [json_name = "graph_names"];
+  int32 pool_usage = 3 [json_name = "pool_usage"];
+  int32 pool_capacity = 4 [json_name = "pool_capacity"];
 }
 
 // How the serial link is behaving.
@@ -43,10 +43,10 @@ message LinkHealth {
   // How many times this daemon has opened the link since it started. A rig
   // whose count climbs on its own has a cable or a power problem, and the
   // number is the only thing that says so.
-  int32 connection_count = 1;
-  int64 dropped_lines = 2;
-  int64 bad_lines = 3;
-  string last_error = 4;
+  int32 connection_count = 1 [json_name = "connection_count"];
+  int64 dropped_lines = 2 [json_name = "dropped_lines"];
+  int64 bad_lines = 3 [json_name = "bad_lines"];
+  string last_error = 4 [json_name = "last_error"];
 }
 
 // Whether the board is keeping to its scan period.
@@ -64,12 +64,12 @@ message ScanHealth {
   int64 overruns = 2;
 
   // The worst gap seen, in scan periods.
-  int32 worst_gap = 3;
+  int32 worst_gap = 3 [json_name = "worst_gap"];
 
   // Times the board had something to say and could not, because the link was
   // not draining. A rig whose `tx_stalls` climbs is losing trace entries at
   // the far end rather than on the board.
-  int64 tx_stalls = 4;
+  int64 tx_stalls = 4 [json_name = "tx_stalls"];
 }
 
 // Everything about the attachment, in one answer.
@@ -81,27 +81,27 @@ message DeviceState {
   string target = 2;
 
   string board = 3;
-  string firmware_version = 4;
-  int32 protocol_version = 5;
-  int32 measured_scan_hz = 6;
+  string firmware_version = 4 [json_name = "firmware_version"];
+  int32 protocol_version = 5 [json_name = "protocol_version"];
+  int32 measured_scan_hz = 6 [json_name = "measured_scan_hz"];
 
   DeviceCapacities capacities = 7;
 
   // Whether the board has a wiring table of its own. Absent when nothing has
   // said either way, which is a different thing from "no".
-  optional bool has_wiring = 8;
+  optional bool has_wiring = 8 [json_name = "has_wiring"];
 
   // Whether this daemon knows which pin each line is **because the board said
   // so**, or because it assumed. `docs/reference/protocol.md` §3.6, and the
   // whole reason that command exists: before it, there was no third answer to
   // "which pin is line 4" beyond a table copied out of the firmware.
-  string pin_labels_came_from = 9;
+  string pin_labels_came_from = 9 [json_name = "pin_labels_came_from"];
 
-  CommittedGraphSet committed_set = 10;
+  CommittedGraphSet committed_set = 10 [json_name = "committed_set"];
   LinkHealth link = 11;
   ScanHealth scan = 12;
 
-  int64 uptime_device_microseconds = 13;
+  int64 uptime_device_microseconds = 13 [json_name = "uptime_device_microseconds"];
 }
 
 // One input line: what it is called, how the rig conditions it, and what it
@@ -113,42 +113,42 @@ message InputLine {
   // the device. Absent when the map named a pin instead and there was no board
   // to resolve it against; a line configured by pin reports the index it will
   // actually be uploaded with as soon as one is attached.
-  optional int32 line_index = 2;
+  optional int32 line_index = 2 [json_name = "line_index"];
 
   // The board's own name for that pin, which is what a person checks against
   // the hardware.
-  string pin_label = 3;
+  string pin_label = 3 [json_name = "pin_label"];
 
   // Reads active-low. Opto-isolated inputs routinely do, and it is applied
   // when the word is assembled so that no predicate above it has a special
   // case.
-  bool reads_active_low = 4;
+  bool reads_active_low = 4 [json_name = "reads_active_low"];
 
   // A disabled line reads zero however the pin is driven, which is how a rig
   // says "nothing is plugged in there" without every graph having to avoid
   // naming it.
-  bool is_enabled = 5;
+  bool is_enabled = 5 [json_name = "is_enabled"];
 
   // Its level right now, from the device's own `io` word. **The only way
   // anything outside the device can check that a graph's line numbers reach
   // the pins somebody wired** — there is no read-back path from a pin. Absent
   // when nothing is attached, which is not the same as low.
-  optional bool is_high_now = 6;
+  optional bool is_high_now = 6 [json_name = "is_high_now"];
 }
 
 // One output line: what it is called, and what "off" means for it.
 message OutputLine {
   string name = 1;
-  optional int32 line_index = 2;
-  string pin_label = 3;
+  optional int32 line_index = 2 [json_name = "line_index"];
+  string pin_label = 3 [json_name = "pin_label"];
 
   // The level this line is driven to on watchdog timeout, reset, link loss or
   // a refused graph. **Per line, because "off" is not always "low":** an
   // active-low valve driver is *opened* by a low, and a board that came up
   // driving every line low would open it on every power cycle.
-  bool safe_level_is_high = 4;
+  bool safe_level_is_high = 4 [json_name = "safe_level_is_high"];
 
-  optional bool is_high_now = 5;
+  optional bool is_high_now = 5 [json_name = "is_high_now"];
 }
 
 // Every line this rig has, by name, with the board's answer folded in.
@@ -159,19 +159,19 @@ message OutputLine {
 // draws: the map, resolved against the board, with the live levels beside it.
 // That join is the one thing only the daemon can do.
 message LineMapView {
-  repeated InputLine input_lines = 1;
-  repeated OutputLine output_lines = 2;
+  repeated InputLine input_lines = 1 [json_name = "input_lines"];
+  repeated OutputLine output_lines = 2 [json_name = "output_lines"];
 
   // Where the pin labels came from. `device` means the board answered `pins`
   // and these labels are its own; `assumed` means this daemon fell back to its
   // own table for firmware older than that command, and every label here is a
   // belief rather than a fact (`docs/reference/protocol.md` §3.6).
-  string pin_labels_came_from = 3;
+  string pin_labels_came_from = 3 [json_name = "pin_labels_came_from"];
 
   // Indexed by line number, so a client reads the board's own name for line 4
   // as `board_input_pins[4]`.
-  repeated string board_input_pins = 4;
-  repeated string board_output_pins = 5;
+  repeated string board_input_pins = 4 [json_name = "board_input_pins"];
+  repeated string board_output_pins = 5 [json_name = "board_output_pins"];
 }
 
 // One line in or out of the serial port, in the protocol's own words.
@@ -186,7 +186,7 @@ message LineMapView {
 // the valve is line 3, the valve is not opening, and the question is whether
 // this daemon ever sent the command. Nothing else can answer it.
 message SerialMonitorEntry {
-  int64 entry_number = 1;
+  int64 entry_number = 1 [json_name = "entry_number"];
 
   // `tx` or `rx`, from this daemon's point of view.
   string direction = 2;
@@ -194,25 +194,25 @@ message SerialMonitorEntry {
   // The NDJSON exactly as it went, framing and all.
   string line = 3;
 
-  string recorded_host_time = 4;
+  string recorded_host_time = 4 [json_name = "recorded_host_time"];
 }
 
 // A window of the serial monitor's ring.
 message SerialMonitorWindow {
   repeated SerialMonitorEntry entries = 1;
-  int64 newest_entry_number = 2;
-  int64 oldest_entry_number_still_held = 3;
-  int32 ring_capacity = 4;
-  optional int64 lost_entries_before = 5;
+  int64 newest_entry_number = 2 [json_name = "newest_entry_number"];
+  int64 oldest_entry_number_still_held = 3 [json_name = "oldest_entry_number_still_held"];
+  int32 ring_capacity = 4 [json_name = "ring_capacity"];
+  optional int64 lost_entries_before = 5 [json_name = "lost_entries_before"];
 }
 
 message ReadSerialMonitorRequest {
-  int64 since_entry_number = 1;
+  int64 since_entry_number = 1 [json_name = "since_entry_number"];
   int32 limit = 2;
 }
 
 message WatchSerialMonitorRequest {
-  int64 since_entry_number = 1;
+  int64 since_entry_number = 1 [json_name = "since_entry_number"];
 }
 
 // What replacing the line map did.
@@ -225,19 +225,19 @@ message WatchSerialMonitorRequest {
 // wire, and an edit that reached the disk on every keystroke would make
 // "revert" mean nothing.
 message WriteLineMapResult {
-  LineMapView line_map = 1;
+  LineMapView line_map = 1 [json_name = "line_map"];
 
   // False when nothing is attached. The map is still kept, and still applies
   // the moment a board greets.
-  bool pushed_to_device = 2;
+  bool pushed_to_device = 2 [json_name = "pushed_to_device"];
 
   // Always false today, and named rather than omitted: a UI has to be able to
   // tell somebody their edit is one restart away from being lost.
-  bool saved_to_the_store = 3;
+  bool saved_to_the_store = 3 [json_name = "saved_to_the_store"];
 
   // Which config the map went into, or empty when none is loaded — a rig with
   // no config takes the map anyway and has nowhere to save it.
-  string state_machine_config = 4;
+  string state_machine_config = 4 [json_name = "state_machine_config"];
 }
 
 // What the board is running, and what could be flashed onto it.
@@ -251,7 +251,7 @@ message FirmwareVersions {
   // Whether the board names a stamped build at all. An unstamped image is a
   // local build, and comparing it to anything is meaningless rather than
   // false.
-  bool running_is_stamped = 3;
+  bool running_is_stamped = 3 [json_name = "running_is_stamped"];
 
   // Whether both sides name a stamped build, so the comparison means
   // something.
@@ -280,12 +280,12 @@ message Autorun {
 
   // Which graph it runs, by name where this daemon can say it. The board holds
   // a slot; the name comes from the committed set.
-  string graph_name = 3;
+  string graph_name = 3 [json_name = "graph_name"];
   int32 slot = 4;
 
-  int32 cap_milliseconds = 5;
+  int32 cap_milliseconds = 5 [json_name = "cap_milliseconds"];
   int64 seed = 6;
-  int64 next_trial_id = 7;
+  int64 next_trial_id = 7 [json_name = "next_trial_id"];
 }
 
 // Hand the board the job of arming its own trials, or take it back.
@@ -295,14 +295,14 @@ message WriteAutorunRequest {
   // A name, never a slot — like everything else this API takes. Left out when
   // enabling, the session's active graph is used, which is the one a person
   // looking at this rig would mean.
-  optional string graph_name = 2;
+  optional string graph_name = 2 [json_name = "graph_name"];
 
-  int32 cap_milliseconds = 3;
+  int32 cap_milliseconds = 3 [json_name = "cap_milliseconds"];
 
   // The stream the board's own trials draw from. Left out, whatever the board
   // already holds stands — which for a board restored from its own storage is
   // the seed that makes an unattended session replay.
   optional int64 seed = 4;
 
-  optional int64 first_trial_id = 5;
+  optional int64 first_trial_id = 5 [json_name = "first_trial_id"];
 }

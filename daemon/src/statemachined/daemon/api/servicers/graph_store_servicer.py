@@ -27,32 +27,37 @@ class GraphStoreServicer(service_pb2_grpc.GraphStoreServicer):
     def __init__(self, service: RigService) -> None:
         self.service = service
 
-    async def ListGraphs(self, request, context):
-        async def body():
-            summaries = []
-            for name in self.service.graph_store.stored_graph_names():
-                try:
-                    graph = self.service.graph_store.load(name)
-                except Exception as problem:
-                    # Listed as broken rather than omitted: a paradigm that has
-                    # silently vanished from the list is how somebody spends an
-                    # afternoon looking for it.
-                    summaries.append({"name": name, "readable": False, "detail": str(problem)})
-                    continue
-                summaries.append(
-                    {
-                        "name": graph.name,
-                        "readable": True,
-                        "state_count": len(graph.states),
-                        "entry": graph.entry,
-                    }
-                )
-            return convert.graph_summaries_to_wire(summaries)
+    def _summaries(self) -> list[dict]:
+        """Every stored graph, with enough of each to choose between them.
 
-        return await answering(context, body)
+        A graph that no longer parses is listed as broken rather than omitted:
+        a paradigm that has silently vanished from the list is how somebody
+        spends an afternoon looking for it.
+        """
+        summaries: list[dict] = []
+        for name in self.service.graph_store.stored_graph_names():
+            try:
+                graph = self.service.graph_store.load(name)
+            except Exception as problem:
+                summaries.append({"name": name, "readable": False, "detail": str(problem)})
+                continue
+            summaries.append(
+                {
+                    "name": graph.name,
+                    "readable": True,
+                    "state_count": len(graph.states),
+                    "entry": graph.entry,
+                }
+            )
+        return summaries
+
+    async def ListGraphs(self, request, context):
+        return await answering(
+            context, lambda: convert.graph_summaries_to_wire(self._summaries())
+        )
 
     async def ReadGraphFile(self, request, context):
-        async def body():
+        def body():
             graph = self.service.graph_store.load(request.name)
             return convert.stored_file_to_wire(
                 graph.name, graph.model_dump_json(indent=2, exclude_defaults=True)
@@ -61,7 +66,7 @@ class GraphStoreServicer(service_pb2_grpc.GraphStoreServicer):
         return await answering(context, body)
 
     async def WriteGraphFile(self, request, context):
-        async def body():
+        def body():
             graph = _parse(request.text)
             if request.name and graph.name != request.name:
                 raise Refusal(
@@ -84,9 +89,9 @@ class GraphStoreServicer(service_pb2_grpc.GraphStoreServicer):
         return await answering(context, body)
 
     async def DeleteGraph(self, request, context):
-        async def body():
+        def body():
             self.service.graph_store.delete(request.name)
-            return await self.ListGraphs(request, context)
+            return convert.graph_summaries_to_wire(self._summaries())
 
         return await answering(context, body)
 
@@ -124,7 +129,7 @@ class GraphStoreServicer(service_pb2_grpc.GraphStoreServicer):
         }
 
     async def ValidateGraph(self, request, context):
-        async def body():
+        def body():
             graph = self.service.graph_store.load(request.name)
             return convert.graph_validation_to_wire(self._validate(graph))
 
@@ -138,13 +143,13 @@ class GraphStoreServicer(service_pb2_grpc.GraphStoreServicer):
         description of a graph living in a browser.
         """
 
-        async def body():
+        def body():
             return convert.graph_validation_to_wire(self._validate(_parse(request.text)))
 
         return await answering(context, body)
 
     async def UploadGraph(self, request, context):
-        async def body():
+        def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached()
             compiled, _elapsed = self.service.upload_session_graph_set([request.name])

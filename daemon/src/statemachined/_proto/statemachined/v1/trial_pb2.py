@@ -25,31 +25,31 @@ _sym_db = _symbol_database.Default()
 from statemachined._proto.braemons.v1 import trial_outcome_pb2 as braemons_dot_v1_dot_trial__outcome__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1cstatemachined/v1/trial.proto\x12\x10statemachined.v1\x1a\x1f\x62raemons/v1/trial_outcome.proto\"\xba\x02\n\nStateVisit\x12\x12\n\nstate_name\x18\x01 \x01(\t\x12\x12\n\nexit_cause\x18\x02 \x01(\t\x12&\n\x19\x66ired_transition_position\x18\x03 \x01(\x05H\x00\x88\x01\x01\x12/\n\"fired_transition_target_state_name\x18\x04 \x01(\tH\x01\x88\x01\x01\x12\x19\n\x11\x64rawn_duration_ms\x18\x05 \x01(\x05\x12#\n\x1b\x65ntered_device_microseconds\x18\x06 \x01(\x03\x12&\n\x1emeasured_duration_microseconds\x18\x07 \x01(\x03\x42\x1c\n\x1a_fired_transition_positionB%\n#_fired_transition_target_state_name\"\xb6\x02\n\x0bTrialResult\x12\x10\n\x08trial_id\x18\x01 \x01(\x03\x12*\n\x07outcome\x18\x02 \x01(\x0e\x32\x19.braemons.v1.TrialOutcome\x12:\n\rcancel_reason\x18\x03 \x01(\x0e\x32#.statemachined.v1.TrialCancelReason\x12#\n\x1btotal_duration_microseconds\x18\x04 \x01(\x03\x12,\n\x06visits\x18\x05 \x03(\x0b\x32\x1c.statemachined.v1.StateVisit\x12\x1a\n\x12path_was_truncated\x18\x06 \x01(\x08\x12#\n\x1b\x66irst_visit_sequence_number\x18\x07 \x01(\x03\x12\x19\n\x11total_visit_count\x18\x08 \x01(\x03\"\xbd\x01\n\x11\x44istributionPatch\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x17\n\nminimum_ms\x18\x02 \x01(\x05H\x00\x88\x01\x01\x12\x17\n\nmaximum_ms\x18\x03 \x01(\x05H\x01\x88\x01\x01\x12\x14\n\x07mean_ms\x18\x04 \x01(\x05H\x02\x88\x01\x01\x12\x18\n\x0b\x64uration_ms\x18\x05 \x01(\x05H\x03\x88\x01\x01\x42\r\n\x0b_minimum_msB\r\n\x0b_maximum_msB\n\n\x08_mean_msB\x0e\n\x0c_duration_ms\"\xd3\x01\n\x15\x43onfigureTrialRequest\x12\x10\n\x08trial_id\x18\x01 \x01(\x03\x12\r\n\x05graph\x18\x02 \x01(\t\x12\x18\n\x10\x63\x61p_milliseconds\x18\x03 \x01(\x05\x12\x14\n\x0cstart_source\x18\x04 \x01(\t\x12\x17\n\nstart_line\x18\x05 \x01(\x05H\x00\x88\x01\x01\x12\x41\n\x14\x64istribution_patches\x18\x06 \x03(\x0b\x32#.statemachined.v1.DistributionPatchB\r\n\x0b_start_line\"\x7f\n\x14\x43onfigureTrialResult\x12\x10\n\x08trial_id\x18\x01 \x01(\x03\x12\r\n\x05graph\x18\x02 \x01(\t\x12\x13\n\x0bset_version\x18\x03 \x01(\x05\x12\x13\n\x0bgraph_index\x18\x04 \x01(\x05\x12\x1c\n\x14\x65lapsed_milliseconds\x18\x05 \x01(\x05\"%\n\x11StartTrialRequest\x12\x10\n\x08trial_id\x18\x01 \x01(\x03\"I\n\x10StartTrialResult\x12\x10\n\x08trial_id\x18\x01 \x01(\x03\x12#\n\x1bstarted_device_microseconds\x18\x02 \x01(\x03\"&\n\x12\x43\x61ncelTrialRequest\x12\x10\n\x08trial_id\x18\x01 \x01(\x03\"<\n\x16ReadTrialResultRequest\x12\x15\n\x08trial_id\x18\x01 \x01(\x03H\x00\x88\x01\x01\x42\x0b\n\t_trial_id*\xbd\x01\n\x11TrialCancelReason\x12\x1c\n\x18TRIAL_CANCEL_REASON_NONE\x10\x00\x12\x1c\n\x18TRIAL_CANCEL_REASON_HOST\x10\x01\x12!\n\x1dTRIAL_CANCEL_REASON_LINK_LOST\x10\x02\x12\"\n\x1eTRIAL_CANCEL_REASON_ABORT_LINE\x10\x03\x12%\n!TRIAL_CANCEL_REASON_TRIAL_TIMEOUT\x10\x04\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1cstatemachined/v1/trial.proto\x12\x10statemachined.v1\x1a\x1f\x62raemons/v1/trial_outcome.proto\"\xe1\x03\n\nStateVisit\x12\x1e\n\nstate_name\x18\x01 \x01(\tR\nstate_name\x12\x1e\n\nexit_cause\x18\x02 \x01(\tR\nexit_cause\x12\x41\n\x19\x66ired_transition_position\x18\x03 \x01(\x05H\x00R\x19\x66ired_transition_position\x88\x01\x01\x12S\n\"fired_transition_target_state_name\x18\x04 \x01(\tH\x01R\"fired_transition_target_state_name\x88\x01\x01\x12,\n\x11\x64rawn_duration_ms\x18\x05 \x01(\x05R\x11\x64rawn_duration_ms\x12@\n\x1b\x65ntered_device_microseconds\x18\x06 \x01(\x03R\x1b\x65ntered_device_microseconds\x12\x46\n\x1emeasured_duration_microseconds\x18\x07 \x01(\x03R\x1emeasured_duration_microsecondsB\x1c\n\x1a_fired_transition_positionB%\n#_fired_transition_target_state_name\"\xb0\x03\n\x0bTrialResult\x12\x1a\n\x08trial_id\x18\x01 \x01(\x03R\x08trial_id\x12*\n\x07outcome\x18\x02 \x01(\x0e\x32\x19.braemons.v1.TrialOutcome\x12I\n\rcancel_reason\x18\x03 \x01(\x0e\x32#.statemachined.v1.TrialCancelReasonR\rcancel_reason\x12@\n\x1btotal_duration_microseconds\x18\x04 \x01(\x03R\x1btotal_duration_microseconds\x12,\n\x06visits\x18\x05 \x03(\x0b\x32\x1c.statemachined.v1.StateVisit\x12.\n\x12path_was_truncated\x18\x06 \x01(\x08R\x12path_was_truncated\x12@\n\x1b\x66irst_visit_sequence_number\x18\x07 \x01(\x03R\x1b\x66irst_visit_sequence_number\x12,\n\x11total_visit_count\x18\x08 \x01(\x03R\x11total_visit_count\"\xeb\x01\n\x11\x44istributionPatch\x12\x0c\n\x04name\x18\x01 \x01(\t\x12#\n\nminimum_ms\x18\x02 \x01(\x05H\x00R\nminimum_ms\x88\x01\x01\x12#\n\nmaximum_ms\x18\x03 \x01(\x05H\x01R\nmaximum_ms\x88\x01\x01\x12\x1d\n\x07mean_ms\x18\x04 \x01(\x05H\x02R\x07mean_ms\x88\x01\x01\x12%\n\x0b\x64uration_ms\x18\x05 \x01(\x05H\x03R\x0b\x64uration_ms\x88\x01\x01\x42\r\n\x0b_minimum_msB\r\n\x0b_maximum_msB\n\n\x08_mean_msB\x0e\n\x0c_duration_ms\"\x9f\x02\n\x15\x43onfigureTrialRequest\x12\x1a\n\x08trial_id\x18\x01 \x01(\x03R\x08trial_id\x12\r\n\x05graph\x18\x02 \x01(\t\x12*\n\x10\x63\x61p_milliseconds\x18\x03 \x01(\x05R\x10\x63\x61p_milliseconds\x12\"\n\x0cstart_source\x18\x04 \x01(\tR\x0cstart_source\x12#\n\nstart_line\x18\x05 \x01(\x05H\x00R\nstart_line\x88\x01\x01\x12W\n\x14\x64istribution_patches\x18\x06 \x03(\x0b\x32#.statemachined.v1.DistributionPatchR\x14\x64istribution_patchesB\r\n\x0b_start_line\"\xb9\x01\n\x14\x43onfigureTrialResult\x12\x1a\n\x08trial_id\x18\x01 \x01(\x03R\x08trial_id\x12\r\n\x05graph\x18\x02 \x01(\t\x12 \n\x0bset_version\x18\x03 \x01(\x05R\x0bset_version\x12 \n\x0bgraph_index\x18\x04 \x01(\x05R\x0bgraph_index\x12\x32\n\x14\x65lapsed_milliseconds\x18\x05 \x01(\x05R\x14\x65lapsed_milliseconds\"/\n\x11StartTrialRequest\x12\x1a\n\x08trial_id\x18\x01 \x01(\x03R\x08trial_id\"p\n\x10StartTrialResult\x12\x1a\n\x08trial_id\x18\x01 \x01(\x03R\x08trial_id\x12@\n\x1bstarted_device_microseconds\x18\x02 \x01(\x03R\x1bstarted_device_microseconds\"0\n\x12\x43\x61ncelTrialRequest\x12\x1a\n\x08trial_id\x18\x01 \x01(\x03R\x08trial_id\"F\n\x16ReadTrialResultRequest\x12\x1f\n\x08trial_id\x18\x01 \x01(\x03H\x00R\x08trial_id\x88\x01\x01\x42\x0b\n\t_trial_id*\xbd\x01\n\x11TrialCancelReason\x12\x1c\n\x18TRIAL_CANCEL_REASON_NONE\x10\x00\x12\x1c\n\x18TRIAL_CANCEL_REASON_HOST\x10\x01\x12!\n\x1dTRIAL_CANCEL_REASON_LINK_LOST\x10\x02\x12\"\n\x1eTRIAL_CANCEL_REASON_ABORT_LINE\x10\x03\x12%\n!TRIAL_CANCEL_REASON_TRIAL_TIMEOUT\x10\x04\x62\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'statemachined.v1.trial_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_TRIALCANCELREASON']._serialized_start=1465
-  _globals['_TRIALCANCELREASON']._serialized_end=1654
+  _globals['_TRIALCANCELREASON']._serialized_start=2004
+  _globals['_TRIALCANCELREASON']._serialized_end=2193
   _globals['_STATEVISIT']._serialized_start=84
-  _globals['_STATEVISIT']._serialized_end=398
-  _globals['_TRIALRESULT']._serialized_start=401
-  _globals['_TRIALRESULT']._serialized_end=711
-  _globals['_DISTRIBUTIONPATCH']._serialized_start=714
-  _globals['_DISTRIBUTIONPATCH']._serialized_end=903
-  _globals['_CONFIGURETRIALREQUEST']._serialized_start=906
-  _globals['_CONFIGURETRIALREQUEST']._serialized_end=1117
-  _globals['_CONFIGURETRIALRESULT']._serialized_start=1119
-  _globals['_CONFIGURETRIALRESULT']._serialized_end=1246
-  _globals['_STARTTRIALREQUEST']._serialized_start=1248
-  _globals['_STARTTRIALREQUEST']._serialized_end=1285
-  _globals['_STARTTRIALRESULT']._serialized_start=1287
-  _globals['_STARTTRIALRESULT']._serialized_end=1360
-  _globals['_CANCELTRIALREQUEST']._serialized_start=1362
-  _globals['_CANCELTRIALREQUEST']._serialized_end=1400
-  _globals['_READTRIALRESULTREQUEST']._serialized_start=1402
-  _globals['_READTRIALRESULTREQUEST']._serialized_end=1462
+  _globals['_STATEVISIT']._serialized_end=565
+  _globals['_TRIALRESULT']._serialized_start=568
+  _globals['_TRIALRESULT']._serialized_end=1000
+  _globals['_DISTRIBUTIONPATCH']._serialized_start=1003
+  _globals['_DISTRIBUTIONPATCH']._serialized_end=1238
+  _globals['_CONFIGURETRIALREQUEST']._serialized_start=1241
+  _globals['_CONFIGURETRIALREQUEST']._serialized_end=1528
+  _globals['_CONFIGURETRIALRESULT']._serialized_start=1531
+  _globals['_CONFIGURETRIALRESULT']._serialized_end=1716
+  _globals['_STARTTRIALREQUEST']._serialized_start=1718
+  _globals['_STARTTRIALREQUEST']._serialized_end=1765
+  _globals['_STARTTRIALRESULT']._serialized_start=1767
+  _globals['_STARTTRIALRESULT']._serialized_end=1879
+  _globals['_CANCELTRIALREQUEST']._serialized_start=1881
+  _globals['_CANCELTRIALREQUEST']._serialized_end=1929
+  _globals['_READTRIALRESULTREQUEST']._serialized_start=1931
+  _globals['_READTRIALRESULTREQUEST']._serialized_end=2001
 # @@protoc_insertion_point(module_scope)

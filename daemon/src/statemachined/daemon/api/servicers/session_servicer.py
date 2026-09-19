@@ -26,7 +26,7 @@ class SessionServicer(service_pb2_grpc.SessionServicer):
         )
 
     async def ReadSession(self, request, context):
-        async def body():
+        def body():
             return self._session_state()
 
         return await answering(context, body)
@@ -40,7 +40,7 @@ class SessionServicer(service_pb2_grpc.SessionServicer):
         40.
         """
 
-        async def body():
+        def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached()
             compiled, elapsed = self.service.open_session()
@@ -55,7 +55,7 @@ class SessionServicer(service_pb2_grpc.SessionServicer):
     async def UploadGraphs(self, request, context):
         """The same upload, composed by hand rather than from a config."""
 
-        async def body():
+        def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached()
             compiled, elapsed = self.service.upload_session_graph_set(list(request.graph_names))
@@ -72,20 +72,20 @@ class SessionServicer(service_pb2_grpc.SessionServicer):
         """Give the board up. The committed set stays on it, which is what
         makes a reconnect cheap."""
 
-        async def body():
+        def body():
             self.service.close_session()
             return self._session_state()
 
         return await answering(context, body)
 
     async def SetActiveGraph(self, request, context):
-        async def body():
+        def body():
             return convert.active_graph_to_wire(self.service.select_active_graph(request.graph))
 
         return await answering(context, body)
 
     async def ClearActiveGraph(self, request, context):
-        async def body():
+        def body():
             return convert.active_graph_to_wire(self.service.select_active_graph(None))
 
         return await answering(context, body)

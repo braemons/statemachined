@@ -23,13 +23,13 @@ class RecordingServicer(service_pb2_grpc.RecordingServicer):
         return convert.recordings_to_wire(recorder.manifests(), active=recorder.active)
 
     async def ReadRecordings(self, request, context):
-        async def body():
+        def body():
             return self._recordings()
 
         return await answering(context, body)
 
     async def Start(self, request, context):
-        async def body():
+        def body():
             # The service reads the loaded config itself — which config a
             # recording was made under is its decision, not a caller's, and a
             # servicer passing one in would be a second opinion about a rig
@@ -51,37 +51,37 @@ class RecordingServicer(service_pb2_grpc.RecordingServicer):
         it would have to guess whether it was a pause or a loss.
         """
 
-        async def body():
+        def body():
             return convert.manifest_to_wire(self.service.pause_recording())
 
         return await answering(context, body)
 
     async def Resume(self, request, context):
-        async def body():
+        def body():
             return convert.manifest_to_wire(self.service.resume_recording())
 
         return await answering(context, body)
 
     async def Stop(self, request, context):
-        async def body():
+        def body():
             return convert.manifest_to_wire(self.service.stop_recording())
 
         return await answering(context, body)
 
     async def Clear(self, request, context):
-        async def body():
+        def body():
             return convert.manifest_to_wire(self.service.clear_recording())
 
         return await answering(context, body)
 
     async def ReadRecording(self, request, context):
-        async def body():
+        def body():
             return convert.manifest_to_wire(self.service.recorder.manifest_of(request.name))
 
         return await answering(context, body)
 
     async def ReadEntries(self, request, context):
-        async def body():
+        def body():
             recorder = self.service.recorder
             manifest = recorder.manifest_of(request.name)
             return convert.recording_entries_to_wire(
@@ -97,7 +97,7 @@ class RecordingServicer(service_pb2_grpc.RecordingServicer):
         return await answering(context, body)
 
     async def DeleteRecording(self, request, context):
-        async def body():
+        def body():
             self.service.recorder.delete(request.name)
             return self._recordings()
 

@@ -33,35 +33,35 @@ enum TrialCancelReason {
 // last week's data, and it is why an analysis reads `Foreperiod` rather than
 // `state 2`.
 message StateVisit {
-  string state_name = 1;
+  string state_name = 1 [json_name = "state_name"];
 
   // "timeout", "transition", "cancel" or "terminal".
-  string exit_cause = 2;
+  string exit_cause = 2 [json_name = "exit_cause"];
 
   // Which of this state's transitions fired, counted from zero in the order
   // the graph declares them. Absent for an exit that was not a transition —
   // which is a different thing from transition zero, and the reason this is
   // `optional` rather than a sentinel.
-  optional int32 fired_transition_position = 3;
+  optional int32 fired_transition_position = 3 [json_name = "fired_transition_position"];
 
   // Where that transition led, resolved against the graph. Absent when nothing
   // fired, and also when the graph this daemon holds no longer has that edge —
   // an index the graph cannot explain is reported as unresolved rather than
   // guessed at, because a row from a device holding a different set is a
   // finding and a plausible name for it would bury that.
-  optional string fired_transition_target_state_name = 4;
+  optional string fired_transition_target_state_name = 4 [json_name = "fired_transition_target_state_name"];
 
   // What the device *drew* for this state's timeout. Reported so that a random
   // timing is evidence in the record rather than merely reproducible from the
   // seed.
-  int32 drawn_duration_ms = 5;
+  int32 drawn_duration_ms = 5 [json_name = "drawn_duration_ms"];
 
   // Device clock. Wraps every ~71 minutes, which is why the daemon correlates
   // it to the host clock rather than handing it over raw.
-  int64 entered_device_microseconds = 6;
+  int64 entered_device_microseconds = 6 [json_name = "entered_device_microseconds"];
 
   // What actually happened. `drawn_duration_ms` is what was asked for.
-  int64 measured_duration_microseconds = 7;
+  int64 measured_duration_microseconds = 7 [json_name = "measured_duration_microseconds"];
 }
 
 // A whole trial's result, reassembled and named.
@@ -72,14 +72,14 @@ message StateVisit {
 // an opinion gets smuggled in unnoticed. Whether a trial *counts* is triald's
 // question, asked of the same outcome.
 message TrialResult {
-  int64 trial_id = 1;
+  int64 trial_id = 1 [json_name = "trial_id"];
 
   // The `.tdr` code. `braemons.v1` because neither this daemon nor triald owns
   // the taxonomy: this one reports an outcome and that one records it.
   braemons.v1.TrialOutcome outcome = 2;
 
-  TrialCancelReason cancel_reason = 3;
-  int64 total_duration_microseconds = 4;
+  TrialCancelReason cancel_reason = 3 [json_name = "cancel_reason"];
+  int64 total_duration_microseconds = 4 [json_name = "total_duration_microseconds"];
 
   repeated StateVisit visits = 5;
 
@@ -88,9 +88,9 @@ message TrialResult {
   // `total_visit_count`, starting at `first_visit_sequence_number`. Saying so
   // is the only honest answer — a shorter list with no flag would look
   // complete.
-  bool path_was_truncated = 6;
-  int64 first_visit_sequence_number = 7;
-  int64 total_visit_count = 8;
+  bool path_was_truncated = 6 [json_name = "path_was_truncated"];
+  int64 first_visit_sequence_number = 7 [json_name = "first_visit_sequence_number"];
+  int64 total_visit_count = 8 [json_name = "total_visit_count"];
 }
 
 // Which graph to run, and under what number.
@@ -108,15 +108,15 @@ message TrialResult {
 // "leave this one alone", and zero is a legal duration.
 message DistributionPatch {
   string name = 1;
-  optional int32 minimum_ms = 2;
-  optional int32 maximum_ms = 3;
-  optional int32 mean_ms = 4;
-  optional int32 duration_ms = 5;
+  optional int32 minimum_ms = 2 [json_name = "minimum_ms"];
+  optional int32 maximum_ms = 3 [json_name = "maximum_ms"];
+  optional int32 mean_ms = 4 [json_name = "mean_ms"];
+  optional int32 duration_ms = 5 [json_name = "duration_ms"];
 }
 
 // Arm the device for one trial of one graph. Nothing is uploaded.
 message ConfigureTrialRequest {
-  int64 trial_id = 1;
+  int64 trial_id = 1 [json_name = "trial_id"];
 
   // A name, never a slot. Empty means the **active graph**, which is what a
   // person pressing a button on a bench means. triald never relies on it: it
@@ -127,53 +127,53 @@ message ConfigureTrialRequest {
   // A wall-clock cap on the whole trial, `0` for none. It stays whatever the
   // graph says, because validation cannot tell a ten-second foreperiod from a
   // hang.
-  int32 cap_milliseconds = 3;
+  int32 cap_milliseconds = 3 [json_name = "cap_milliseconds"];
 
   // What starts the trial: `serial` (the host says go) or `line` (an input
   // edge does).
-  string start_source = 4;
+  string start_source = 4 [json_name = "start_source"];
 
   // The input line whose rising edge starts the trial. Required when
   // `start_source` is `line`, ignored otherwise, and refused by the device if
   // the board does not have it or the wiring has it disabled. `optional`
   // because line 0 is a real line.
-  optional int32 start_line = 5;
+  optional int32 start_line = 5 [json_name = "start_line"];
 
-  repeated DistributionPatch distribution_patches = 6;
+  repeated DistributionPatch distribution_patches = 6 [json_name = "distribution_patches"];
 }
 
 message ConfigureTrialResult {
-  int64 trial_id = 1;
+  int64 trial_id = 1 [json_name = "trial_id"];
   string graph = 2;
 
   // Which committed set this trial was armed against, and where in it the
   // graph sits. Reported because a mismatch between these and what the board
   // later says it ran is the failure the whole addressing scheme exists to
   // catch.
-  int32 set_version = 3;
-  int32 graph_index = 4;
+  int32 set_version = 3 [json_name = "set_version"];
+  int32 graph_index = 4 [json_name = "graph_index"];
 
   // How long arming took. Reported whether or not it was slow, so that an arm
   // which took longer than it should is a number per trial rather than an
   // inference from a trial that started late.
-  int32 elapsed_milliseconds = 5;
+  int32 elapsed_milliseconds = 5 [json_name = "elapsed_milliseconds"];
 }
 
 message StartTrialRequest {
-  int64 trial_id = 1;
+  int64 trial_id = 1 [json_name = "trial_id"];
 }
 
 message StartTrialResult {
-  int64 trial_id = 1;
-  int64 started_device_microseconds = 2;
+  int64 trial_id = 1 [json_name = "trial_id"];
+  int64 started_device_microseconds = 2 [json_name = "started_device_microseconds"];
 }
 
 message CancelTrialRequest {
-  int64 trial_id = 1;
+  int64 trial_id = 1 [json_name = "trial_id"];
 }
 
 // What a trial in flight is doing, or nothing when none is.
 message ReadTrialResultRequest {
   // Which trial's result to read. Absent means the most recent one.
-  optional int64 trial_id = 1;
+  optional int64 trial_id = 1 [json_name = "trial_id"];
 }

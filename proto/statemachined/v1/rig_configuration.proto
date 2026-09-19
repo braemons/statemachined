@@ -13,36 +13,36 @@ package statemachined.v1;
 message RigConfiguration {
   // The board. A serial path, or a `socket://` URL for one on a switch or the
   // native build.
-  string device_target = 1;
-  int32 device_baud = 2;
-  double device_timeout_seconds = 3;
+  string device_target = 1 [json_name = "device_target"];
+  int32 device_baud = 2 [json_name = "device_baud"];
+  double device_timeout_seconds = 3 [json_name = "device_timeout_seconds"];
 
   // Refuse a board that is not this one. Empty accepts whatever answers, which
   // is right for a bench and wrong for a rig with four of them on a bench
   // beside it.
-  string expected_board = 4;
+  string expected_board = 4 [json_name = "expected_board"];
 
-  bool connect_on_startup = 5;
+  bool connect_on_startup = 5 [json_name = "connect_on_startup"];
 
   // A config to load when the daemon starts, so a rig comes back up loaded
   // rather than waiting for somebody to notice.
-  string startup_state_machine_config = 6;
+  string startup_state_machine_config = 6 [json_name = "startup_state_machine_config"];
 
   // `set` uploads every graph once and selects per trial; `per_trial` uploads
   // one each time. The first is how a session runs and the second is how a
   // board too small for the set still runs it.
-  string graph_mode = 7;
+  string graph_mode = 7 [json_name = "graph_mode"];
 
-  int32 trace_ring_entries = 8;
-  double heartbeat_seconds = 9;
+  int32 trace_ring_entries = 8 [json_name = "trace_ring_entries"];
+  double heartbeat_seconds = 9 [json_name = "heartbeat_seconds"];
 
   // Where things are written. Empty `recording_directory` means nothing is
   // recorded, which is right for a bench and wrong for a rig — so this says
   // which it is rather than failing at the first `Recording/Start`.
-  string trace_directory = 10;
-  string graph_store_directory = 11;
-  string recording_directory = 12;
-  string state_machine_config_directory = 13;
+  string trace_directory = 10 [json_name = "trace_directory"];
+  string graph_store_directory = 11 [json_name = "graph_store_directory"];
+  string recording_directory = 12 [json_name = "recording_directory"];
+  string state_machine_config_directory = 13 [json_name = "state_machine_config_directory"];
 }
 
 // Change it, and do whatever the change implies.
@@ -52,11 +52,11 @@ message RigConfiguration {
 // API that rewrote it would make the running daemon the authority on what the
 // box is. Every field is `optional`, so absent means "leave it alone".
 message RigConfigurationPatch {
-  optional string device_target = 1;
-  optional int32 device_baud = 2;
-  optional string expected_board = 3;
-  optional string graph_mode = 4;
-  optional string startup_state_machine_config = 5;
+  optional string device_target = 1 [json_name = "device_target"];
+  optional int32 device_baud = 2 [json_name = "device_baud"];
+  optional string expected_board = 3 [json_name = "expected_board"];
+  optional string graph_mode = 4 [json_name = "graph_mode"];
+  optional string startup_state_machine_config = 5 [json_name = "startup_state_machine_config"];
 }
 
 message RigConfigurationUpdate {
@@ -67,5 +67,5 @@ message RigConfigurationUpdate {
   bool reconnected = 2;
 
   // Always true, and said out loud: nothing here survives a restart.
-  bool until_restart = 3;
+  bool until_restart = 3 [json_name = "until_restart"];
 }

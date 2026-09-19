@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1dstatemachined/v1/device.proto\x12\x10statemachined.v1\"\xad\x02\n\x10\x44\x65viceCapacities\x12\x10\n\x08max_line\x18\x01 \x01(\x05\x12\x12\n\nmax_states\x18\x02 \x01(\x05\x12\x17\n\x0fmax_transitions\x18\x03 \x01(\x05\x12\x1a\n\x12max_output_actions\x18\x04 \x01(\x05\x12\x19\n\x11max_distributions\x18\x05 \x01(\x05\x12\x1a\n\x12max_choice_options\x18\x06 \x01(\x05\x12\x10\n\x08max_path\x18\x07 \x01(\x05\x12\x12\n\nmax_graphs\x18\x08 \x01(\x05\x12\x12\n\nmax_timers\x18\t \x01(\x05\x12\x18\n\x10\x66irst_timer_line\x18\n \x01(\x05\x12\x18\n\x10input_line_count\x18\x0b \x01(\x05\x12\x19\n\x11output_line_count\x18\x0c \x01(\x05\"h\n\x11\x43ommittedGraphSet\x12\x13\n\x0bset_version\x18\x01 \x01(\x05\x12\x13\n\x0bgraph_names\x18\x02 \x03(\t\x12\x12\n\npool_usage\x18\x03 \x01(\x05\x12\x15\n\rpool_capacity\x18\x04 \x01(\x05\"d\n\nLinkHealth\x12\x18\n\x10\x63onnection_count\x18\x01 \x01(\x05\x12\x15\n\rdropped_lines\x18\x02 \x01(\x03\x12\x11\n\tbad_lines\x18\x03 \x01(\x03\x12\x12\n\nlast_error\x18\x04 \x01(\t\"P\n\nScanHealth\x12\n\n\x02hz\x18\x01 \x01(\x05\x12\x10\n\x08overruns\x18\x02 \x01(\x03\x12\x11\n\tworst_gap\x18\x03 \x01(\x05\x12\x11\n\ttx_stalls\x18\x04 \x01(\x03\"\xc3\x03\n\x0b\x44\x65viceState\x12\x11\n\tconnected\x18\x01 \x01(\x08\x12\x0e\n\x06target\x18\x02 \x01(\t\x12\r\n\x05\x62oard\x18\x03 \x01(\t\x12\x18\n\x10\x66irmware_version\x18\x04 \x01(\t\x12\x18\n\x10protocol_version\x18\x05 \x01(\x05\x12\x18\n\x10measured_scan_hz\x18\x06 \x01(\x05\x12\x36\n\ncapacities\x18\x07 \x01(\x0b\x32\".statemachined.v1.DeviceCapacities\x12\x17\n\nhas_wiring\x18\x08 \x01(\x08H\x00\x88\x01\x01\x12\x1c\n\x14pin_labels_came_from\x18\t \x01(\t\x12:\n\rcommitted_set\x18\n \x01(\x0b\x32#.statemachined.v1.CommittedGraphSet\x12*\n\x04link\x18\x0b \x01(\x0b\x32\x1c.statemachined.v1.LinkHealth\x12*\n\x04scan\x18\x0c \x01(\x0b\x32\x1c.statemachined.v1.ScanHealth\x12\"\n\x1auptime_device_microseconds\x18\r \x01(\x03\x42\r\n\x0b_has_wiring\"\xac\x01\n\tInputLine\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x17\n\nline_index\x18\x02 \x01(\x05H\x00\x88\x01\x01\x12\x11\n\tpin_label\x18\x03 \x01(\t\x12\x18\n\x10reads_active_low\x18\x04 \x01(\x08\x12\x12\n\nis_enabled\x18\x05 \x01(\x08\x12\x18\n\x0bis_high_now\x18\x06 \x01(\x08H\x01\x88\x01\x01\x42\r\n\x0b_line_indexB\x0e\n\x0c_is_high_now\"\x9b\x01\n\nOutputLine\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x17\n\nline_index\x18\x02 \x01(\x05H\x00\x88\x01\x01\x12\x11\n\tpin_label\x18\x03 \x01(\t\x12\x1a\n\x12safe_level_is_high\x18\x04 \x01(\x08\x12\x18\n\x0bis_high_now\x18\x05 \x01(\x08H\x01\x88\x01\x01\x42\r\n\x0b_line_indexB\x0e\n\x0c_is_high_now\"\xc6\x01\n\x0bLineMapView\x12\x30\n\x0binput_lines\x18\x01 \x03(\x0b\x32\x1b.statemachined.v1.InputLine\x12\x32\n\x0coutput_lines\x18\x02 \x03(\x0b\x32\x1c.statemachined.v1.OutputLine\x12\x1c\n\x14pin_labels_came_from\x18\x03 \x01(\t\x12\x18\n\x10\x62oard_input_pins\x18\x04 \x03(\t\x12\x19\n\x11\x62oard_output_pins\x18\x05 \x03(\t\"g\n\x12SerialMonitorEntry\x12\x14\n\x0c\x65ntry_number\x18\x01 \x01(\x03\x12\x11\n\tdirection\x18\x02 \x01(\t\x12\x0c\n\x04line\x18\x03 \x01(\t\x12\x1a\n\x12recorded_host_time\x18\x04 \x01(\t\"\xe2\x01\n\x13SerialMonitorWindow\x12\x35\n\x07\x65ntries\x18\x01 \x03(\x0b\x32$.statemachined.v1.SerialMonitorEntry\x12\x1b\n\x13newest_entry_number\x18\x02 \x01(\x03\x12&\n\x1eoldest_entry_number_still_held\x18\x03 \x01(\x03\x12\x15\n\rring_capacity\x18\x04 \x01(\x05\x12 \n\x13lost_entries_before\x18\x05 \x01(\x03H\x00\x88\x01\x01\x42\x16\n\x14_lost_entries_before\"E\n\x18ReadSerialMonitorRequest\x12\x1a\n\x12since_entry_number\x18\x01 \x01(\x03\x12\r\n\x05limit\x18\x02 \x01(\x05\"7\n\x19WatchSerialMonitorRequest\x12\x1a\n\x12since_entry_number\x18\x01 \x01(\x03\"\x99\x01\n\x12WriteLineMapResult\x12/\n\x08line_map\x18\x01 \x01(\x0b\x32\x1d.statemachined.v1.LineMapView\x12\x18\n\x10pushed_to_device\x18\x02 \x01(\x08\x12\x1a\n\x12saved_to_the_store\x18\x03 \x01(\x08\x12\x1c\n\x14state_machine_config\x18\x04 \x01(\t\"w\n\x10\x46irmwareVersions\x12\x0f\n\x07running\x18\x01 \x01(\t\x12\x11\n\tinstalled\x18\x02 \x01(\t\x12\x1a\n\x12running_is_stamped\x18\x03 \x01(\x08\x12\x12\n\ncomparable\x18\x04 \x01(\x08\x12\x0f\n\x07matches\x18\x05 \x01(\x08\"\x8b\x01\n\x07\x41utorun\x12\x0f\n\x07\x65nabled\x18\x01 \x01(\x08\x12\x0e\n\x06\x61\x63tive\x18\x02 \x01(\x08\x12\x12\n\ngraph_name\x18\x03 \x01(\t\x12\x0c\n\x04slot\x18\x04 \x01(\x05\x12\x18\n\x10\x63\x61p_milliseconds\x18\x05 \x01(\x05\x12\x0c\n\x04seed\x18\x06 \x01(\x03\x12\x15\n\rnext_trial_id\x18\x07 \x01(\x03\"\xb4\x01\n\x13WriteAutorunRequest\x12\x0f\n\x07\x65nabled\x18\x01 \x01(\x08\x12\x17\n\ngraph_name\x18\x02 \x01(\tH\x00\x88\x01\x01\x12\x18\n\x10\x63\x61p_milliseconds\x18\x03 \x01(\x05\x12\x11\n\x04seed\x18\x04 \x01(\x03H\x01\x88\x01\x01\x12\x1b\n\x0e\x66irst_trial_id\x18\x05 \x01(\x03H\x02\x88\x01\x01\x42\r\n\x0b_graph_nameB\x07\n\x05_seedB\x11\n\x0f_first_trial_idb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1dstatemachined/v1/device.proto\x12\x10statemachined.v1\"\xe8\x03\n\x10\x44\x65viceCapacities\x12\x1a\n\x08max_line\x18\x01 \x01(\x05R\x08max_line\x12\x1e\n\nmax_states\x18\x02 \x01(\x05R\nmax_states\x12(\n\x0fmax_transitions\x18\x03 \x01(\x05R\x0fmax_transitions\x12.\n\x12max_output_actions\x18\x04 \x01(\x05R\x12max_output_actions\x12,\n\x11max_distributions\x18\x05 \x01(\x05R\x11max_distributions\x12.\n\x12max_choice_options\x18\x06 \x01(\x05R\x12max_choice_options\x12\x1a\n\x08max_path\x18\x07 \x01(\x05R\x08max_path\x12\x1e\n\nmax_graphs\x18\x08 \x01(\x05R\nmax_graphs\x12\x1e\n\nmax_timers\x18\t \x01(\x05R\nmax_timers\x12*\n\x10\x66irst_timer_line\x18\n \x01(\x05R\x10\x66irst_timer_line\x12*\n\x10input_line_count\x18\x0b \x01(\x05R\x10input_line_count\x12,\n\x11output_line_count\x18\x0c \x01(\x05R\x11output_line_count\"\x9d\x01\n\x11\x43ommittedGraphSet\x12 \n\x0bset_version\x18\x01 \x01(\x05R\x0bset_version\x12 \n\x0bgraph_names\x18\x02 \x03(\tR\x0bgraph_names\x12\x1e\n\npool_usage\x18\x03 \x01(\x05R\npool_usage\x12$\n\rpool_capacity\x18\x04 \x01(\x05R\rpool_capacity\"\x9c\x01\n\nLinkHealth\x12*\n\x10\x63onnection_count\x18\x01 \x01(\x05R\x10\x63onnection_count\x12$\n\rdropped_lines\x18\x02 \x01(\x03R\rdropped_lines\x12\x1c\n\tbad_lines\x18\x03 \x01(\x03R\tbad_lines\x12\x1e\n\nlast_error\x18\x04 \x01(\tR\nlast_error\"f\n\nScanHealth\x12\n\n\x02hz\x18\x01 \x01(\x05\x12\x10\n\x08overruns\x18\x02 \x01(\x03\x12\x1c\n\tworst_gap\x18\x03 \x01(\x05R\tworst_gap\x12\x1c\n\ttx_stalls\x18\x04 \x01(\x03R\ttx_stalls\"\xc6\x04\n\x0b\x44\x65viceState\x12\x11\n\tconnected\x18\x01 \x01(\x08\x12\x0e\n\x06target\x18\x02 \x01(\t\x12\r\n\x05\x62oard\x18\x03 \x01(\t\x12*\n\x10\x66irmware_version\x18\x04 \x01(\tR\x10\x66irmware_version\x12*\n\x10protocol_version\x18\x05 \x01(\x05R\x10protocol_version\x12*\n\x10measured_scan_hz\x18\x06 \x01(\x05R\x10measured_scan_hz\x12\x36\n\ncapacities\x18\x07 \x01(\x0b\x32\".statemachined.v1.DeviceCapacities\x12#\n\nhas_wiring\x18\x08 \x01(\x08H\x00R\nhas_wiring\x88\x01\x01\x12\x32\n\x14pin_labels_came_from\x18\t \x01(\tR\x14pin_labels_came_from\x12I\n\rcommitted_set\x18\n \x01(\x0b\x32#.statemachined.v1.CommittedGraphSetR\rcommitted_set\x12*\n\x04link\x18\x0b \x01(\x0b\x32\x1c.statemachined.v1.LinkHealth\x12*\n\x04scan\x18\x0c \x01(\x0b\x32\x1c.statemachined.v1.ScanHealth\x12>\n\x1auptime_device_microseconds\x18\r \x01(\x03R\x1auptime_device_microsecondsB\r\n\x0b_has_wiring\"\xee\x01\n\tInputLine\x12\x0c\n\x04name\x18\x01 \x01(\t\x12#\n\nline_index\x18\x02 \x01(\x05H\x00R\nline_index\x88\x01\x01\x12\x1c\n\tpin_label\x18\x03 \x01(\tR\tpin_label\x12*\n\x10reads_active_low\x18\x04 \x01(\x08R\x10reads_active_low\x12\x1e\n\nis_enabled\x18\x05 \x01(\x08R\nis_enabled\x12%\n\x0bis_high_now\x18\x06 \x01(\x08H\x01R\x0bis_high_now\x88\x01\x01\x42\r\n\x0b_line_indexB\x0e\n\x0c_is_high_now\"\xd3\x01\n\nOutputLine\x12\x0c\n\x04name\x18\x01 \x01(\t\x12#\n\nline_index\x18\x02 \x01(\x05H\x00R\nline_index\x88\x01\x01\x12\x1c\n\tpin_label\x18\x03 \x01(\tR\tpin_label\x12.\n\x12safe_level_is_high\x18\x04 \x01(\x08R\x12safe_level_is_high\x12%\n\x0bis_high_now\x18\x05 \x01(\x08H\x01R\x0bis_high_now\x88\x01\x01\x42\r\n\x0b_line_indexB\x0e\n\x0c_is_high_now\"\x9c\x02\n\x0bLineMapView\x12=\n\x0binput_lines\x18\x01 \x03(\x0b\x32\x1b.statemachined.v1.InputLineR\x0binput_lines\x12@\n\x0coutput_lines\x18\x02 \x03(\x0b\x32\x1c.statemachined.v1.OutputLineR\x0coutput_lines\x12\x32\n\x14pin_labels_came_from\x18\x03 \x01(\tR\x14pin_labels_came_from\x12*\n\x10\x62oard_input_pins\x18\x04 \x03(\tR\x10\x62oard_input_pins\x12,\n\x11\x62oard_output_pins\x18\x05 \x03(\tR\x11\x62oard_output_pins\"\x89\x01\n\x12SerialMonitorEntry\x12\"\n\x0c\x65ntry_number\x18\x01 \x01(\x03R\x0c\x65ntry_number\x12\x11\n\tdirection\x18\x02 \x01(\t\x12\x0c\n\x04line\x18\x03 \x01(\t\x12.\n\x12recorded_host_time\x18\x04 \x01(\tR\x12recorded_host_time\"\xbb\x02\n\x13SerialMonitorWindow\x12\x35\n\x07\x65ntries\x18\x01 \x03(\x0b\x32$.statemachined.v1.SerialMonitorEntry\x12\x30\n\x13newest_entry_number\x18\x02 \x01(\x03R\x13newest_entry_number\x12\x46\n\x1eoldest_entry_number_still_held\x18\x03 \x01(\x03R\x1eoldest_entry_number_still_held\x12$\n\rring_capacity\x18\x04 \x01(\x05R\rring_capacity\x12\x35\n\x13lost_entries_before\x18\x05 \x01(\x03H\x00R\x13lost_entries_before\x88\x01\x01\x42\x16\n\x14_lost_entries_before\"Y\n\x18ReadSerialMonitorRequest\x12.\n\x12since_entry_number\x18\x01 \x01(\x03R\x12since_entry_number\x12\r\n\x05limit\x18\x02 \x01(\x05\"K\n\x19WatchSerialMonitorRequest\x12.\n\x12since_entry_number\x18\x01 \x01(\x03R\x12since_entry_number\"\xdf\x01\n\x12WriteLineMapResult\x12\x39\n\x08line_map\x18\x01 \x01(\x0b\x32\x1d.statemachined.v1.LineMapViewR\x08line_map\x12*\n\x10pushed_to_device\x18\x02 \x01(\x08R\x10pushed_to_device\x12.\n\x12saved_to_the_store\x18\x03 \x01(\x08R\x12saved_to_the_store\x12\x32\n\x14state_machine_config\x18\x04 \x01(\tR\x14state_machine_config\"\x8b\x01\n\x10\x46irmwareVersions\x12\x0f\n\x07running\x18\x01 \x01(\t\x12\x11\n\tinstalled\x18\x02 \x01(\t\x12.\n\x12running_is_stamped\x18\x03 \x01(\x08R\x12running_is_stamped\x12\x12\n\ncomparable\x18\x04 \x01(\x08\x12\x0f\n\x07matches\x18\x05 \x01(\x08\"\xb8\x01\n\x07\x41utorun\x12\x0f\n\x07\x65nabled\x18\x01 \x01(\x08\x12\x0e\n\x06\x61\x63tive\x18\x02 \x01(\x08\x12\x1e\n\ngraph_name\x18\x03 \x01(\tR\ngraph_name\x12\x0c\n\x04slot\x18\x04 \x01(\x05\x12*\n\x10\x63\x61p_milliseconds\x18\x05 \x01(\x05R\x10\x63\x61p_milliseconds\x12\x0c\n\x04seed\x18\x06 \x01(\x03\x12$\n\rnext_trial_id\x18\x07 \x01(\x03R\rnext_trial_id\"\xe2\x01\n\x13WriteAutorunRequest\x12\x0f\n\x07\x65nabled\x18\x01 \x01(\x08\x12#\n\ngraph_name\x18\x02 \x01(\tH\x00R\ngraph_name\x88\x01\x01\x12*\n\x10\x63\x61p_milliseconds\x18\x03 \x01(\x05R\x10\x63\x61p_milliseconds\x12\x11\n\x04seed\x18\x04 \x01(\x03H\x01\x88\x01\x01\x12+\n\x0e\x66irst_trial_id\x18\x05 \x01(\x03H\x02R\x0e\x66irst_trial_id\x88\x01\x01\x42\r\n\x0b_graph_nameB\x07\n\x05_seedB\x11\n\x0f_first_trial_idb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,35 +32,35 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'statemachined.v1.device_pb2
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_DEVICECAPACITIES']._serialized_start=52
-  _globals['_DEVICECAPACITIES']._serialized_end=353
-  _globals['_COMMITTEDGRAPHSET']._serialized_start=355
-  _globals['_COMMITTEDGRAPHSET']._serialized_end=459
-  _globals['_LINKHEALTH']._serialized_start=461
-  _globals['_LINKHEALTH']._serialized_end=561
-  _globals['_SCANHEALTH']._serialized_start=563
-  _globals['_SCANHEALTH']._serialized_end=643
-  _globals['_DEVICESTATE']._serialized_start=646
-  _globals['_DEVICESTATE']._serialized_end=1097
-  _globals['_INPUTLINE']._serialized_start=1100
-  _globals['_INPUTLINE']._serialized_end=1272
-  _globals['_OUTPUTLINE']._serialized_start=1275
-  _globals['_OUTPUTLINE']._serialized_end=1430
-  _globals['_LINEMAPVIEW']._serialized_start=1433
-  _globals['_LINEMAPVIEW']._serialized_end=1631
-  _globals['_SERIALMONITORENTRY']._serialized_start=1633
-  _globals['_SERIALMONITORENTRY']._serialized_end=1736
-  _globals['_SERIALMONITORWINDOW']._serialized_start=1739
-  _globals['_SERIALMONITORWINDOW']._serialized_end=1965
-  _globals['_READSERIALMONITORREQUEST']._serialized_start=1967
-  _globals['_READSERIALMONITORREQUEST']._serialized_end=2036
-  _globals['_WATCHSERIALMONITORREQUEST']._serialized_start=2038
-  _globals['_WATCHSERIALMONITORREQUEST']._serialized_end=2093
-  _globals['_WRITELINEMAPRESULT']._serialized_start=2096
-  _globals['_WRITELINEMAPRESULT']._serialized_end=2249
-  _globals['_FIRMWAREVERSIONS']._serialized_start=2251
-  _globals['_FIRMWAREVERSIONS']._serialized_end=2370
-  _globals['_AUTORUN']._serialized_start=2373
-  _globals['_AUTORUN']._serialized_end=2512
-  _globals['_WRITEAUTORUNREQUEST']._serialized_start=2515
-  _globals['_WRITEAUTORUNREQUEST']._serialized_end=2695
+  _globals['_DEVICECAPACITIES']._serialized_end=540
+  _globals['_COMMITTEDGRAPHSET']._serialized_start=543
+  _globals['_COMMITTEDGRAPHSET']._serialized_end=700
+  _globals['_LINKHEALTH']._serialized_start=703
+  _globals['_LINKHEALTH']._serialized_end=859
+  _globals['_SCANHEALTH']._serialized_start=861
+  _globals['_SCANHEALTH']._serialized_end=963
+  _globals['_DEVICESTATE']._serialized_start=966
+  _globals['_DEVICESTATE']._serialized_end=1548
+  _globals['_INPUTLINE']._serialized_start=1551
+  _globals['_INPUTLINE']._serialized_end=1789
+  _globals['_OUTPUTLINE']._serialized_start=1792
+  _globals['_OUTPUTLINE']._serialized_end=2003
+  _globals['_LINEMAPVIEW']._serialized_start=2006
+  _globals['_LINEMAPVIEW']._serialized_end=2290
+  _globals['_SERIALMONITORENTRY']._serialized_start=2293
+  _globals['_SERIALMONITORENTRY']._serialized_end=2430
+  _globals['_SERIALMONITORWINDOW']._serialized_start=2433
+  _globals['_SERIALMONITORWINDOW']._serialized_end=2748
+  _globals['_READSERIALMONITORREQUEST']._serialized_start=2750
+  _globals['_READSERIALMONITORREQUEST']._serialized_end=2839
+  _globals['_WATCHSERIALMONITORREQUEST']._serialized_start=2841
+  _globals['_WATCHSERIALMONITORREQUEST']._serialized_end=2916
+  _globals['_WRITELINEMAPRESULT']._serialized_start=2919
+  _globals['_WRITELINEMAPRESULT']._serialized_end=3142
+  _globals['_FIRMWAREVERSIONS']._serialized_start=3145
+  _globals['_FIRMWAREVERSIONS']._serialized_end=3284
+  _globals['_AUTORUN']._serialized_start=3287
+  _globals['_AUTORUN']._serialized_end=3471
+  _globals['_WRITEAUTORUNREQUEST']._serialized_start=3474
+  _globals['_WRITEAUTORUNREQUEST']._serialized_end=3700
 # @@protoc_insertion_point(module_scope)

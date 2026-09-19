@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from statemachined._proto.statemachined.v1 import state_pb2 as statemachined_dot_v1_dot_state__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n statemachined/v1/recording.proto\x12\x10statemachined.v1\x1a\x1cstatemachined/v1/state.proto\"\xc3\x01\n\x10RecordingSegment\x12\x1e\n\x11\x66rom_entry_number\x18\x01 \x01(\x03H\x00\x88\x01\x01\x12\x1c\n\x0fto_entry_number\x18\x02 \x01(\x03H\x01\x88\x01\x01\x12\x19\n\x11started_host_time\x18\x03 \x01(\t\x12\x17\n\x0f\x65nded_host_time\x18\x04 \x01(\t\x12\x13\n\x0b\x65ntry_count\x18\x05 \x01(\x03\x42\x14\n\x12_from_entry_numberB\x12\n\x10_to_entry_number\"\xf8\x02\n\x11RecordingManifest\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x02 \x01(\t\x12\x1c\n\x14state_machine_config\x18\x03 \x01(\t\x12\x1c\n\x14\x63reated_unix_seconds\x18\x04 \x01(\x01\x12\x19\n\x11\x63reated_host_time\x18\x05 \x01(\t\x12\r\n\x05state\x18\x06 \x01(\t\x12\x34\n\x08segments\x18\x07 \x03(\x0b\x32\".statemachined.v1.RecordingSegment\x12\x13\n\x0b\x65ntry_count\x18\x08 \x01(\x03\x12H\n\x0bkind_counts\x18\t \x03(\x0b\x32\x33.statemachined.v1.RecordingManifest.KindCountsEntry\x12\x12\n\nunreadable\x18\n \x01(\t\x1a\x31\n\x0fKindCountsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x03:\x02\x38\x01\"z\n\nRecordings\x12\x33\n\x06\x61\x63tive\x18\x01 \x01(\x0b\x32#.statemachined.v1.RecordingManifest\x12\x37\n\nrecordings\x18\x02 \x03(\x0b\x32#.statemachined.v1.RecordingManifest\":\n\x15StartRecordingRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x02 \x01(\t\"\x1d\n\rRecordingName\x12\x0c\n\x04name\x18\x01 \x01(\t\"J\n\x1bReadRecordingEntriesRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0e\n\x06offset\x18\x02 \x01(\x03\x12\r\n\x05limit\x18\x03 \x01(\x05\"\xaa\x01\n\x10RecordingEntries\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0e\n\x06offset\x18\x02 \x01(\x03\x12-\n\x07\x65ntries\x18\x03 \x03(\x0b\x32\x1c.statemachined.v1.TraceEntry\x12\x13\n\x0b\x65ntry_count\x18\x04 \x01(\x03\x12\x34\n\x08segments\x18\x05 \x03(\x0b\x32\".statemachined.v1.RecordingSegmentb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n statemachined/v1/recording.proto\x12\x10statemachined.v1\x1a\x1cstatemachined/v1/state.proto\"\x98\x02\n\x10RecordingSegment\x12\x31\n\x11\x66rom_entry_number\x18\x01 \x01(\x03H\x00R\x11\x66rom_entry_number\x88\x01\x01\x12-\n\x0fto_entry_number\x18\x02 \x01(\x03H\x01R\x0fto_entry_number\x88\x01\x01\x12,\n\x11started_host_time\x18\x03 \x01(\tR\x11started_host_time\x12(\n\x0f\x65nded_host_time\x18\x04 \x01(\tR\x0f\x65nded_host_time\x12 \n\x0b\x65ntry_count\x18\x05 \x01(\x03R\x0b\x65ntry_countB\x14\n\x12_from_entry_numberB\x12\n\x10_to_entry_number\"\xd1\x03\n\x11RecordingManifest\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x02 \x01(\t\x12\x32\n\x14state_machine_config\x18\x03 \x01(\tR\x14state_machine_config\x12\x32\n\x14\x63reated_unix_seconds\x18\x04 \x01(\x01R\x14\x63reated_unix_seconds\x12,\n\x11\x63reated_host_time\x18\x05 \x01(\tR\x11\x63reated_host_time\x12\r\n\x05state\x18\x06 \x01(\t\x12\x34\n\x08segments\x18\x07 \x03(\x0b\x32\".statemachined.v1.RecordingSegment\x12 \n\x0b\x65ntry_count\x18\x08 \x01(\x03R\x0b\x65ntry_count\x12U\n\x0bkind_counts\x18\t \x03(\x0b\x32\x33.statemachined.v1.RecordingManifest.KindCountsEntryR\x0bkind_counts\x12\x12\n\nunreadable\x18\n \x01(\t\x1a\x31\n\x0fKindCountsEntry\x12\x0b\n\x03key\x18\x01 \x01(\t\x12\r\n\x05value\x18\x02 \x01(\x03:\x02\x38\x01\"z\n\nRecordings\x12\x33\n\x06\x61\x63tive\x18\x01 \x01(\x0b\x32#.statemachined.v1.RecordingManifest\x12\x37\n\nrecordings\x18\x02 \x03(\x0b\x32#.statemachined.v1.RecordingManifest\":\n\x15StartRecordingRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x02 \x01(\t\"\x1d\n\rRecordingName\x12\x0c\n\x04name\x18\x01 \x01(\t\"J\n\x1bReadRecordingEntriesRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0e\n\x06offset\x18\x02 \x01(\x03\x12\r\n\x05limit\x18\x03 \x01(\x05\"\xb7\x01\n\x10RecordingEntries\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0e\n\x06offset\x18\x02 \x01(\x03\x12-\n\x07\x65ntries\x18\x03 \x03(\x0b\x32\x1c.statemachined.v1.TraceEntry\x12 \n\x0b\x65ntry_count\x18\x04 \x01(\x03R\x0b\x65ntry_count\x12\x34\n\x08segments\x18\x05 \x03(\x0b\x32\".statemachined.v1.RecordingSegmentb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,19 +35,19 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_RECORDINGMANIFEST_KINDCOUNTSENTRY']._loaded_options = None
   _globals['_RECORDINGMANIFEST_KINDCOUNTSENTRY']._serialized_options = b'8\001'
   _globals['_RECORDINGSEGMENT']._serialized_start=85
-  _globals['_RECORDINGSEGMENT']._serialized_end=280
-  _globals['_RECORDINGMANIFEST']._serialized_start=283
-  _globals['_RECORDINGMANIFEST']._serialized_end=659
-  _globals['_RECORDINGMANIFEST_KINDCOUNTSENTRY']._serialized_start=610
-  _globals['_RECORDINGMANIFEST_KINDCOUNTSENTRY']._serialized_end=659
-  _globals['_RECORDINGS']._serialized_start=661
-  _globals['_RECORDINGS']._serialized_end=783
-  _globals['_STARTRECORDINGREQUEST']._serialized_start=785
-  _globals['_STARTRECORDINGREQUEST']._serialized_end=843
-  _globals['_RECORDINGNAME']._serialized_start=845
-  _globals['_RECORDINGNAME']._serialized_end=874
-  _globals['_READRECORDINGENTRIESREQUEST']._serialized_start=876
-  _globals['_READRECORDINGENTRIESREQUEST']._serialized_end=950
-  _globals['_RECORDINGENTRIES']._serialized_start=953
-  _globals['_RECORDINGENTRIES']._serialized_end=1123
+  _globals['_RECORDINGSEGMENT']._serialized_end=365
+  _globals['_RECORDINGMANIFEST']._serialized_start=368
+  _globals['_RECORDINGMANIFEST']._serialized_end=833
+  _globals['_RECORDINGMANIFEST_KINDCOUNTSENTRY']._serialized_start=784
+  _globals['_RECORDINGMANIFEST_KINDCOUNTSENTRY']._serialized_end=833
+  _globals['_RECORDINGS']._serialized_start=835
+  _globals['_RECORDINGS']._serialized_end=957
+  _globals['_STARTRECORDINGREQUEST']._serialized_start=959
+  _globals['_STARTRECORDINGREQUEST']._serialized_end=1017
+  _globals['_RECORDINGNAME']._serialized_start=1019
+  _globals['_RECORDINGNAME']._serialized_end=1048
+  _globals['_READRECORDINGENTRIESREQUEST']._serialized_start=1050
+  _globals['_READRECORDINGENTRIESREQUEST']._serialized_end=1124
+  _globals['_RECORDINGENTRIES']._serialized_start=1127
+  _globals['_RECORDINGENTRIES']._serialized_end=1310
 # @@protoc_insertion_point(module_scope)

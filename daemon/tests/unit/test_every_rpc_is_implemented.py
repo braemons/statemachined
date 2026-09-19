@@ -76,3 +76,51 @@ def test_every_servicer_takes_the_service_and_nothing_else() -> None:
     for name, servicer in SERVICER_CLASSES.items():
         parameters = list(inspect.signature(servicer.__init__).parameters)
         assert parameters == ["self", "service"], f"{name} takes {parameters}"
+
+
+def test_every_field_says_the_same_name_in_json() -> None:
+    """A name travels unchanged: proto, wire, JSON, disk, both clients.
+
+    protobuf's default would camel-case the JSON, so `newest_trace_entry_number`
+    would reach a browser as `newestTraceEntryNumber` and the same field would
+    have two names. Every field pins `json_name`; this is what says so, read off
+    the descriptor rather than trusted to a `sed` that ran once.
+
+    triald does the same thing, and the browser client's `wordFor` and panel
+    field access depend on it in both repositories.
+    """
+    from statemachined._proto.statemachined.v1 import (
+        common_pb2,
+        device_pb2,
+        documents_pb2,
+        recording_pb2,
+        rig_configuration_pb2,
+        session_pb2,
+        state_pb2,
+        trial_pb2,
+    )
+
+    seen: set[str] = set()
+    mismatched: list[str] = []
+
+    def walk(descriptor) -> None:
+        if descriptor.full_name in seen or descriptor.full_name.startswith("google."):
+            return
+        seen.add(descriptor.full_name)
+        for field in descriptor.fields:
+            if field.json_name != field.name:
+                mismatched.append(
+                    f"{descriptor.full_name}.{field.name} is {field.json_name!r} in JSON"
+                )
+            if field.message_type:
+                walk(field.message_type)
+
+    for module in (
+        common_pb2, device_pb2, documents_pb2, recording_pb2,
+        rig_configuration_pb2, service_pb2, session_pb2, state_pb2, trial_pb2,
+    ):
+        for descriptor in module.DESCRIPTOR.message_types_by_name.values():
+            walk(descriptor)
+
+    assert len(seen) > 30, "the walker found almost nothing, so this proves nothing"
+    assert not mismatched, "\n".join(mismatched)

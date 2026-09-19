@@ -23,13 +23,13 @@ class StateMachineConfigStoreServicer(service_pb2_grpc.StateMachineConfigStoreSe
         )
 
     async def ListConfigs(self, request, context):
-        async def body():
+        def body():
             return self._summaries()
 
         return await answering(context, body)
 
     async def ReadConfigFile(self, request, context):
-        async def body():
+        def body():
             config = self.service.state_machine_config_store.load(request.name)
             return convert.stored_file_to_wire(
                 config.name, config.model_dump_json(indent=2, exclude_defaults=True)
@@ -38,7 +38,7 @@ class StateMachineConfigStoreServicer(service_pb2_grpc.StateMachineConfigStoreSe
         return await answering(context, body)
 
     async def WriteConfigFile(self, request, context):
-        async def body():
+        def body():
             try:
                 config = StateMachineConfig.model_validate_json(request.text)
             except ValueError as problem:
@@ -68,7 +68,7 @@ class StateMachineConfigStoreServicer(service_pb2_grpc.StateMachineConfigStoreSe
         return await answering(context, body)
 
     async def DeleteConfig(self, request, context):
-        async def body():
+        def body():
             self.service.state_machine_config_store.delete(request.name)
             return self._summaries()
 
@@ -84,7 +84,7 @@ class StateMachineConfigStoreServicer(service_pb2_grpc.StateMachineConfigStoreSe
         makes that record a fiction.
         """
 
-        async def body():
+        def body():
             report = self.service.read_device_state()
             if report.get("running") or report.get("link_state") == 2:
                 raise Refusal(

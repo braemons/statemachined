@@ -255,7 +255,7 @@ message UploadGraphsRequest {
   // By name, in the order they should occupy slots. An empty list is refused
   // rather than treated as "clear": giving a board nothing to run is
   // `Session/Close`, and the two are different intentions.
-  repeated string graph_names = 1;
+  repeated string graph_names = 1 [json_name = "graph_names"];
 }
 message OpenSessionRequest {}
 message CloseSessionRequest {}
@@ -273,17 +273,17 @@ message ReadHealthRequest {}
 message Health {
   // Always true: a daemon that could not answer would not have.
   bool ok = 1;
-  bool device_connected = 2;
+  bool device_connected = 2 [json_name = "device_connected"];
 }
 
 // What a cancel actually did.
 message CancelTrialResult {
-  int64 trial_id = 1;
+  int64 trial_id = 1 [json_name = "trial_id"];
 
   // Whether the device cancelled it. False when the trial had already ended,
   // in which case `outcome` is the real one.
   bool cancelled = 2;
 
   // The outcome the device reports, which is not necessarily `CANCELLED`.
-  int32 outcome_code = 3;
+  int32 outcome_code = 3 [json_name = "outcome_code"];
 }
