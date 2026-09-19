@@ -78,7 +78,7 @@ rig installs, and why a translator alone is not enough.
 
 ## Drive it from Python
 
-`python/` is one package with three tiers, and which one you install says how
+`daemon/` is one package with three tiers, and which one you install says how
 you mean to drive a board.
 
 ```sh

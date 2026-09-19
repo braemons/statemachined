@@ -1,11 +1,19 @@
 # All the Python in this repository, as one uv project: the documents, the two
 # ways to drive a board, and the daemon. Keeping them inside one project means
-# `uv run --project python` builds an environment for it without touching the
+# `uv run --project daemon` builds an environment for it without touching the
 # interpreter renode-test drives or the uv-tool sandboxes the Makefile installs.
 #
-# It was tools/bringup/ until M4a and daemon/ until this restructure. The
-# directory is `python/` now because three of its five subpackages are not a
-# daemon, and a name that says otherwise is a name somebody has to correct.
+# It was tools/bringup/ until M4a, then `python/`, and it is `daemon/` now
+# because that is the name every repository in the family uses for the service
+# itself (`contracts/DAEMON_LAYOUT.md` §1).
+#
+# **`client/python/` is not split out yet, and that is on purpose.** The layout
+# says a daemon's client lives there, and the argument below — one distribution,
+# because any cut leaves the same models described twice — is what has kept them
+# together. That argument is about to stop applying: once the interface is
+# `proto/statemachined/v1/`, both sides are generated from one description and
+# there is nothing left to describe twice. The split belongs with that work, not
+# before it.
 [project]
 name = "statemachined"
 # The sentinel. packaging/scripts/git-version.sh stamps the real version from
@@ -140,6 +148,21 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/statemachined"]
+
+# **The panels are not listed here, and that is deliberate.**
+#
+# They are authored in `client/web/`, a sibling of this project rather than a
+# subdirectory of it, so that somebody looking for this daemon's UI finds it
+# without knowing how the Python package is laid out
+# (`contracts/DAEMON_LAYOUT.md`). hatchling can force-include a path from
+# outside the project, and it is a trap: `uv build` builds the wheel *from the
+# sdist*, an sdist cannot contain a path above its own root, and the wheel then
+# fails on a machine that never saw the repository.
+#
+# So `packaging/Makefile` copies `client/web` into the staged package before
+# building, and `web_directory()` falls back to the authored location when no
+# copy has been made — which is every editable install, and therefore every
+# developer. Build with `make wheel`, not `uv build`.
 
 [tool.uv.sources]
 # The test group installs this project's own extras, which uv resolves to the

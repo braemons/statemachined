@@ -13,8 +13,8 @@ they are willing to stand up.
 It does hold one *option*, which is the opposite case. `--target` names the far
 end, and two suites now take it -- `hardware/` and `runs/`. pytest registers
 options once per run across every conftest it loads, so defining it in both is
-not a duplicate default but a hard collision: `pytest python/tests/hardware
-python/tests/runs` dies during collection with "option names {'--target'}
+not a duplicate default but a hard collision: `pytest daemon/tests/hardware
+daemon/tests/runs` dies during collection with "option names {'--target'}
 already added", and so does anything that collects the whole tree. Defining it
 here is the only place it can be defined once.
 

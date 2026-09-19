@@ -20,7 +20,7 @@ library; a thing you can ask *"is the valve wired to A0 and did it open"* at two
 in the morning cannot.
 
 Everything here is JSON. The models are the ones in
-`python/src/statemachined/model/`, so the generated schema at `/openapi.json` is
+`daemon/src/statemachined/model/`, so the generated schema at `/openapi.json` is
 not a second description of them that can drift. **The web UI uses only this
 API** — no private route — which is what keeps the UI an honest test of it.
 

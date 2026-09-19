@@ -74,7 +74,7 @@ upload:                     ## flash the reference board
 	pio run -e $(BOARD) -t upload
 
 # The bench instrument docs/operations/bringup.md §4 and §5 ask for. Its one dependency
-# (pyserial) lives in python/pyproject.toml's `device` extra rather than in whichever
+# (pyserial) lives in daemon/pyproject.toml's `device` extra rather than in whichever
 # python3 is on PATH, so `uv run --project` builds an environment for it on
 # first use and neither renode-test's interpreter nor the uv-tool sandboxes
 # above notice. TARGET is a device path, a host:port, or any pyserial URL --
@@ -83,7 +83,7 @@ TARGET ?= /dev/ttyACM0
 
 .PHONY: bringup
 bringup:                    ## talk to a board: make bringup ARGS="state"
-	uv run --project python statemachined -t $(TARGET) $(ARGS)
+	uv run --project daemon statemachined -t $(TARGET) $(ARGS)
 
 # The firmware's own session and engine, built for this machine. Named by the
 # integration tests' skip message and by the bench, both of which are useless
@@ -107,7 +107,7 @@ integration-device:         ## build build/statemachined_native_device on its ow
 # deleting a graph or a state-machine config in the web UI must not delete an
 # example from the repository. Copied only when absent, so an edit made on the
 # bench survives the next `make bench`.
-BENCH_CONFIG    ?= python/bench/statemachined_bench_rig_config.toml
+BENCH_CONFIG    ?= daemon/bench/statemachined_bench_rig_config.toml
 BENCH_STORE     := build/bench/graphs
 BENCH_CONFIGS   := build/bench/configs
 BENCH_HOST      ?= 127.0.0.1
@@ -122,23 +122,23 @@ bench:                      ## the daemon + web UI against a device: make bench 
 	@for config in configs/*.config.json; do \
 	  [ -f "$(BENCH_CONFIGS)/$$(basename $$config)" ] || cp "$$config" $(BENCH_CONFIGS)/; \
 	done
-	uv run --project python statemachined -t $(TARGET) serve \
+	uv run --project daemon statemachined -t $(TARGET) serve \
 	  --config $(BENCH_CONFIG) \
 	  --host $(BENCH_HOST) --port $(BENCH_PORT) $(ARGS)
 
 # The other half of the no-board path: the firmware's own session and engine,
 # built for this machine, on a TCP port the daemon can dial. Not a mock -- see
-# the file's docstring, and python/tests/integration/conftest.py, which is the
+# the file's docstring, and daemon/tests/integration/conftest.py, which is the
 # same bridge.
 #
-# `statemachined device` rather than a script under python/bench/, because the
+# `statemachined device` rather than a script under daemon/bench/, because the
 # bridge ships: an operator who has installed the package and has no board runs
 # the identical command. From here it finds $(BUILD)/statemachined_native_device;
 # from a package, the binary beside the vendored interpreter.
 .PHONY: bench-device
 bench-device: integration-device  ## the native device on socket://127.0.0.1:5300
 	STATEMACHINED_NATIVE_DEVICE=$(abspath $(BUILD))/statemachined_native_device \
-	  uv run --project python statemachined device $(ARGS)
+	  uv run --project daemon statemachined device $(ARGS)
 
 # The only tests in this repository that need hardware. Everything else -- the
 # core on the host, the HAL under Renode -- runs in CI with no board attached,
@@ -153,8 +153,8 @@ bench-device: integration-device  ## the native device on socket://127.0.0.1:530
 # what hands over. A board that was running on its own stops.
 .PHONY: test-hardware
 test-hardware:              ## the suite that needs a board: make test-hardware TARGET=...
-	uv run --project python --group test \
-	  pytest python/tests/hardware --target=$(TARGET) $(ARGS)
+	uv run --project daemon --group test \
+	  pytest daemon/tests/hardware --target=$(TARGET) $(ARGS)
 
 # The Python tests that need no board, part of `make ci`. All three tiers of the
 # package -- the documents, the two ways to drive a board, and the daemon.
@@ -187,21 +187,21 @@ test-hardware:              ## the suite that needs a board: make test-hardware 
 # is safe to run before `make test`; `make ci` runs `make test` first.
 .PHONY: test-python
 test-python:                ## the Python tests that need no board
-	uv run --project python --group test pytest \
-	  python/tests/unit python/tests/integration python/tests/e2e python/tests/runs $(ARGS)
+	uv run --project daemon --group test pytest \
+	  daemon/tests/unit daemon/tests/integration daemon/tests/e2e daemon/tests/runs $(ARGS)
 
 # The tiers on their own, for a feedback loop that matches what you are editing.
 .PHONY: test-unit
 test-unit:                  ## host-only: no daemon, no device, no socket
-	uv run --project python --group test pytest python/tests/unit $(ARGS)
+	uv run --project daemon --group test pytest daemon/tests/unit $(ARGS)
 
 .PHONY: test-integration
 test-integration: test      ## build the native device, then drive whole sessions against it
-	uv run --project python --group test pytest python/tests/integration $(ARGS)
+	uv run --project daemon --group test pytest daemon/tests/integration $(ARGS)
 
 .PHONY: test-runs
 test-runs: test             ## whole sessions, both API paths, against the host build
-	uv run --project python --group test pytest python/tests/runs $(ARGS)
+	uv run --project daemon --group test pytest daemon/tests/runs $(ARGS)
 
 # The same tests as `test-runs`, with a board on the other end instead of the
 # host build. Not part of `make ci` for the same reason `test-hardware` is not:
@@ -210,12 +210,12 @@ test-runs: test             ## whole sessions, both API paths, against the host 
 # the paradigms that wait on a line, with the wiring list, when it is not there.
 .PHONY: test-runs-hardware
 test-runs-hardware:         ## the same sessions against a board: make test-runs-hardware TARGET=...
-	uv run --project python --group test \
-	  pytest python/tests/runs --target=$(TARGET) $(ARGS)
+	uv run --project daemon --group test \
+	  pytest daemon/tests/runs --target=$(TARGET) $(ARGS)
 
 .PHONY: test-e2e-local
 test-e2e-local: test        ## the shipped commands, two processes and a socket
-	uv run --project python --group test pytest python/tests/e2e $(ARGS)
+	uv run --project daemon --group test pytest daemon/tests/e2e $(ARGS)
 
 # **Not part of `make ci`, and that is a statement about this tree rather than
 # about linting.** Ruff arrived with the client, which was written clean against
@@ -227,11 +227,11 @@ test-e2e-local: test        ## the shipped commands, two processes and a socket
 # target you run, not a gate that fails.
 .PHONY: lint-python
 lint-python:                ## ruff over the package and its tests (reports pre-existing debt)
-	uv run --project python --group dev ruff check python
+	uv run --project daemon --group dev ruff check daemon
 
 .PHONY: typecheck
 typecheck:                  ## ty over the package
-	uv run --project python --group dev ty check --project python
+	uv run --project daemon --group dev ty check --project daemon
 
 # The trial loop across both daemons is **not** here. It lives in the contracts
 # repo (`rig/`, and `make rig-local` runs it against local checkouts), with the

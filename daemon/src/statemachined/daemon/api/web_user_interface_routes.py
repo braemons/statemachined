@@ -45,14 +45,30 @@ NO_CACHE_HEADERS = {"Cache-Control": "no-cache, must-revalidate"}
 
 
 def web_directory() -> Path:
-    """Where the UI's files are, whether that is a checkout or a wheel.
+    """Where the UI's files are, installed or in a checkout.
 
-    `as_file` rather than a path built from `__file__`, so this keeps working if
-    the package is ever installed zipped -- which the vendored-interpreter
-    packaging of docs/developer/daemon.md §6.1 does not do today and could tomorrow.
+    The panels are authored in `client/web/`, a sibling of `daemon/` rather
+    than a subdirectory of it, so that somebody looking for this daemon's UI
+    finds it without knowing how the Python package is laid out
+    (`contracts/DAEMON_LAYOUT.md`). A wheel cannot ship a directory from
+    outside its own root, so `packaging/Makefile` copies it to
+    `statemachined/daemon/web` before building.
+
+    An *editable* install applies no such copy, which is the case a developer
+    is always in: there, the only copy is the authored one. Trying the packaged
+    location first means a real install never touches the filesystem outside
+    itself.
+
+    `as_file` rather than a path built from `__file__`, so this keeps working
+    if the package is ever installed zipped -- which the vendored-interpreter
+    packaging of docs/developer/daemon.md §6.1 does not do today and could
+    tomorrow.
     """
     with as_file(files("statemachined.daemon") / "web") as path:
-        return Path(path)
+        packaged = Path(path)
+    if packaged.is_dir():
+        return packaged
+    return Path(__file__).resolve().parents[5] / "client" / "web"
 
 
 def read_asset(relative_path: str, root: Path) -> FileResponse:

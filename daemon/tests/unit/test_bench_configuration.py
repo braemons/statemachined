@@ -22,7 +22,7 @@ from statemachined.daemon.rig_configuration import RigConfiguration
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
 BENCH_RIG_CONFIG = (
-    REPOSITORY_ROOT / "python" / "bench" / "statemachined_bench_rig_config.toml"
+    REPOSITORY_ROOT / "daemon" / "bench" / "statemachined_bench_rig_config.toml"
 )
 BENCH_STATE_MACHINE_CONFIG = (
     REPOSITORY_ROOT / "configs" / "uno-r4-minima-bench.config.json"

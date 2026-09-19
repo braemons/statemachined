@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """The same runs, four ways: two API paths, two far ends.
 
-Everything else in `python/tests/` fixes one of those two axes. `integration/`
+Everything else in `daemon/tests/` fixes one of those two axes. `integration/`
 and `e2e/` always talk to the firmware built for this machine; `hardware/`
 always talks to a board, and does it with `RequestResponseSession` because that
 is what a bench instrument uses. So the question this tier exists to answer has
@@ -77,7 +77,7 @@ SOFTWARE_HARNESS = "8"
 RIG_URL = "http://statemachined.test"
 
 
-# `--target` is registered in python/tests/conftest.py rather than here, because
+# `--target` is registered in daemon/tests/conftest.py rather than here, because
 # `hardware/` takes it as well and pytest registers each option once per run.
 # Unset is falsy, and every reader below treats that as "the host build".
 

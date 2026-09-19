@@ -23,8 +23,8 @@ sys.path.insert(0, str(CONTRACTS))
 
 import check_outcomes as check  # noqa: E402
 
-PYTHON_TREE = Path(__file__).resolve().parents[2]
-REPOSITORY = PYTHON_TREE.parent
+DAEMON_TREE = Path(__file__).resolve().parents[2]
+REPOSITORY = DAEMON_TREE.parent
 
 
 def taxonomy() -> dict:
@@ -36,7 +36,7 @@ def test_both_enums_are_the_canonical_table() -> None:
     serial link, and a value that agrees with the table but not with each other
     would be a trial reported as the wrong outcome."""
     firmware = REPOSITORY / "firmware" / "core" / "trial" / "trial.h"
-    daemon = PYTHON_TREE / "src" / "statemachined" / "model" / "trial_outcome.py"
+    daemon = DAEMON_TREE / "src" / "statemachined" / "model" / "trial_outcome.py"
     problems = check.problems(
         taxonomy(),
         {
@@ -52,9 +52,11 @@ def test_the_graph_editor_offers_exactly_the_declarable_outcomes() -> None:
     # trial holds *while* it runs, and NEVER_FINISHED is the host's verdict about
     # its own silence -- a terminal state declaring "nobody heard from me" is a
     # contradiction.
+    # The panels are authored in `client/web/`, a sibling of `daemon/`
+    # (contracts/DAEMON_LAYOUT.md). The copy under the package exists only in a
+    # built wheel, which a test run is not.
     panel = (
-        PYTHON_TREE / "src" / "statemachined" / "daemon" / "web" / "elements"
-        / "graph_store_panel_element.js"
+        REPOSITORY / "client" / "web" / "elements" / "graph_store_panel_element.js"
     ).read_text()
     problems = check.declarable_problems(
         taxonomy(), "graph_store_panel_element.js", check.javascript_names(panel, "OUTCOME_NAMES")

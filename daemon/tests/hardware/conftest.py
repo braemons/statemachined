@@ -44,7 +44,7 @@ from hardware_test_harness import (
 )
 
 def pytest_addoption(parser):
-    # `--target` is registered in python/tests/conftest.py, not here: `runs/`
+    # `--target` is registered in daemon/tests/conftest.py, not here: `runs/`
     # takes it too, and pytest registers an option once per run rather than once
     # per conftest -- so defining it in both is a collision that kills
     # collection for anything gathering both suites.
@@ -156,7 +156,7 @@ def _give_it_a_wiring_of_our_own(device, ack: dict) -> None:
     *mask*. So a rig whose line map named only four inputs leaves the other four
     switched off, and the next suite to run reads them as permanently low.
 
-    That is not hypothetical: it is what `python/tests/runs/` does to this board
+    That is not hypothetical: it is what `daemon/tests/runs/` does to this board
     when it is pointed at one, and the symptom was this suite reporting four of
     the eight loopback wires missing while they were all firmly in their holes.
     A test suite that silently depends on the last thing anybody ran is a test

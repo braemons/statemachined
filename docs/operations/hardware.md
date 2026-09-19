@@ -187,7 +187,7 @@ the bench lamps freely.
 `hal::set_native_loopback(width, shift)`, switched on with
 `STATEMACHINED_LOOPBACK=8` — so a suite that drives transitions from predicates
 runs unchanged with a board and without one. That is what
-`python/tests/runs/` relies on: the far end is a fixture, and the same session
+`daemon/tests/runs/` relies on: the far end is a fixture, and the same session
 runs against silicon and against the host build. The software half reproduces
 *which line a level arrives on and that it arrives a scan later*; it reproduces
 nothing about timing, and no timing assertion is made against it.
@@ -369,7 +369,7 @@ correct and says nothing whatever about how long a scan takes.
 ### Response latency and duration accuracy — measured 2026-09-09
 
 Through the loopback harness, on an Uno R4 Minima, asserted from now on by
-`python/tests/hardware/test_timing_accuracy.py`.
+`daemon/tests/hardware/test_timing_accuracy.py`.
 
 **Duration accuracy.** A fixed dwell, ten trials at each of five scales:
 

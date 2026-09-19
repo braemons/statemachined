@@ -186,9 +186,9 @@ deb rpm: export STATEMACHINED_PKG_VERSION = $(VERSION)
 # ── The staged tree ─────────────────────────────────────────────────────────
 
 stage: $(STAGE)/.stamp      ## build the tree the package is cut from
-$(STAGE)/.stamp: $(shell find $(ROOT)/python/src $(ROOT)/firmware/core $(ROOT)/firmware/hal \
+$(STAGE)/.stamp: $(shell find $(ROOT)/daemon/src $(ROOT)/client/web $(ROOT)/firmware/core $(ROOT)/firmware/hal \
                               $(ROOT)/firmware/native -type f) \
-                 $(ROOT)/python/pyproject.toml $(ROOT)/CMakeLists.txt
+                 $(ROOT)/daemon/pyproject.toml $(ROOT)/CMakeLists.txt
 	@test -n "$(ARCH)" || { \
 	  echo "error: no nfpm architecture known for $(UNAME_M)."; \
 	  echo "       Build on the target architecture, or add it above."; exit 1; }
@@ -210,18 +210,28 @@ $(STAGE)/.stamp: $(shell find $(ROOT)/python/src $(ROOT)/firmware/core $(ROOT)/f
 	@#  repository, so the version is substituted in a copy -- a build must never
 	@#  leave the working tree dirty, and a dirty tree is itself part of the
 	@#  version string.
-	cp -a $(ROOT)/python/. $(SRC)/
+	cp -a $(ROOT)/daemon/. $(SRC)/
 	rm -rf $(SRC)/tests $(SRC)/bench $(SRC)/.venv
+	@#  **The panels are copied in here**, and this is the only place it can
+	@#  happen. They are authored in `client/web/`, a sibling of `daemon/`
+	@#  (contracts/DAEMON_LAYOUT.md), so that somebody looking for this daemon's
+	@#  UI finds it without knowing how the Python package is laid out. Python
+	@#  ships data *inside* a package, and hatchling's force-include reaches
+	@#  outside the project but is a trap -- a wheel built from an sdist cannot
+	@#  contain a path above the sdist's own root. A copy into the staged tree
+	@#  has no such cleverness in it, and `web_directory()` falls back to the
+	@#  authored location when no copy was made, which is every editable install.
+	cp -a $(ROOT)/client/web $(SRC)/src/statemachined/daemon/web
 	sed -i 's/^version = "0.0.0"$$/version = "$(PY_VERSION)"/' $(SRC)/pyproject.toml
 	@grep -q '^version = "$(PY_VERSION)"$$' $(SRC)/pyproject.toml || { \
-	  echo "error: the version sentinel in python/pyproject.toml did not match."; \
+	  echo "error: the version sentinel in daemon/pyproject.toml did not match."; \
 	  echo "       Nothing was stamped, and a 0.0.0 package is a package nobody"; \
 	  echo "       can correlate with a commit. Fix the sed above."; exit 1; }
-	@#  The dependencies come from python/uv.lock, exported with hashes, rather
+	@#  The dependencies come from daemon/uv.lock, exported with hashes, rather
 	@#  than being resolved against PyPI at build time. Otherwise a release of
 	@#  fastapi between two builds of one commit changes the artifact, which is
 	@#  the difference between "reproducible" and "reproducible this afternoon".
-	@#  Exported from the unmodified python/ because that is where the lock
+	@#  Exported from the unmodified daemon/ because that is where the lock
 	@#  matches its pyproject; the project itself then goes in --no-deps.
 	@#
 	@#  **Both extras, named rather than implied.** The package's dependencies
@@ -230,7 +240,7 @@ $(STAGE)/.stamp: $(shell find $(ROOT)/python/src $(ROOT)/firmware/core $(ROOT)/f
 	@#  or serve a request. A rig installs the daemon, so a rig gets `device` and
 	@#  `serve`, and naming them here is what makes that a decision rather than a
 	@#  default somebody has to reconstruct from a traceback.
-	$(UV) export --project $(ROOT)/python --frozen --no-default-groups --no-emit-project \
+	$(UV) export --project $(ROOT)/daemon --frozen --no-default-groups --no-emit-project \
 	  --extra device --extra serve \
 	  --no-header --no-annotate --format requirements.txt -o $(SRC)/requirements.txt
 	$(UV) pip install --python $(STAGE)$(PREFIX)/bin/python3 \

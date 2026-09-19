@@ -24,7 +24,7 @@ to and including its command line.
 parser, validator, scan loop and result chunker compiled for the host. It is not
 a mock and not a simulator of the protocol -- it is the protocol implementation.
 What it cannot be is a *timing* test: its scan is a nanosleep on a preemptible
-kernel. A board is `python/tests/hardware/`, with jumper wires.
+kernel. A board is `daemon/tests/hardware/`, with jumper wires.
 """
 
 from __future__ import annotations

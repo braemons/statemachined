@@ -20,7 +20,7 @@ so CI never ran it at all and every host-side run ended on a timeout.
 
 What the two halves do **not** share is timing, and nothing here asserts on it.
 The host's scan is a nanosleep on a preemptible kernel; the board's is a timer
-ISR. Durations are checked in `python/tests/hardware/test_timing_accuracy.py`,
+ISR. Durations are checked in `daemon/tests/hardware/test_timing_accuracy.py`,
 which needs the board and says so.
 """
 

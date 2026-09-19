@@ -168,7 +168,7 @@ the same thing locally.
 
 ## Drive it from Python
 
-`python/` is one package with three tiers, and which one you install says how
+`daemon/` is one package with three tiers, and which one you install says how
 you mean to drive a board.
 
 ```sh
@@ -283,10 +283,10 @@ Also: **VStim** (Andreas Kreiter, Cognitive Neurophysiology Lab, Bremen), whose
 ## License
 
 **Firmware, core, tests and tools: [GPLv3-or-later](LICENSE).
-The Python package, `python/src/`: [LGPLv3-or-later](python/LICENSE)**, so an
+The Python package, `daemon/src/`: [LGPLv3-or-later](daemon/LICENSE)**, so an
 experiment importing it is not placed under copyleft — the same split, and the
 same reason, as vstimd's client. The split is by *what is importable*, not by
-directory: `python/tests/` is a test suite and stays GPL. That the importable
+directory: `daemon/tests/` is a test suite and stays GPL. That the importable
 half now includes a client and a way to drive a board directly does not change
 the line; it is the same argument reaching further. Every source file carries an
 `SPDX-License-Identifier`.
