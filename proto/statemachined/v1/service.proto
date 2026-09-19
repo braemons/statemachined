@@ -170,6 +170,14 @@ service Session {
   // Put the loaded config's graphs on the device. The slow one.
   rpc Open(OpenSessionRequest) returns (OpenSessionResult);
 
+  // Put a named list of graphs on the device, without a state-machine config.
+  //
+  // The same upload `Open` does, composed by hand: a bench trying three graphs
+  // together, or a session assembled by a script. Every graph a session will
+  // use goes up **once, before the first trial**, which is what keeps arming
+  // in the milliseconds.
+  rpc UploadGraphs(UploadGraphsRequest) returns (OpenSessionResult);
+
   // Give the board up. The committed set stays on it, which is what makes a
   // reconnect cheap.
   rpc Close(CloseSessionRequest) returns (SessionState);
@@ -199,10 +207,21 @@ service Recording {
   rpc DeleteRecording(RecordingName) returns (Recordings);
 }
 
-// The box's own settings.
+// The box's own settings, and whether it is up.
 service Configuration {
   rpc ReadConfiguration(ReadConfigurationRequest) returns (RigConfiguration);
   rpc PatchConfiguration(RigConfigurationPatch) returns (RigConfigurationUpdate);
+
+  // Is the daemon up, and does it have a board.
+  //
+  // **Two different questions, and a supervisor only asks the first**: a
+  // daemon whose board is unplugged is still the thing you ask *why*. That is
+  // why this answers rather than refusing when there is no device, and why
+  // `device_connected` is a field instead of a status code.
+  //
+  // Answered without touching the board, so it stays cheap enough to poll and
+  // cannot be made to hang by a serial port that is not draining.
+  rpc ReadHealth(ReadHealthRequest) returns (Health);
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +249,13 @@ message ListGraphsRequest {}
 message ListConfigsRequest {}
 
 message ReadSessionRequest {}
+
+message UploadGraphsRequest {
+  // By name, in the order they should occupy slots. An empty list is refused
+  // rather than treated as "clear": giving a board nothing to run is
+  // `Session/Close`, and the two are different intentions.
+  repeated string graph_names = 1;
+}
 message OpenSessionRequest {}
 message CloseSessionRequest {}
 message ClearActiveGraphRequest {}
@@ -241,6 +267,13 @@ message StopRecordingRequest {}
 message ClearRecordingRequest {}
 
 message ReadConfigurationRequest {}
+message ReadHealthRequest {}
+
+message Health {
+  // Always true: a daemon that could not answer would not have.
+  bool ok = 1;
+  bool device_connected = 2;
+}
 
 // What a cancel actually did.
 message CancelTrialResult {
