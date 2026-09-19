@@ -1,0 +1,255 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+syntax = "proto3";
+
+package statemachined.v1;
+
+import "statemachined/v1/common.proto";
+import "statemachined/v1/device.proto";
+import "statemachined/v1/documents.proto";
+import "statemachined/v1/recording.proto";
+import "statemachined/v1/rig_configuration.proto";
+import "statemachined/v1/session.proto";
+import "statemachined/v1/state.proto";
+import "statemachined/v1/trial.proto";
+
+// ---------------------------------------------------------------------------
+//
+// **This daemon owns one board, and commands nobody.**
+// `contracts/INTERACTIONS.md` §2: it answers what it is asked, publishes what
+// it observed, and never reaches out. triald drives the trial loop through
+// `Trial`; a person on a bench drives the same rpcs from the panels or a CLI,
+// and there is no private path for either.
+//
+// Eight services. The split is by *who asks and how often* rather than by
+// noun: `Trial` and `State` are in the loop and are small and stable;
+// `GraphStore`, `StateMachineConfigStore` and `Device` are setup, and change
+// on the scale of a session.
+
+// What is happening right now, and who is watching.
+service State {
+  // One read of the device's state report, resolved against the graph this
+  // daemon holds. Cheap and safe to poll.
+  rpc ReadState(ReadStateRequest) returns (RigState);
+
+  // The same thing, pushed. Frames are coalesced under load — `sequence`
+  // skips, and that is not loss, because each frame is a whole state.
+  rpc WatchState(WatchStateRequest) returns (stream StateFrame);
+
+  // A window of the trace ring: everything the device said, in order.
+  rpc ReadTrace(ReadTraceRequest) returns (TraceWindow);
+
+  // The trace from `since_entry_number` onwards, and then as it happens.
+  // **This is what triald subscribes to** and what a recording is written
+  // from.
+  rpc WatchTrace(WatchTraceRequest) returns (stream TraceEntry);
+
+  // One trial's entries, joined by `trial_id`, for a trace panel that has been
+  // asked "what happened in trial 12".
+  rpc ReadTrialTrace(ReadTrialTraceRequest) returns (TrialTrace);
+
+  // Who is watching. A diagnostic and not a contract — see `Observer`.
+  rpc ReadObservers(ReadObserversRequest) returns (Observers);
+}
+
+// One trial, from arming to result.
+//
+// **Every rpc here names its `trial_id`**, and that is the whole addressing
+// scheme: a result that arrives late is attributable rather than assumed to
+// belong to whatever is running now. `contracts/INTERACTIONS.md` §5.1 is what
+// leaving it out cost on the other side of this link.
+service Trial {
+  // Arm the device for one trial of one graph. Nothing is uploaded — the set
+  // is already on the board, and this selects from it.
+  //
+  // Refuses `unavailable` with no board, `failed_precondition` when the graph
+  // is not in the committed set, and whatever the device itself said when the
+  // device refused.
+  rpc Configure(ConfigureTrialRequest) returns (ConfigureTrialResult);
+
+  // Start the armed trial. Separate from `Configure` because arming takes
+  // milliseconds and starting must not: the trial begins when this is called,
+  // and everything that could have been done earlier already was.
+  rpc Start(StartTrialRequest) returns (StartTrialResult);
+
+  // Ask for a cancel, and be told what actually happened.
+  //
+  // **A cancel that races a terminal state comes back with the real outcome.**
+  // Asking to cancel and being told `HIT` is the caller's to cope with; the
+  // alternative is a record claiming a trial was cancelled when the animal had
+  // already responded.
+  rpc Cancel(CancelTrialRequest) returns (CancelTrialResult);
+
+  // The last completed trial, named against the graph that actually ran.
+  rpc ReadResult(ReadTrialResultRequest) returns (TrialResult);
+}
+
+// The board: what it is, what it can hold, and how its lines are wired.
+service Device {
+  // Everything about the attachment, in one answer.
+  rpc ReadDevice(ReadDeviceRequest) returns (DeviceState);
+
+  // Open the link, or say why not. Idempotent.
+  //
+  // Named `OpenLink` and not `Connect` because a generated client already has
+  // a `connect` — the one that opens the channel to this daemon — and two
+  // things called connect on one object is a support question.
+  rpc OpenLink(OpenLinkRequest) returns (DeviceState);
+
+  // Every line by name, resolved against the board, with its level right now.
+  rpc ReadLines(ReadLinesRequest) returns (LineMapView);
+
+  // Replace the line map. Refused while a trial is armed or running: a line
+  // map is what a trial's record *means*, and moving it mid-trial makes that
+  // record a fiction.
+  rpc WriteLineMapFile(StoredFile) returns (LineMapView);
+
+  // A window of the line monitor's ring: every edge seen on every line.
+  rpc ReadLineMonitor(ReadLineMonitorRequest) returns (LineMonitorWindow);
+  rpc WatchLineMonitor(WatchLineMonitorRequest) returns (stream LineMonitorEntry);
+
+  // What the board is running, and what this package could flash onto it.
+  rpc ReadFirmware(ReadFirmwareRequest) returns (FirmwareVersions);
+
+  // Whether the board arms its own trials. Asked of the board rather than
+  // remembered here — the setting outlives this daemon.
+  rpc ReadAutorun(ReadAutorunRequest) returns (Autorun);
+  rpc WriteAutorun(WriteAutorunRequest) returns (Autorun);
+
+  // Write the board's own settings to its storage, so they survive a power
+  // cycle. Explicit rather than implied by `WriteAutorun`: a bench changes
+  // autorun a dozen times an hour, and a flash write is not free.
+  rpc SaveSettings(SaveSettingsRequest) returns (Ok);
+}
+
+// The graph documents this rig holds.
+//
+// **A graph is a file**, so these carry its text. `documents.proto` has the
+// argument in full.
+service GraphStore {
+  rpc ListGraphs(ListGraphsRequest) returns (GraphSummaries);
+  rpc ReadGraphFile(ReadFileRequest) returns (StoredFile);
+  rpc WriteGraphFile(StoredFile) returns (GraphSummary);
+  rpc DeleteGraph(DeleteFileRequest) returns (GraphSummaries);
+
+  // Every rule, plus this board's capacities. Changes nothing, uploads
+  // nothing. Needs a board, and refuses `unavailable` without one — the
+  // capacity half is the half worth having.
+  rpc ValidateGraph(ReadFileRequest) returns (GraphValidation);
+
+  // The same check against a **draft**: what somebody is typing, before it is
+  // saved. It goes through the daemon's own parser and compiler, so what comes
+  // back is the refusal the real thing would give — never a second, looser
+  // description of a graph living in a browser.
+  rpc ValidateGraphFile(FileDraft) returns (GraphValidation);
+
+  // Put one graph on the board as a set of one. The bench path: try a graph
+  // out without a state-machine config.
+  rpc UploadGraph(ReadFileRequest) returns (CommittedGraphSet);
+}
+
+// The state-machine configs this rig holds: one experiment's graphs and line
+// map, as a document.
+service StateMachineConfigStore {
+  rpc ListConfigs(ListConfigsRequest) returns (StateMachineConfigSummaries);
+  rpc ReadConfigFile(ReadFileRequest) returns (StoredFile);
+  rpc WriteConfigFile(StoredFile) returns (StateMachineConfigSummary);
+  rpc DeleteConfig(DeleteFileRequest) returns (StateMachineConfigSummaries);
+
+  // Make one the rig's: apply its line map, and push the wiring.
+  //
+  // The graphs are **not** uploaded here — `Session/Open` does that, because
+  // that is the slow call and this one should not be. Refused while a trial is
+  // armed or running.
+  rpc LoadConfig(ReadFileRequest) returns (LoadedConfigResult);
+}
+
+// What this rig is loaded with, and the graph set on the board.
+service Session {
+  rpc ReadSession(ReadSessionRequest) returns (SessionState);
+
+  // Put the loaded config's graphs on the device. The slow one.
+  rpc Open(OpenSessionRequest) returns (OpenSessionResult);
+
+  // Give the board up. The committed set stays on it, which is what makes a
+  // reconnect cheap.
+  rpc Close(CloseSessionRequest) returns (SessionState);
+
+  // Which graph a trial gets when it names none. A bench convenience; triald
+  // names one every trial and never relies on it.
+  rpc SetActiveGraph(SetActiveGraphRequest) returns (ActiveGraph);
+  rpc ClearActiveGraph(ClearActiveGraphRequest) returns (ActiveGraph);
+}
+
+// Writing the trace to disk.
+service Recording {
+  rpc ReadRecordings(ReadRecordingsRequest) returns (Recordings);
+
+  rpc Start(StartRecordingRequest) returns (RecordingManifest);
+  // Keep the file, stop writing to it. A pause is a real gap in the entry
+  // numbers and is recorded as a segment boundary rather than smoothed over.
+  rpc Pause(PauseRecordingRequest) returns (RecordingManifest);
+  rpc Resume(ResumeRecordingRequest) returns (RecordingManifest);
+  rpc Stop(StopRecordingRequest) returns (RecordingManifest);
+  // Throw away what has been written and start the file again. Refused unless
+  // a recording is open.
+  rpc Clear(ClearRecordingRequest) returns (RecordingManifest);
+
+  rpc ReadRecording(RecordingName) returns (RecordingManifest);
+  rpc ReadEntries(ReadRecordingEntriesRequest) returns (RecordingEntries);
+  rpc DeleteRecording(RecordingName) returns (Recordings);
+}
+
+// The box's own settings.
+service Configuration {
+  rpc ReadConfiguration(ReadConfigurationRequest) returns (RigConfiguration);
+  rpc PatchConfiguration(RigConfigurationPatch) returns (RigConfigurationUpdate);
+}
+
+// ---------------------------------------------------------------------------
+//
+// **An rpc that carries nothing still has its own request message.**
+//
+// `google.protobuf.Empty` can never grow a field, so an rpc that took one
+// would need a *second rpc* the day it learns an argument — and §11 of
+// `contracts/INTERACTIONS.md` says an interface grows by addition.
+// `ReadStateRequest{}` just grows one. Sixteen of these cost sixteen names and
+// buy every one of those rpcs a future.
+
+message ReadStateRequest {}
+message WatchStateRequest {}
+message ReadObserversRequest {}
+
+message ReadDeviceRequest {}
+message OpenLinkRequest {}
+message ReadLinesRequest {}
+message ReadFirmwareRequest {}
+message ReadAutorunRequest {}
+message SaveSettingsRequest {}
+
+message ListGraphsRequest {}
+message ListConfigsRequest {}
+
+message ReadSessionRequest {}
+message OpenSessionRequest {}
+message CloseSessionRequest {}
+message ClearActiveGraphRequest {}
+
+message ReadRecordingsRequest {}
+message PauseRecordingRequest {}
+message ResumeRecordingRequest {}
+message StopRecordingRequest {}
+message ClearRecordingRequest {}
+
+message ReadConfigurationRequest {}
+
+// What a cancel actually did.
+message CancelTrialResult {
+  int64 trial_id = 1;
+
+  // Whether the device cancelled it. False when the trial had already ended,
+  // in which case `outcome` is the real one.
+  bool cancelled = 2;
+
+  // The outcome the device reports, which is not necessarily `CANCELLED`.
+  int32 outcome_code = 3;
+}

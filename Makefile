@@ -21,15 +21,22 @@ check-core:                 ## enforce the portable core's constraints
 	@./tools/check-core-purity.sh
 
 .PHONY: check-proto
-# `proto/braemons/v1/` is the `.tdr` outcome taxonomy, vendored byte-identically
-# from `contracts/vendored/proto/` because neither this daemon nor triald owns
-# it. The checker holds the firmware enum, the Python enum and the graph
-# editor's menu to it, reading all four as text so it runs with nothing
-# installed — which is why it is here rather than only in the test suite.
+# Two things, and they fail for different reasons.
 #
-# `proto/statemachined/v1/` — this daemon's own interface — does not exist yet;
-# when it does, protoc joins this target.
-check-proto:                ## the taxonomy, and every copy of it in this repository
+# **protoc** catches a `.proto` that does not parse. `proto/statemachined/v1/`
+# is this daemon's interface — types *and* rpcs, hand-authored
+# (`contracts/DAEMON_LAYOUT.md`) — and nothing generates from it yet, so this
+# is the only thing holding it to being valid protobuf.
+#
+# **check_outcomes.py** catches a copy of the `.tdr` taxonomy that drifted.
+# `proto/braemons/v1/` is that taxonomy, vendored byte-identically from
+# `contracts/vendored/proto/` because neither this daemon nor triald owns it;
+# the checker holds the firmware enum, the Python enum and the graph editor's
+# menu to it, reading all four as text so it runs with nothing installed.
+check-proto:                ## the proto compiles, and every copy of the taxonomy agrees
+	@protoc --proto_path=proto --descriptor_set_out=/dev/null \
+	  proto/statemachined/v1/*.proto proto/braemons/v1/*.proto
+	@echo "  proto: $$(grep -ch 'rpc ' proto/statemachined/v1/service.proto) rpcs in $$(grep -ch '^service ' proto/statemachined/v1/service.proto) services"
 	@python3 tools/check_outcomes.py
 
 # Exported rather than set per-recipe so a local run fails the same way CI does:

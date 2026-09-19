@@ -1,0 +1,85 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+syntax = "proto3";
+
+package statemachined.v1;
+
+import "statemachined/v1/state.proto";
+
+// One stretch of a recording that was actually being written.
+//
+// **A recording with a pause in it has no contiguous range of entry
+// numbers**, because the numbers are the trace's and the gap is real. The
+// segments are where that gap is written down; without them a reader would see
+// a jump and have to guess whether it was a pause or a loss.
+message RecordingSegment {
+  optional int64 from_entry_number = 1;
+  optional int64 to_entry_number = 2;
+  string started_host_time = 3;
+  string ended_host_time = 4;
+  int64 entry_count = 5;
+}
+
+// What a recording is, without its entries.
+//
+// A manifest that will not parse is listed with its reason rather than
+// omitted, for the same reason a broken graph is: a file you cannot see is a
+// file you cannot fix.
+message RecordingManifest {
+  string name = 1;
+  string description = 2;
+
+  // Which state-machine config the rig was running. Recorded because a trace
+  // means nothing without the graph set it was produced by.
+  string state_machine_config = 3;
+
+  double created_unix_seconds = 4;
+  string created_host_time = 5;
+
+  // `recording`, `paused` or `stopped`.
+  string state = 6;
+
+  repeated RecordingSegment segments = 7;
+  int64 entry_count = 8;
+
+  // How many entries of each kind, so a panel can say what is in a file
+  // without reading it.
+  map<string, int64> kind_counts = 9;
+
+  // Why this manifest could not be read. Empty when it could, and the only
+  // field that is filled when it could not.
+  string unreadable = 10;
+}
+
+message Recordings {
+  // The one being written, if any.
+  RecordingManifest active = 1;
+  repeated RecordingManifest recordings = 2;
+}
+
+message StartRecordingRequest {
+  string name = 1;
+  string description = 2;
+}
+
+message RecordingName {
+  string name = 1;
+}
+
+// The entries, **by position in the file** rather than by entry number.
+//
+// By position because of the gap above: a recording with a pause in it has no
+// contiguous range of numbers to page through. Each entry still carries its
+// `entry_number`, so a reader can join it back to the trace exactly.
+message ReadRecordingEntriesRequest {
+  string name = 1;
+  int64 offset = 2;
+  int32 limit = 3;
+}
+
+message RecordingEntries {
+  string name = 1;
+  int64 offset = 2;
+  repeated TraceEntry entries = 3;
+  int64 entry_count = 4;
+  repeated RecordingSegment segments = 5;
+}

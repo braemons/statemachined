@@ -1,0 +1,87 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+syntax = "proto3";
+
+package statemachined.v1;
+
+import "statemachined/v1/device.proto";
+
+// What this rig is loaded with, and whether a session is open.
+//
+// **Three separate facts, reported separately rather than collapsed into one
+// `ready` flag**, because the useful question at two in the morning is *which*
+// of them is missing: a config may be loaded with no session open, and a set
+// may be committed on the board from a session that ended — which is normal,
+// and is what makes a reconnect cheap.
+message SessionState {
+  // The loaded state-machine config, or nothing.
+  LoadedStateMachineConfig state_machine_config = 1;
+
+  // The graph set the board is holding, which may be from a session that has
+  // already ended.
+  CommittedGraphSet committed_set = 2;
+
+  // Whether a session is open on this connection.
+  bool session_open = 3;
+
+  // Which graph a trial gets when it names none. Empty when nothing is
+  // selected, in which case a trial must name one.
+  string active_graph = 4;
+
+  // Every config in the store, by name, so a panel can offer them without a
+  // second call.
+  repeated string stored_config_names = 5;
+}
+
+message LoadedStateMachineConfig {
+  string name = 1;
+  string description = 2;
+  string board = 3;
+  repeated string graph_names = 4;
+
+  // Whether the config this rig is running is still in the store. A loaded
+  // config can be deleted while it is loaded, and the rig keeps running it —
+  // saying so is better than implying the store is the only place it exists.
+  bool still_in_the_store = 5;
+}
+
+// Put the loaded config's graphs on the device.
+//
+// **The slowest call in this API by a wide margin, and the one where a session
+// is allowed to fail**: a graph that does not fit this board fails here, with
+// an animal not yet in the booth, rather than at trial 40.
+message OpenSessionResult {
+  string state_machine_config = 1;
+  int32 set_version = 2;
+
+  // Which slot each graph landed in. A caller never needs this — everything
+  // else in this API takes a name — but it is what a person compares against
+  // the board when a trial reports the wrong graph.
+  map<string, int32> slots = 3;
+
+  int32 pool_usage = 4;
+  int32 pool_capacity = 5;
+  int32 elapsed_milliseconds = 6;
+}
+
+// Which graph a trial gets when it names none.
+message SetActiveGraphRequest {
+  string graph = 1;
+}
+
+message ActiveGraph {
+  // Empty when nothing is selected.
+  string active_graph = 1;
+}
+
+// What loading a state-machine config did.
+message LoadedConfigResult {
+  string loaded = 1;
+
+  // Whether the wiring reached the board. A config loads with nothing
+  // attached — the line map is applied here and pushed when there is
+  // something to push.
+  bool wiring_pushed = 2;
+
+  LineMapView line_map = 3;
+  repeated string graph_names = 4;
+}

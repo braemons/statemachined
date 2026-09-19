@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+syntax = "proto3";
+
+package statemachined.v1;
+
+// Why a call was refused.
+//
+// `detail` is meant to be shown to a person: it says what was wrong and, where
+// there is one, what to do instead. The gRPC status code carries the category —
+// `failed_precondition`, `invalid_argument`, `not_found`, `unavailable` — and
+// `error` names the particular case within it, which is what a client switches
+// on.
+//
+// **`context` names what to change**, and it is the field that earns this
+// message its keep. A refusal that says `does_not_fit` tells somebody a graph
+// set is too big; one that also says `graphs` tells them where to look. The
+// rule comes from the device's own wire (`docs/reference/protocol.md` §5),
+// where every error carries a context, and it was worth keeping one layer up.
+//
+// **A device's refusal is passed up with its own words.** When the board says
+// `graph_mismatch` or `busy` or `bad_index`, `error` is that code rather than
+// this daemon's paraphrase of it: those are the words the device's
+// documentation uses, and a caller switching on them should be switching on
+// the device's answer.
+//
+// **A refusal travels as this message**, in the trailing metadata entry
+// `statemachined-error-bin`, rather than as a sentence for a client to parse.
+// The status message carries `detail (context)` as well, for grpcurl and logs.
+message Error {
+  // A short machine-readable kind: `not_connected`, `no_such_graph`,
+  // `does_not_fit`, or whatever the device itself said. Additive — new kinds
+  // appear, none change meaning.
+  string error = 1;
+  string detail = 2;
+  // The field, graph or line the caller should look at. Never empty in
+  // practice: where there is nothing more specific it repeats `error`.
+  string context = 3;
+}
+
+// Nothing to say beyond that it worked.
+message Ok {
+  bool ok = 1;
+}

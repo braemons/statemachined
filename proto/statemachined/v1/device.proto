@@ -1,0 +1,274 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+syntax = "proto3";
+
+package statemachined.v1;
+
+// What one board can hold, as `hello_ack` declares it.
+//
+// **Read from the device, never assumed.** The reference board ships more than
+// one image and a Teensy is a different set of numbers again, so compiling
+// against a constant would mean a graph that fits in the tests and not on the
+// bench.
+message DeviceCapacities {
+  int32 max_line = 1;
+  int32 max_states = 2;
+  int32 max_transitions = 3;
+  int32 max_output_actions = 4;
+  int32 max_distributions = 5;
+  int32 max_choice_options = 6;
+  int32 max_path = 7;
+  int32 max_graphs = 8;
+  int32 max_timers = 9;
+
+  // Which input line the first global timer holds high. Not derivable from the
+  // line count: the timers are counted down from the top of the word, so that
+  // a graph means the same thing on a board with eight inputs and one with
+  // twenty. The device reports it because nothing else can know it.
+  int32 first_timer_line = 10;
+
+  int32 input_line_count = 11;
+  int32 output_line_count = 12;
+}
+
+// The graph set the board is holding right now.
+message CommittedGraphSet {
+  int32 set_version = 1;
+  repeated string graph_names = 2;
+  int32 pool_usage = 3;
+  int32 pool_capacity = 4;
+}
+
+// How the serial link is behaving.
+message LinkHealth {
+  // How many times this daemon has opened the link since it started. A rig
+  // whose count climbs on its own has a cable or a power problem, and the
+  // number is the only thing that says so.
+  int32 connection_count = 1;
+  int64 dropped_lines = 2;
+  int64 bad_lines = 3;
+  string last_error = 4;
+}
+
+// Whether the board is keeping to its scan period.
+//
+// **Diagnosis rather than control, and the honest half of the timing claim.**
+// A board that quietly misses scans looks exactly like one that is fine, so a
+// missed scan is counted and reported.
+message ScanHealth {
+  // The rate the board is actually achieving, measured by the board.
+  int32 hz = 1;
+
+  // Scans that took longer than the period. The number that makes a timing
+  // claim honest: a board quietly missing scans looks exactly like one that is
+  // fine.
+  int64 overruns = 2;
+
+  // The worst gap seen, in scan periods.
+  int32 worst_gap = 3;
+
+  // Times the board had something to say and could not, because the link was
+  // not draining. A rig whose `tx_stalls` climbs is losing trace entries at
+  // the far end rather than on the board.
+  int64 tx_stalls = 4;
+}
+
+// Everything about the attachment, in one answer.
+message DeviceState {
+  bool connected = 1;
+
+  // Where the daemon is told to look: a serial path, or a `socket://` URL for
+  // a board on a switch or the native build.
+  string target = 2;
+
+  string board = 3;
+  string firmware_version = 4;
+  int32 protocol_version = 5;
+  int32 measured_scan_hz = 6;
+
+  DeviceCapacities capacities = 7;
+
+  // Whether the board has a wiring table of its own. Absent when nothing has
+  // said either way, which is a different thing from "no".
+  optional bool has_wiring = 8;
+
+  // Whether this daemon knows which pin each line is **because the board said
+  // so**, or because it assumed. `docs/reference/protocol.md` §3.6, and the
+  // whole reason that command exists: before it, there was no third answer to
+  // "which pin is line 4" beyond a table copied out of the firmware.
+  string pin_labels_came_from = 9;
+
+  CommittedGraphSet committed_set = 10;
+  LinkHealth link = 11;
+  ScanHealth scan = 12;
+
+  int64 uptime_device_microseconds = 13;
+}
+
+// One input line: what it is called, how the rig conditions it, and what it
+// reads right now.
+message InputLine {
+  string name = 1;
+
+  // Which bit of the input word this is — the only part of a line that reaches
+  // the device. Absent when the map named a pin instead and there was no board
+  // to resolve it against; a line configured by pin reports the index it will
+  // actually be uploaded with as soon as one is attached.
+  optional int32 line_index = 2;
+
+  // The board's own name for that pin, which is what a person checks against
+  // the hardware.
+  string pin_label = 3;
+
+  // Reads active-low. Opto-isolated inputs routinely do, and it is applied
+  // when the word is assembled so that no predicate above it has a special
+  // case.
+  bool reads_active_low = 4;
+
+  // A disabled line reads zero however the pin is driven, which is how a rig
+  // says "nothing is plugged in there" without every graph having to avoid
+  // naming it.
+  bool is_enabled = 5;
+
+  // Its level right now, from the device's own `io` word. **The only way
+  // anything outside the device can check that a graph's line numbers reach
+  // the pins somebody wired** — there is no read-back path from a pin. Absent
+  // when nothing is attached, which is not the same as low.
+  optional bool is_high_now = 6;
+}
+
+// One output line: what it is called, and what "off" means for it.
+message OutputLine {
+  string name = 1;
+  optional int32 line_index = 2;
+  string pin_label = 3;
+
+  // The level this line is driven to on watchdog timeout, reset, link loss or
+  // a refused graph. **Per line, because "off" is not always "low":** an
+  // active-low valve driver is *opened* by a low, and a board that came up
+  // driving every line low would open it on every power cycle.
+  bool safe_level_is_high = 4;
+
+  optional bool is_high_now = 5;
+}
+
+// Every line this rig has, by name, with the board's answer folded in.
+//
+// **A line map is a document somebody edits**, so replacing one carries its
+// text — `WriteLineMapFile` — and keeps its own schema
+// (`contracts/DAEMON_LAYOUT.md` §2). This is the *reading* of it that a panel
+// draws: the map, resolved against the board, with the live levels beside it.
+// That join is the one thing only the daemon can do.
+message LineMapView {
+  repeated InputLine input_lines = 1;
+  repeated OutputLine output_lines = 2;
+
+  // Where the pin labels came from. `device` means the board answered `pins`
+  // and these labels are its own; `assumed` means this daemon fell back to its
+  // own table for firmware older than that command, and every label here is a
+  // belief rather than a fact (`docs/reference/protocol.md` §3.6).
+  string pin_labels_came_from = 3;
+
+  // Indexed by line number, so a client reads the board's own name for line 4
+  // as `board_input_pins[4]`.
+  repeated string board_input_pins = 4;
+  repeated string board_output_pins = 5;
+}
+
+// One edge seen on a line, as the monitor recorded it.
+message LineMonitorEntry {
+  int64 entry_number = 1;
+  int64 device_microseconds = 2;
+  string line = 3;
+  int32 index = 4;
+  bool high = 5;
+  bool is_input = 6;
+}
+
+// A window of the line monitor's ring.
+//
+// `lost_entries_before` is the one place the ring's boundedness is visible
+// from outside: saying nothing would hand back a shorter answer that looks
+// complete.
+message LineMonitorWindow {
+  repeated LineMonitorEntry entries = 1;
+  int64 newest_entry_number = 2;
+  int64 oldest_entry_number_still_held = 3;
+  int32 ring_capacity = 4;
+  optional int64 lost_entries_before = 5;
+}
+
+message ReadLineMonitorRequest {
+  int64 since_entry_number = 1;
+  int32 limit = 2;
+}
+
+message WatchLineMonitorRequest {
+  int64 since_entry_number = 1;
+}
+
+// What the board is running, and what could be flashed onto it.
+message FirmwareVersions {
+  // What the board greeted with.
+  string running = 1;
+
+  // What this package ships, when it ships one.
+  string installed = 2;
+
+  // Whether the board names a stamped build at all. An unstamped image is a
+  // local build, and comparing it to anything is meaningless rather than
+  // false.
+  bool running_is_stamped = 3;
+
+  // Whether both sides name a stamped build, so the comparison means
+  // something.
+  bool comparable = 4;
+
+  // Only ever true when `comparable` is. **The comparison is the whole
+  // point**: a board in a rack cannot be asked which commit it is running, so
+  // the package carries a manifest and this says whether the two agree.
+  bool matches = 5;
+}
+
+// Whether the board arms its own trials, and what it would run.
+//
+// **This is the switch that makes the daemon optional**: the device starts
+// each run itself and waits out the dwell the terminal state it reached
+// declared. Asked of the board rather than remembered here — the setting is
+// stored on the device, outlives this daemon's session, and survives the
+// greeting that took the rig away from it.
+message Autorun {
+  bool enabled = 1;
+
+  // `enabled` and `active` are not the same fact: a board can be configured to
+  // arm its own trials and not be doing so right now
+  // (`docs/reference/protocol.md` §3.7).
+  bool active = 2;
+
+  // Which graph it runs, by name where this daemon can say it. The board holds
+  // a slot; the name comes from the committed set.
+  string graph_name = 3;
+  int32 slot = 4;
+
+  int32 cap_milliseconds = 5;
+  int64 seed = 6;
+  int64 next_trial_id = 7;
+}
+
+// Hand the board the job of arming its own trials, or take it back.
+message WriteAutorunRequest {
+  bool enabled = 1;
+
+  // A name, never a slot — like everything else this API takes. Left out when
+  // enabling, the session's active graph is used, which is the one a person
+  // looking at this rig would mean.
+  optional string graph_name = 2;
+
+  int32 cap_milliseconds = 3;
+
+  // The stream the board's own trials draw from. Left out, whatever the board
+  // already holds stands — which for a board restored from its own storage is
+  // the seed that makes an unattended session replay.
+  optional int64 seed = 4;
+
+  optional int64 first_trial_id = 5;
+}
