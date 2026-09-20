@@ -18,7 +18,7 @@ class SessionServicer(service_pb2_grpc.SessionServicer):
         return convert.session_state_to_wire(
             config=self.service.state_machine_config,
             committed=self.service.supervisor.committed_graph_set,
-            session_open=self.service.session_opened_at is not None,
+            opened_at=self.service.session_opened_at,
             active_graph=self.service.active_graph_name,
             stored_config_names=list(
                 self.service.state_machine_config_store.stored_config_names()

@@ -234,17 +234,35 @@ def served_paths(app) -> set[str]:
     return paths
 
 
-def test_every_api_path_the_ui_calls_is_a_route_this_daemon_serves(client: TestClient) -> None:
+def test_the_ui_names_no_paths_at_all(client: TestClient) -> None:
+    """The panels call rpcs, so there is no path in them to check.
+
+    This test used to scrape `/api/...` out of every element and hold each one
+    to a served route. It cannot any more, and that is the point: the panels go
+    through `DaemonApiClient`, which is generated from `proto/`, and the only
+    thing that names an address is the generated bundle. What replaced the
+    check is `test_every_route_has_an_rpc` and `test_every_rpc_is_implemented`,
+    which ask the same question of the interface rather than of string
+    literals.
+
+    Kept rather than deleted, inverted, because a `/api/...` reappearing in a
+    hand-written panel means somebody has gone around the client — and that is
+    exactly the thing the `/elements/` contract cannot survive.
+    """
     served = served_paths(client.app)
-    # The walker itself is the thing most likely to be silently wrong here, so
-    # it is pinned: one plain route and one WebSocket.
+    # The walker is pinned, as before: it is the part most likely to be
+    # silently wrong, and a walker that found nothing would make this vacuous.
     assert {"/api/device", "/api/stream"} <= served
-    mentioned = set()
-    for source in element_sources().values():
-        mentioned.update(re.findall(r'["`](/api/[^"`\s]*)["`]', source))
-    assert mentioned, "no API paths found; this test would pass vacuously"
-    for path in mentioned:
-        assert normalised(path) in served, f"the UI calls {path}, which is not a route"
+
+    hand_written = {
+        name: source
+        for name, source in element_sources().items()
+        if name != "daemon_api_client.js"
+    }
+    assert len(hand_written) > 10, "no panels found; this test would pass vacuously"
+    for name, source in hand_written.items():
+        mentioned = re.findall(r'["`](/api/[^"`\s]*)["`]', source)
+        assert not mentioned, f"{name} names {mentioned}; panels call rpcs, not paths"
 
 
 def test_every_module_parses() -> None:
@@ -957,7 +975,7 @@ def test_the_serial_monitor_is_closed_and_silent_until_somebody_opens_it() -> No
 
     The visible one: it is the loudest thing on the page for the people who need
     it least -- every line in and out of the port, scrolling, under a session
-    somebody is trying to watch. The one that matters more: it holds a WebSocket
+    somebody is trying to watch. The one that matters more: it holds a *stream*
     per open tab against a daemon whose whole reason for existing is one serial
     port, for a question nobody has asked yet.
 
@@ -976,10 +994,15 @@ def test_the_serial_monitor_is_closed_and_silent_until_somebody_opens_it() -> No
         f"const {{ SerialMonitorPanelElement }} = await import({module!r});\n"
         "const panel = new SerialMonitorPanelElement();\n"
         "let backfills = 0;\n"
-        "const socket = { addEventListener() {}, close() {} };\n"
+        "// A stream that never yields and never ends, which is what a quiet\n"
+        "// port looks like. The panel's own abort is what closes it.\n"
+        "const forever = async function* () { await new Promise(() => {}); };\n"
         "Object.defineProperty(panel, 'api', { value: {\n"
-        "  readDeviceMonitor: async () => { backfills += 1; return { lines: [], ring_capacity: 9 }; },\n"
-        "  openDeviceMonitorStream: () => socket,\n"
+        "  readSerialMonitor: async () => {\n"
+        "    backfills += 1;\n"
+        "    return { entries: [], ring_capacity: 9, newest_entry_number: -1 };\n"
+        "  },\n"
+        "  followSerialMonitor: () => forever(),\n"
         "} });\n"
         "panel.renderShell();\n"
         "panel.installDisclosure();\n"
@@ -988,13 +1011,13 @@ def test_the_serial_monitor_is_closed_and_silent_until_somebody_opens_it() -> No
         "const disclosures = panel.root.descendants()\n"
         "  .filter((n) => n.tagName === \'details\' || n.className === \'disclosure\').length;\n"
         "await panel.start();\n"
-        "const socketsWhileClosed = panel.openSockets.length;\n"
+        "const socketsWhileClosed = panel.openStreams.length;\n"
         "const backfillsWhileClosed = backfills;\n"
         "await panel.setCollapsed(false);\n"
-        "const socketsWhenOpened = panel.openSockets.length;\n"
+        "const socketsWhenOpened = panel.openStreams.length;\n"
         "await panel.setCollapsed(true);\n"
         "console.log(JSON.stringify({ closedByDefault, disclosures, socketsWhileClosed,\n"
-        "  backfillsWhileClosed, socketsWhenOpened, socketsAfterClosing: panel.openSockets.length,\n"
+        "  backfillsWhileClosed, socketsWhenOpened, socketsAfterClosing: panel.openStreams.length,\n"
         "  backfilledOnOpening: backfills }));\n"
     )
     result = json.loads(printed)
@@ -1007,7 +1030,7 @@ def test_the_serial_monitor_is_closed_and_silent_until_somebody_opens_it() -> No
     # prompted the click both happened before it.
     assert result["socketsWhenOpened"] == 1
     assert result["backfilledOnOpening"] == 1
-    # Closing it again gives the socket back rather than leaving one behind a
+    # Closing it again gives the stream back rather than leaving one behind a
     # panel nobody is looking at.
     assert result["socketsAfterClosing"] == 0
 

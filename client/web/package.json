@@ -1,0 +1,18 @@
+{
+  "name": "statemachined-console-elements",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "license": "LGPL-3.0-or-later",
+  "description": "Build step for the console panels: protobuf-es + Connect, bundled into elements/daemon_api_client.js.",
+  "scripts": {
+    "build": "node build_daemon_api_client.mjs"
+  },
+  "devDependencies": {
+    "@bufbuild/protobuf": "^2.15.0",
+    "@bufbuild/protoc-gen-es": "^2.15.0",
+    "@connectrpc/connect": "^2.2.0",
+    "@connectrpc/connect-web": "^2.2.0",
+    "esbuild": "^0.28.2"
+  }
+}

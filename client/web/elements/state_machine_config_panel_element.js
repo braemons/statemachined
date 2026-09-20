@@ -93,10 +93,15 @@ export class StateMachineConfigPanelElement extends BasePanelElement {
   paintSession() {
     const session = this.session;
     if (session === null) return;
+    // `==`, deliberately. **A message field that is unset is absent, not
+    // null**: protobuf's JSON omits it, so `state_machine_config` is
+    // `undefined` on a rig with nothing loaded where the routes sent `null`.
+    // Loose equality catches both, and a strict one against `null` is how a
+    // panel reads "nothing loaded" as "a config called undefined".
     const config = session.state_machine_config;
 
     const rows = [];
-    if (config === null) {
+    if (config == null) {
       rows.push(
         this.make("p", {
           class: "muted",
@@ -139,19 +144,20 @@ export class StateMachineConfigPanelElement extends BasePanelElement {
     const committed = session.committed_set;
     rows.push(
       this.make("p", {
-        text: session.is_open
+        text: session.session_open
           ? `Session open for ${Math.round(session.open_seconds)} s.`
           : "No session is open.",
       }),
     );
-    if (committed !== null) {
+    // `!=`: an unset message field is absent rather than null.
+    if (committed != null) {
       rows.push(
         this.make("p", {
           class: "muted",
           text:
             `The board holds set ${committed.set_version}: ` +
             `${committed.graph_names.join(", ")}. ` +
-            (session.is_open
+            (session.session_open
               ? ""
               : "Left there on purpose -- a committed set surviving is what makes a " +
                 "reconnect cheap."),
@@ -164,17 +170,17 @@ export class StateMachineConfigPanelElement extends BasePanelElement {
         this.make("button", {
           class: "primary",
           text: "open a session",
-          disabled: config === null || session.is_open,
+          disabled: config == null || session.session_open,
           onClick: () => this.openSession(),
         }),
         this.make("button", {
           text: "close it",
-          disabled: !session.is_open,
+          disabled: !session.session_open,
           onClick: () => this.closeSession(),
         }),
       ]),
     );
-    if (config !== null && !session.is_open) {
+    if (config != null && !session.session_open) {
       rows.push(
         this.make("p", {
           class: "muted",
@@ -300,21 +306,29 @@ export class StateMachineConfigPanelElement extends BasePanelElement {
     // one that knows what was pushed; the graphs and the description come from
     // the stored config, because nothing has been editing those here.
     const saved = await this.attempt(async () => {
-      const [lines, stored] = await Promise.all([
+      const [lines, file] = await Promise.all([
         this.api.readDeviceLines(),
-        this.api.readStateMachineConfig(this.loadedName),
+        this.api.readStateMachineConfigFile(this.loadedName),
       ]);
-      return this.api.writeStateMachineConfig(wanted, {
-        ...stored,
-        name: wanted,
-        line_map: {
-          // `is_high_now` is added to a line by the device route and is not
-          // part of a line map -- LineMap forbids members it does not declare,
-          // so it has to come off before this goes back.
-          input_lines: lines.input_lines.map(withoutTheLiveLevel),
-          output_lines: lines.output_lines.map(withoutTheLiveLevel),
-        },
-      });
+      const stored = JSON.parse(file.text);
+      return this.api.writeStateMachineConfigFile(
+        wanted,
+        JSON.stringify(
+          {
+            ...stored,
+            name: wanted,
+            line_map: {
+              // `is_high_now` is added to a line by `Device/ReadLines` and is
+              // not part of a line map -- LineMap forbids members it does not
+              // declare, so it has to come off before this goes back.
+              input_lines: lines.input_lines.map(withoutTheLiveLevel),
+              output_lines: lines.output_lines.map(withoutTheLiveLevel),
+            },
+          },
+          null,
+          2,
+        ),
+      );
     });
     if (saved !== null) {
       this.saveAsName = "";

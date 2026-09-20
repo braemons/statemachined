@@ -10,6 +10,7 @@ makes a reconnect cheap.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from statemachined._proto.statemachined.v1 import session_pb2
@@ -41,15 +42,21 @@ def session_state_to_wire(
     *,
     config: Any | None,
     committed: Any | None,
-    session_open: bool,
+    opened_at: float | None,
     active_graph: str | None,
     stored_config_names: list[str],
 ) -> session_pb2.SessionState:
     message = session_pb2.SessionState(
-        session_open=session_open,
+        session_open=opened_at is not None,
         active_graph=active_graph or "",
         stored_config_names=stored_config_names,
     )
+    if opened_at is not None:
+        message.opened_at_unix_seconds = opened_at
+        # Worked out on this side, against this daemon's own clock. A browser
+        # subtracting a rig's timestamp from its own goes negative on a box
+        # whose NTP has not settled.
+        message.open_seconds = max(0.0, time.time() - opened_at)
     loaded = loaded_config_to_wire(config, stored_names=stored_config_names)
     if loaded is not None:
         message.state_machine_config.CopyFrom(loaded)

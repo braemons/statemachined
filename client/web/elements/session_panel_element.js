@@ -95,14 +95,18 @@ export class SessionPanelElement extends BasePanelElement {
     this.paintLastTrial();
     this.paintManualControls();
     this.paintStandaloneControls();
-    this.openStateStream();
+    this.followStateStream(() => this.paintLiveState());
     // The result is polled rather than streamed: it changes once per trial, and
     // a second socket per panel is a cost the rig pays for nothing.
     this.pollEvery(1, async () => {
       try {
         this.lastResult = await this.api.readLastTrialResult();
       } catch (error) {
-        if (error.status !== 404) throw error;
+        // `no_result_yet` is the honest answer before the first trial of a
+        // connection, and not a failure worth a red box across the panel.
+        // Switched on the *kind* rather than the status, which is the whole
+        // point of the refusal carrying one.
+        if (error.code !== "no_result_yet") throw error;
         this.lastResult = null;
       }
       this.paintLastTrial();
@@ -122,24 +126,6 @@ export class SessionPanelElement extends BasePanelElement {
         this.autorun = null;
       }
       this.paintStandaloneControls();
-    });
-  }
-
-  openStateStream() {
-    const socket = this.trackSocket(this.api.openStateStream());
-    socket.addEventListener("message", (event) => {
-      this.state = JSON.parse(event.data);
-      this.paintLiveState();
-    });
-    socket.addEventListener("close", () => {
-      // Reopen unless this panel is going away. A stream that dies quietly when
-      // the daemon restarts leaves a page that looks live and is not.
-      if (this.isConnected && this.openSockets.includes(socket)) {
-        this.openSockets = this.openSockets.filter((each) => each !== socket);
-        setTimeout(() => {
-          if (this.isConnected) this.openStateStream();
-        }, 1000);
-      }
     });
   }
 
@@ -173,7 +159,8 @@ export class SessionPanelElement extends BasePanelElement {
     const session = this.session;
     if (session === null) return this.make("p", { class: "muted", text: "reading the session..." });
     const committed = session.committed_set;
-    if (committed === null) {
+    // `==`: an unset message field is absent rather than null.
+    if (committed == null) {
       return this.make("p", {
         class: "muted",
         text:

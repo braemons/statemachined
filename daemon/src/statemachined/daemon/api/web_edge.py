@@ -378,7 +378,17 @@ def build_edge(service: RigService, servicers: dict[str, object]):
             return await _call_unary(rpc, codec, body, send)
 
         if method == "GET":
+            # `/ui/<file>` is the published address of this daemon's own shell
+            # assets, and `/elements/<file>` is the `/elements/` contract a
+            # console in another repository fetches by URL. The routes needed
+            # the `/ui/` prefix to keep static files out of the way of `/api/`;
+            # nothing here needs it, because an rpc is a POST and a file is a
+            # GET. It is kept anyway and mapped, rather than dropped: the
+            # address is somebody else's, and a page that 404s because a prefix
+            # was tidied away is a page nobody can debug from the outside.
             relative = "index.html" if path == "/" else path.lstrip("/")
+            if relative.startswith("ui/"):
+                relative = relative[len("ui/") :]
             asset = _read_asset(web_root, relative)
             if asset is None:
                 return await _send(send, 404, "text/plain", f"no {relative}".encode())

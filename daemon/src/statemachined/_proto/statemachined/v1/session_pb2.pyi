@@ -8,18 +8,22 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class SessionState(_message.Message):
-    __slots__ = ("state_machine_config", "committed_set", "session_open", "active_graph", "stored_config_names")
+    __slots__ = ("state_machine_config", "committed_set", "session_open", "opened_at_unix_seconds", "open_seconds", "active_graph", "stored_config_names")
     STATE_MACHINE_CONFIG_FIELD_NUMBER: _ClassVar[int]
     COMMITTED_SET_FIELD_NUMBER: _ClassVar[int]
     SESSION_OPEN_FIELD_NUMBER: _ClassVar[int]
+    OPENED_AT_UNIX_SECONDS_FIELD_NUMBER: _ClassVar[int]
+    OPEN_SECONDS_FIELD_NUMBER: _ClassVar[int]
     ACTIVE_GRAPH_FIELD_NUMBER: _ClassVar[int]
     STORED_CONFIG_NAMES_FIELD_NUMBER: _ClassVar[int]
     state_machine_config: LoadedStateMachineConfig
     committed_set: _device_pb2.CommittedGraphSet
     session_open: bool
+    opened_at_unix_seconds: float
+    open_seconds: float
     active_graph: str
     stored_config_names: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, state_machine_config: _Optional[_Union[LoadedStateMachineConfig, _Mapping]] = ..., committed_set: _Optional[_Union[_device_pb2.CommittedGraphSet, _Mapping]] = ..., session_open: _Optional[bool] = ..., active_graph: _Optional[str] = ..., stored_config_names: _Optional[_Iterable[str]] = ...) -> None: ...
+    def __init__(self, state_machine_config: _Optional[_Union[LoadedStateMachineConfig, _Mapping]] = ..., committed_set: _Optional[_Union[_device_pb2.CommittedGraphSet, _Mapping]] = ..., session_open: _Optional[bool] = ..., opened_at_unix_seconds: _Optional[float] = ..., open_seconds: _Optional[float] = ..., active_graph: _Optional[str] = ..., stored_config_names: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class LoadedStateMachineConfig(_message.Message):
     __slots__ = ("name", "description", "board", "graph_names", "still_in_the_store")

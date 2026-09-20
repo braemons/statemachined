@@ -157,11 +157,14 @@ export class SerialMonitorPanelElement extends BasePanelElement {
   /// click. A monitor that started at "now" would miss every fault that had
   /// already happened, which is most of them.
   async beginWatching() {
-    if (this.openSockets.length > 0) return;
+    if (this.openStreams.length > 0) return;
     await this.attempt(async () => {
-      const backfill = await this.api.readDeviceMonitor(0, BACKFILL_LINES);
-      this.lines = backfill.lines;
+      const backfill = await this.api.readSerialMonitor(0, BACKFILL_LINES);
+      this.lines = backfill.entries || [];
       this.ringCapacity = backfill.ring_capacity;
+      // Where the stream picks up, so the two halves join without a gap and
+      // without a duplicate.
+      this.expectedNextEntryNumber = Number(backfill.newest_entry_number) + 1;
       this.repaintRows();
     });
     // Checked again: the panel may have been folded again while the backfill
@@ -171,41 +174,42 @@ export class SerialMonitorPanelElement extends BasePanelElement {
   }
 
   stopWatching() {
-    for (const socket of this.openSockets) {
-      try {
-        socket.close();
-      } catch {
-        /* already closing */
-      }
-    }
-    this.openSockets = [];
+    // Aborting is how a Connect stream ends from this side; the follower
+    // treats its own close as a close rather than a failure.
+    for (const stream of this.openStreams) stream.abort();
+    this.openStreams = [];
+    for (const timer of this.reconnectTimers) clearTimeout(timer);
+    this.reconnectTimers = [];
   }
 
+  /// Every line in and out of the port, from where the backfill ended.
+  ///
+  /// **A gap is detected from the entry numbers**, not announced: if the next
+  /// line is not the number this panel expected, the ring dropped what was
+  /// between them. A gap nobody is told about is the one failure a monitor
+  /// must not have, and reading it off the numbers needs no second kind of
+  /// frame to go wrong.
   openStream() {
-    const socket = this.trackSocket(this.api.openDeviceMonitorStream());
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data);
-      if (message.error === "fell_out_of_the_ring") {
-        // Said where the rows are, because a gap nobody is told about is the
-        // one failure a monitor must not have.
-        this.lostRange = message;
-        this.repaintRows();
-        return;
-      }
-      this.lines.push(message);
-      if (this.lines.length > MOST_LINES_ON_SCREEN) {
-        this.lines = this.lines.slice(-MOST_LINES_ON_SCREEN);
-      }
-      this.repaintRows();
-    });
-    socket.addEventListener("close", () => {
-      if (this.isConnected && !this.collapsed && this.openSockets.includes(socket)) {
-        this.openSockets = this.openSockets.filter((each) => each !== socket);
-        setTimeout(() => {
-          if (this.isConnected) this.openStream();
-        }, 1000);
-      }
-    });
+    this.followStream(
+      (options) => this.api.followSerialMonitor(this.expectedNextEntryNumber ?? 0, options),
+      {
+        onMessage: (line) => {
+          const number = Number(line.entry_number);
+          if (this.expectedNextEntryNumber !== undefined && number > this.expectedNextEntryNumber) {
+            this.lostRange = {
+              from_entry_number: this.expectedNextEntryNumber,
+              to_entry_number: number - 1,
+            };
+          }
+          this.expectedNextEntryNumber = number + 1;
+          this.lines.push(line);
+          if (this.lines.length > MOST_LINES_ON_SCREEN) {
+            this.lines = this.lines.slice(-MOST_LINES_ON_SCREEN);
+          }
+          this.repaintRows();
+        },
+      },
+    );
   }
 
   shown() {

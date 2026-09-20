@@ -63,6 +63,28 @@ generate-into:
 	  -e 's/^from statemachined\.v1 import /from statemachined._proto.statemachined.v1 import /' \
 	  -e 's/^from braemons\.v1 import /from statemachined._proto.braemons.v1 import /'
 
+# **The browser's protobuf client is generated and committed**, like
+# daemon/src/statemachined/_proto/ and for the same reason: a checkout runs
+# with uv alone. `packaging/Makefile` copies `client/web/` into the wheel, so a
+# bundle produced at package time would make npm a build dependency of every
+# release. `npm ci` installs exactly what package-lock.json pins, so the bundle
+# is reproducible; `check-web` is what holds it to the proto.
+.PHONY: web check-web
+web:                        ## regenerate client/web/elements/daemon_api_client.js from proto/
+	@cd client/web && npm ci --silent --no-audit --no-fund && node build_daemon_api_client.mjs
+
+check-web:                  ## fail if the committed browser client is not what proto/ produces
+	@mkdir -p build
+	@cp client/web/elements/daemon_api_client.js build/web-check.js 2>/dev/null || true
+	@$(MAKE) --no-print-directory web
+	@diff -q build/web-check.js client/web/elements/daemon_api_client.js >/dev/null || { \
+	  echo "client/web/elements/daemon_api_client.js is not what proto/ produces:"; \
+	  diff build/web-check.js client/web/elements/daemon_api_client.js | head -20; \
+	  echo "it has been regenerated — commit it with the change that caused it."; \
+	  exit 1; \
+	}
+	@rm -f build/web-check.js
+
 check-proto:                ## the proto compiles, and every copy of the taxonomy agrees
 	@protoc --proto_path=proto --descriptor_set_out=/dev/null \
 	  proto/statemachined/v1/*.proto proto/braemons/v1/*.proto

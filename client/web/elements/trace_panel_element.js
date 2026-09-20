@@ -114,34 +114,45 @@ export class TracePanelElement extends BasePanelElement {
       // next state visit -- which on a long foreperiod is a very long time.
       const held = await this.api.readTrace(0, BACKFILL_ENTRIES);
       this.entries = held.entries || [];
+      // Where the stream picks up, so the two halves join without a gap and
+      // without a duplicate.
+      this.expectedNextEntryNumber = Number(held.newest_entry_number) + 1;
+      if (held.lost_entries_before !== undefined && held.lost_entries_before !== null) {
+        this.lostRange = { to_entry_number: Number(held.lost_entries_before) - 1 };
+      }
       this.repaintRows();
     });
-    this.openTraceStream();
+    this.followTraceStream();
   }
 
-  openTraceStream() {
-    const socket = this.trackSocket(this.api.openTraceStream());
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data);
-      if (message.error === "fell_out_of_the_ring") {
-        this.lostRange = message;
-        this.repaintRows();
-        return;
-      }
-      this.entries.push(message);
-      // Bounded here as well as in the daemon: a browser tab left open for a
-      // week must not be the thing that runs a rig out of memory.
-      if (this.entries.length > 5000) this.entries = this.entries.slice(-5000);
-      this.repaintRows();
-    });
-    socket.addEventListener("close", () => {
-      if (this.isConnected && this.openSockets.includes(socket)) {
-        this.openSockets = this.openSockets.filter((each) => each !== socket);
-        setTimeout(() => {
-          if (this.isConnected) this.openTraceStream();
-        }, 1000);
-      }
-    });
+  /// Everything from where the backfill ended, and then as it happens.
+  ///
+  /// **A gap is detected from the entry numbers**, not announced. The stream
+  /// carries entries and nothing else; if the next one is not the number this
+  /// panel expected, the ring dropped what was between them. That is the one
+  /// failure a trace viewer must not have quietly, and reading it off the
+  /// numbers needs no second kind of frame to go wrong.
+  followTraceStream() {
+    this.followStream(
+      (options) => this.api.followTrace(this.expectedNextEntryNumber ?? 0, options),
+      {
+        onMessage: (entry) => {
+          const number = Number(entry.entry_number);
+          if (this.expectedNextEntryNumber !== undefined && number > this.expectedNextEntryNumber) {
+            this.lostRange = {
+              from_entry_number: this.expectedNextEntryNumber,
+              to_entry_number: number - 1,
+            };
+          }
+          this.expectedNextEntryNumber = number + 1;
+          this.entries.push(entry);
+          // Bounded here as well as in the daemon: a browser tab left open for
+          // a week must not be the thing that runs a rig out of memory.
+          if (this.entries.length > 5000) this.entries = this.entries.slice(-5000);
+          this.repaintRows();
+        },
+      },
+    );
   }
 
   visibleEntries() {

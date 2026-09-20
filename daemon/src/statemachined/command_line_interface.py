@@ -439,11 +439,14 @@ async def _serve_both(
     from .daemon.api.rig_service import RigService
 
     service = RigService(configuration)
+    server, _servicers = build_server(service, f"{host}:{grpc_port}")
+
+    # The app answers the rpc addresses too, through the middleware it installs
+    # — so the panels' Connect client and `statemachined.client`'s routes work
+    # on one port while both exist. `create_application` has the reasoning.
     application = create_application(
         configuration, advertisement=advertisement, service=service
     )
-    server, _servicers = build_server(service, f"{host}:{grpc_port}")
-
     web = uvicorn.Server(
         uvicorn.Config(application, host=host, port=web_port, log_level="warning")
     )

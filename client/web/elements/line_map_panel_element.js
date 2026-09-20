@@ -169,8 +169,11 @@ export class LineMapPanelElement extends BasePanelElement {
     try {
       const session = await this.api.readSession();
       const loaded = session.state_machine_config;
-      if (loaded === null) return;
-      const config = await this.api.readStateMachineConfig(loaded.name);
+      // `==`: an unset message field is absent rather than null. See the note
+      // in the configs panel.
+      if (loaded == null) return;
+      const file = await this.api.readStateMachineConfigFile(loaded.name);
+      const config = JSON.parse(file.text);
       for (const graph of config.graphs || []) {
         for (const [direction, name] of lineNamesUsedBy(graph)) {
           const used = this.namesUsedByGraphs[direction];
@@ -720,7 +723,12 @@ export class LineMapPanelElement extends BasePanelElement {
   }
 
   async save() {
-    const saved = await this.attempt(() => this.api.replaceLineMap(this.draft));
+    // A line map is a file too, and the model that parses it is the only
+    // description of one. This sends the text and lets the daemon refuse it by
+    // field name, which is what it would do to the same file on disk.
+    const saved = await this.attempt(() =>
+      this.api.writeLineMapFile(JSON.stringify(this.draft, null, 2)),
+    );
     if (saved === null) return;
     // Re-read rather than trust the draft: the daemon is the authority on what
     // the map now is, and a save that was accepted with something normalised

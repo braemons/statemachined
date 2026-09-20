@@ -23,6 +23,15 @@ message SessionState {
   // Whether a session is open on this connection.
   bool session_open = 3 [json_name = "session_open"];
 
+  // When it was opened, and how long ago. Absent when none is.
+  //
+  // `open_seconds` is computed here rather than left to a caller: a browser's
+  // clock and a rig's are not the same clock, and "open for 4 minutes" worked
+  // out from a timestamp difference across them is a number that goes negative
+  // on a box whose NTP has not settled.
+  optional double opened_at_unix_seconds = 6 [json_name = "opened_at_unix_seconds"];
+  optional double open_seconds = 7 [json_name = "open_seconds"];
+
   // Which graph a trial gets when it names none. Empty when nothing is
   // selected, in which case a trial must name one.
   string active_graph = 4 [json_name = "active_graph"];

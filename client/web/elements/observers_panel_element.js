@@ -52,7 +52,7 @@ export class ObserversPanelElement extends BasePanelElement {
 
   start() {
     this.pollEvery(POLL_SECONDS, async () => {
-      const listed = await this.api.listObservers();
+      const listed = await this.api.readObservers();
       this.observers = listed.observers ?? [];
       if (this.observers.length > 0) this.everSaw = true;
       this.paint();

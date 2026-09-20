@@ -156,8 +156,18 @@ export class GraphStorePanelElement extends BasePanelElement {
 
   async load(name) {
     if (this.hasUnsavedEdits && !confirm(`Discard unsaved edits to ${this.graph?.name}?`)) return;
-    const graph = await this.attempt(() => this.api.readStoredGraph(name));
-    if (graph === null) return;
+    // **A graph is a file**, so what crosses is its text and this panel parses
+    // it. The daemon stays the only thing that *validates* one: `check()` below
+    // sends what is on screen back and reports what the real parser said.
+    const file = await this.attempt(() => this.api.readStoredGraphFile(name));
+    if (file === null) return;
+    let graph;
+    try {
+      graph = JSON.parse(file.text);
+    } catch (error) {
+      this.showFailure(new Error(`${name} is not JSON this editor can open: ${error.message}`));
+      return;
+    }
     this.graph = graph;
     this.hasUnsavedEdits = false;
     this.lastValidation = null;
@@ -818,7 +828,9 @@ export class GraphStorePanelElement extends BasePanelElement {
   }
 
   async save() {
-    const saved = await this.attempt(() => this.api.writeStoredGraph(this.graph.name, this.graph));
+    const saved = await this.attempt(() =>
+      this.api.writeStoredGraphFile(this.graph.name, JSON.stringify(this.graph, null, 2)),
+    );
     if (saved === null) return;
     this.hasUnsavedEdits = false;
     if (!this.storedGraphNames.includes(this.graph.name)) {

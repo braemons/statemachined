@@ -186,8 +186,13 @@ deb rpm: export STATEMACHINED_PKG_VERSION = $(VERSION)
 # ── The staged tree ─────────────────────────────────────────────────────────
 
 stage: $(STAGE)/.stamp      ## build the tree the package is cut from
-$(STAGE)/.stamp: $(shell find $(ROOT)/daemon/src $(ROOT)/client/web $(ROOT)/firmware/core $(ROOT)/firmware/hal \
+# The panels are a prerequisite, minus their build inputs: `node_modules` is
+# tens of thousands of files, so a `find` across it would be slow on every
+# build and would restage whenever somebody ran `npm ci`.
+$(STAGE)/.stamp: $(shell find $(ROOT)/daemon/src $(ROOT)/firmware/core $(ROOT)/firmware/hal \
                               $(ROOT)/firmware/native -type f) \
+                 $(shell find $(ROOT)/client/web -type f \
+                           -not -path '*/node_modules/*' -not -path '*/gen/*') \
                  $(ROOT)/daemon/pyproject.toml $(ROOT)/CMakeLists.txt
 	@test -n "$(ARCH)" || { \
 	  echo "error: no nfpm architecture known for $(UNAME_M)."; \
@@ -222,6 +227,18 @@ $(STAGE)/.stamp: $(shell find $(ROOT)/daemon/src $(ROOT)/client/web $(ROOT)/firm
 	@#  has no such cleverness in it, and `web_directory()` falls back to the
 	@#  authored location when no copy was made, which is every editable install.
 	cp -a $(ROOT)/client/web $(SRC)/src/statemachined/daemon/web
+	@#  The panels' build inputs are not panels. `client/web/` is an npm
+	@#  project as well as a web root -- it generates
+	@#  elements/daemon_api_client.js from proto/ -- and node_modules alone
+	@#  would put tens of megabytes of somebody else's source into a package
+	@#  that installs onto a rig. The generated bundle is committed, so nothing
+	@#  dropped here is needed to serve the UI.
+	rm -rf $(SRC)/src/statemachined/daemon/web/node_modules \
+	       $(SRC)/src/statemachined/daemon/web/gen \
+	       $(SRC)/src/statemachined/daemon/web/src \
+	       $(SRC)/src/statemachined/daemon/web/package.json \
+	       $(SRC)/src/statemachined/daemon/web/package-lock.json \
+	       $(SRC)/src/statemachined/daemon/web/build_daemon_api_client.mjs
 	sed -i 's/^version = "0.0.0"$$/version = "$(PY_VERSION)"/' $(SRC)/pyproject.toml
 	@grep -q '^version = "$(PY_VERSION)"$$' $(SRC)/pyproject.toml || { \
 	  echo "error: the version sentinel in daemon/pyproject.toml did not match."; \

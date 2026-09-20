@@ -58,7 +58,10 @@ export class RecordingPanelElement extends BasePanelElement {
   start() {
     this.pollEvery(POLL_SECONDS, async () => {
       const listed = await this.api.listRecordings();
-      this.active = listed.active;
+      // `?? null`, once, here: an unset message field is *absent* on the wire
+      // rather than null, and this panel's own resting state is null. Doing it
+      // at the edge means every check below stays strict.
+      this.active = listed.active ?? null;
       this.recordings = listed.recordings;
       this.paint();
     });
@@ -247,7 +250,7 @@ export class RecordingPanelElement extends BasePanelElement {
         this.make("td", {
           text:
             entry.measured_duration_microseconds !== undefined &&
-            entry.measured_duration_microseconds !== null
+            entry.measured_duration_microseconds != null
               ? `${(entry.measured_duration_microseconds / 1000).toFixed(1)} ms`
               : "",
         }),
@@ -321,7 +324,9 @@ function describeKinds(kindCounts) {
 /// Segments as gaps, because that is what a reader needs from them. One segment
 /// is a recording with no pause in it and says so.
 export function describeSegments(segments) {
-  const kept = (segments || []).filter((each) => each.from_entry_number !== null);
+  // `!= null`: a segment that was opened and never written to has no entry
+  // numbers at all, and absent is how the wire says that.
+  const kept = (segments || []).filter((each) => each.from_entry_number != null);
   if (kept.length === 0) return "no entries yet";
   if (kept.length === 1) return "one stretch, no gaps";
   return `${kept.length} stretches, ${kept.length - 1} gap(s) where it was paused`;

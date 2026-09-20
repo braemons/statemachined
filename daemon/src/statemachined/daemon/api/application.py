@@ -28,6 +28,8 @@ from . import (
     web_user_interface_routes,
 )
 from .rig_service import RigService
+from .servicers import build_servicers
+from .web_edge import build_edge
 
 
 def create_application(
@@ -109,4 +111,39 @@ def create_application(
         """
         return {"ok": True, "device_connected": service.supervisor.is_connected}
 
+    # **The rpcs, on the same port, while both surfaces exist.**
+    #
+    # The panels are a generated Connect client now and address
+    # `/statemachined.v1.<Service>/<Rpc>`. `statemachined.client` — the base
+    # tier of this package, which triald depends on — and the e2e suite still
+    # call `/api/...`. Both have to work on one port until that client is
+    # converted too, so the edge answers the rpc addresses and the app keeps
+    # everything else.
+    #
+    # A middleware rather than a mount, because an rpc address is at the root
+    # and a mount needs a prefix. It goes when the routes do, and then
+    # `statemachined serve` runs the edge by itself.
+    application.add_middleware(
+        RpcAddressesGoToTheEdge, edge=build_edge(service, build_servicers(service))
+    )
     return application
+
+
+class RpcAddressesGoToTheEdge:
+    """Hand `/statemachined.v1.*` to the Connect edge, everything else onward.
+
+    Pure ASGI rather than a Starlette `BaseHTTPMiddleware`: the edge streams,
+    and `BaseHTTPMiddleware` buffers a response before passing it on, which
+    would turn `WatchTrace` into a call that never returns.
+    """
+
+    PREFIX = "/statemachined.v1."
+
+    def __init__(self, app, edge) -> None:
+        self.app = app
+        self.edge = edge
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope.get("path", "").startswith(self.PREFIX):
+            return await self.edge(scope, receive, send)
+        return await self.app(scope, receive, send)
