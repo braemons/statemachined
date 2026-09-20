@@ -41,6 +41,7 @@ from .api_types import (
     KIND_TRIAL_RESULT,
     Autorun,
     CancelTrialResult,
+    CloseSessionResult,
     CommittedGraphSet,
     ConfigureTrialResult,
     DeviceState,
@@ -744,9 +745,19 @@ class StatemachinedClient:
             )
         )
 
-    def close_session(self) -> SessionState:
-        """End the session. `Session/Close`."""
-        return convert.session_state_from_wire(
+    def close_session(self) -> CloseSessionResult:
+        """End the session. `Session/Close`.
+
+        **The board keeps its set**, which is what makes a reconnect cheap and
+        what lets a session resume after a daemon restart. Closing is this
+        daemon's own bookkeeping plus one act on the board: an armed trial is
+        cancelled, because one with nobody driving it is a rig that will run
+        one more trial whenever somebody next touches a lever.
+
+        `cancelled_trial_id` says which trial that was. Read it — a caller that
+        armed a trial and then closed has had that trial taken away.
+        """
+        return convert.close_session_result_from_wire(
             call(lambda: self._session.Close(service_pb2.CloseSessionRequest()))
         )
 

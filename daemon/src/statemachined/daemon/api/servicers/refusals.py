@@ -44,8 +44,13 @@ import grpc
 
 from statemachined._proto.statemachined.v1 import common_pb2
 from statemachined.daemon.api.convert.trial import Refused as ConversionRefused
-from statemachined.daemon.api.rig_service import NoActiveGraph, NoConfigLoaded
+from statemachined.daemon.api.rig_service import (
+    GraphNotInTheLoadedConfig,
+    NoActiveGraph,
+    NoConfigLoaded,
+)
 from statemachined.daemon.event_recording import (
+    ARecordingIsAlreadyOpen,
     BadRecordingName,
     RecordingIsInProgress,
     RecordingNameTaken,
@@ -58,6 +63,7 @@ from statemachined.daemon.state_machine_config_store import (
     ConfigNotInStore,
 )
 from statemachined.device.message_framing import DeviceRefusedTheCommand
+from statemachined.model.line_map import LineMapDoesNotMatchTheBoard
 from statemachined.device.statemachined_device import DeviceNotConnected, NoGraphSetCommitted
 from statemachined.graph_set_compiler import GraphNotInSet, GraphSetCompilationError
 
@@ -140,6 +146,7 @@ _RULES: list[tuple[type[BaseException], Category, str, str]] = [
     # in order. "Stop it first" and "there is nothing open" are different
     # things to do, and `error` is what a caller branches on.
     (RecordingIsInProgress, Category.WRONG_MOMENT, "recording_in_progress", "name"),
+    (ARecordingIsAlreadyOpen, Category.WRONG_MOMENT, "already_recording", "recording"),
     (RecordingStateRefused, Category.WRONG_MOMENT, "recording_state", "recording"),
     (
         NoConfigLoaded,
@@ -148,6 +155,19 @@ _RULES: list[tuple[type[BaseException], Category, str, str]] = [
         "state_machine_config",
     ),
     (NoActiveGraph, Category.WRONG_MOMENT, "no_graph_named", "graph"),
+    # Selected a graph the loaded config does not carry. Caught at selection
+    # rather than at the moment somebody presses run, which is the difference
+    # between a refusal and a rig that looks armed.
+    (GraphNotInTheLoadedConfig, Category.WRONG_MOMENT, "graph_not_available", "graph"),
+    # A config, or a line map, naming a pin this board has not got. Refused
+    # with the rig still running on the map it had — which is the difference
+    # between a refusal and a rig that has been half-reconfigured.
+    (
+        LineMapDoesNotMatchTheBoard,
+        Category.BAD_REQUEST,
+        "line_map_does_not_match_the_board",
+        "line_map",
+    ),
     (NoGraphSetCommitted, Category.WRONG_MOMENT, "no_graph_set", "graph"),
     (DeviceNotConnected, Category.NO_BOARD_ATTACHED, "not_connected", "device"),
 ]

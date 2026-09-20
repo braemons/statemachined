@@ -2,19 +2,21 @@
 """The whole thing, as a rig runs it: two processes, a socket, and no test doubles.
 
 This suite exists because everything below it shares an address space with the
-daemon, and three things are then never exercised: uvicorn, a real TCP
-connection, and a real WebSocket handshake. Each has broken a shipped daemon at
-least once in this family -- plain `uvicorn` answers a WebSocket upgrade with a
-404, which is why `uvicorn[standard]` is a dependency and why the daemon's own
-notes say it was found by connecting to a running one.
+daemon, and three things are then never exercised: the shipped command line, a
+real TCP connection, and **two listeners on one process**. That last one is the
+shape this daemon actually has — a Python daemon cannot serve gRPC and a
+browser on one socket, so `statemachined serve` binds `--port` for the panels
+and `--port + 1` for gRPC, on one event loop. Whether those two coexist is not
+something any in-process test can be wrong about, because no in-process test
+has a process.
 
 So:
 
     statemachined device   ← the firmware built for this machine, on a TCP port
             ▲ socket://127.0.0.1:<device port>
-    statemachined serve    ← the shipped daemon, on an HTTP port
-            ▲ http:// and ws://
-    StatemachinedClient    ← with its own defaults: httpx and websockets
+    statemachined serve    ← the shipped daemon, two listeners, one loop
+            ▲ gRPC on <port + 1>
+    StatemachinedClient    ← the published client, with its own defaults
 
 Both commands are the ones an operator with no board runs after `apt install`,
 which is the second reason for the shape: what is under test is the artifact, up
@@ -43,7 +45,7 @@ from network_harness import (
 )
 from statemachined.device import native_device_on_a_socket
 from statemachined.device.native_device_on_a_socket import the_native_device_is_built
-from statemachined.client import StatemachinedClient, TransportError
+from statemachined_client import DaemonRefusedTheRequest, StatemachinedClient
 
 
 @pytest.fixture(scope="module")
@@ -71,16 +73,28 @@ def device_port(tmp_path_factory) -> int:
 
 
 @pytest.fixture
-def rig(device_port, tmp_path):
+def daemon_web_port() -> int:
+    """The port `statemachined serve` is told to use, and gRPC is one above.
+
+    A fixture of its own so a test can reach *both* numbers: the client talks
+    to `port + 1` and one test here asks whether anything is on `port` at all,
+    which is the whole question of whether the shipped process brought up two
+    listeners rather than one.
+    """
+    return a_free_port()
+
+
+@pytest.fixture
+def rig(device_port, tmp_path, daemon_web_port):
     """`statemachined serve` in front of that device, and a client on a socket.
 
     A fresh daemon per test, with its own stores under the test's directory:
     graphs, configs, the trace and the recordings all persist, and a shared
     directory would make one test's saved graph the next test's store.
 
-    The client is built with **no arguments but the URL**, which is the point of
-    this suite: the httpx client and the websocket connection are the ones a
-    caller gets by default.
+    The client is built with **no arguments but the address**, which is the
+    point of this suite: the channel and the streams are the ones a caller gets
+    by default.
     """
     configuration = tmp_path / "statemachined-rig-config.toml"
     config_directory = tmp_path / "configs"
@@ -103,7 +117,7 @@ def rig(device_port, tmp_path):
         )
     )
 
-    port = a_free_port()
+    port = daemon_web_port
     daemon = RunningProcess(
         the_command(
             "serve",
@@ -117,9 +131,13 @@ def rig(device_port, tmp_path):
         ),
         name="statemachined serve",
     )
-    base_url = f"http://127.0.0.1:{port}"
     try:
-        client = StatemachinedClient(base_url)
+        # `--port` is the *web* port; gRPC is one above it, which is the rule
+        # `grpc_port_for` states in the daemon and `DEFAULT_PORT` states in the
+        # client. Naming it here rather than importing it is deliberate: this
+        # suite is about the shipped artifact, and a suite that imported the
+        # daemon's arithmetic could not catch the two sides disagreeing.
+        client = StatemachinedClient(f"127.0.0.1:{port + 1}")
         _wait_until_it_answers(client, daemon)
         with client:
             yield client
@@ -143,20 +161,21 @@ def _wait_for_a_listener_on(port: int, process: RunningProcess) -> None:
 def _wait_until_it_answers(client: StatemachinedClient, process: RunningProcess) -> None:
     """Up, and holding the device. Both, because either alone is a false start.
 
-    A daemon answering `/api/health` with `device_connected: false` is a daemon
-    that has not finished greeting the board, and a test that armed a trial then
-    would meet a 503 that says nothing about what it was testing.
+    A daemon answering `ReadHealth` with `device_connected: false` is a daemon
+    that has not finished greeting the board, and a test that armed a trial
+    then would meet `NoBoardIsAttached`, which says nothing about what it was
+    testing.
     """
     deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
     last = "it never answered"
     while time.monotonic() < deadline:
         process.fail_if_it_died()
         try:
-            health = client.health()
-        except TransportError as exc:
-            last = str(exc)
+            health = client.read_health()
+        except DaemonRefusedTheRequest as refused:
+            last = str(refused)
         else:
-            if health.get("device_connected"):
+            if health.device_connected:
                 return
             last = f"the daemon is up and has no device: {health}"
         time.sleep(0.1)

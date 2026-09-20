@@ -35,7 +35,8 @@ board. Over a tty the port is busy and you find out immediately; over
 `socket://` you will not -- the connection succeeds and two hosts are then
 driving a link whose whole design is one command in flight (docs/reference/protocol.md
 §1.2). Do not point this at a board a daemon is holding. If something else on
-the network should own it, talk to that instead: `statemachined.client`.
+the network should own it, talk to that instead: `statemachined-client`,
+which is a distribution of its own in `client/python/`.
 
 **What is not here, and is not an oversight.** No trace ring, no recordings, no
 graph store, no observer list -- see `statemachined.daemon`. Results and state

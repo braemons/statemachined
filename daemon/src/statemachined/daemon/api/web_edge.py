@@ -34,7 +34,6 @@ import json
 import logging
 import struct
 from collections.abc import Callable
-from pathlib import Path
 
 import grpc
 from google.protobuf import json_format
@@ -44,6 +43,7 @@ from google.protobuf.message_factory import GetMessageClass
 from statemachined._proto.statemachined.v1 import service_pb2
 from statemachined.daemon.api.rig_service import RigService
 from statemachined.daemon.api.servicers.refusals import REFUSAL_METADATA_KEY
+from statemachined.daemon.api.web_user_interface_assets import read_asset, web_directory
 
 log = logging.getLogger(__name__)
 
@@ -86,10 +86,50 @@ class Aborted(Exception):
 
 
 class EdgeContext:
-    """The servicer context, as much of it as a servicer actually uses."""
+    """The servicer context, as much of it as a servicer actually uses.
+
+    **"As much as a servicer uses" is a promise this class has to keep**, and
+    it broke once: `observer_registration.watching` began calling
+    `invocation_metadata()` and `peer()`, this had neither, and every stream a
+    browser opened died with an `AttributeError` — while the gRPC path, which
+    every integration test uses, was perfectly fine. `tests/unit/` drives a
+    stream through the edge now so the two surfaces cannot drift again.
+
+    The three methods are the whole of it: `abort` raises, and the other two
+    answer out of the ASGI scope in the shape grpcio answers them.
+    """
+
+    def __init__(self, scope: dict | None = None) -> None:
+        self._scope = scope or {}
 
     async def abort(self, code, details="", trailing_metadata=()):
         raise Aborted(code, details, trailing_metadata)
+
+    def invocation_metadata(self):
+        """The request's headers, as gRPC spells metadata: lowercase pairs.
+
+        A browser cannot set arbitrary gRPC metadata, but it can set a header,
+        and `observer-name` is one — which is how a panel names itself in the
+        observer list exactly as a client does.
+        """
+        return tuple(
+            (key.decode().lower(), value.decode("utf-8", "replace"))
+            for key, value in self._scope.get("headers", ())
+        )
+
+    def peer(self) -> str:
+        """Who is calling, in grpcio's own `ipv4:host:port` spelling.
+
+        Not decoration: the observer list is read to answer "is something
+        connected and receiving nothing", and an entry with no address cannot
+        be told from another tab's.
+        """
+        client = self._scope.get("client")
+        if not client:
+            return "unknown"
+        host, port = client
+        kind = "ipv6" if ":" in str(host) else "ipv4"
+        return f"{kind}:{host}:{port}"
 
 
 class Rpc:
@@ -197,9 +237,9 @@ async def _read_body(receive) -> bytes:
             return body
 
 
-async def _call_unary(rpc: Rpc, codec: str, body: bytes, send) -> None:
+async def _call_unary(rpc: Rpc, codec: str, body: bytes, send, scope: dict) -> None:
     try:
-        answer = await rpc.handler(_decode(rpc, codec, body), EdgeContext())
+        answer = await rpc.handler(_decode(rpc, codec, body), EdgeContext(scope))
     except Aborted as problem:
         payload, status = _error_body(problem)
         return await _send(send, status, "application/json", payload)
@@ -213,7 +253,9 @@ async def _call_unary(rpc: Rpc, codec: str, body: bytes, send) -> None:
     await _send(send, 200, f"application/{codec}", _encode(codec, answer))
 
 
-async def _call_streaming(rpc: Rpc, codec: str, body: bytes, send, receive) -> None:
+async def _call_streaming(
+    rpc: Rpc, codec: str, body: bytes, send, receive, scope: dict
+) -> None:
     """A server stream: 200 immediately, frames as they come, an end frame last.
 
     The status is sent before anything is known about how the call will go,
@@ -241,7 +283,7 @@ async def _call_streaming(rpc: Rpc, codec: str, body: bytes, send, receive) -> N
 
     end: dict = {}
     try:
-        async for frame in rpc.handler(request, EdgeContext()):
+        async for frame in rpc.handler(request, EdgeContext(scope)):
             await send(
                 {
                     "type": "http.response.body",
@@ -267,31 +309,6 @@ async def _call_streaming(rpc: Rpc, codec: str, body: bytes, send, receive) -> N
 
 # -- the panels -----------------------------------------------------------------
 
-
-def find_web_root() -> Path:
-    """Where the panels are.
-
-    One function, already written: `web_user_interface_routes.web_directory`
-    answers this for the routes, and a second answer here would be a second
-    place for the packaged-versus-authored fallback to be got wrong.
-    """
-    from .web_user_interface_routes import web_directory
-
-    return web_directory()
-
-
-#: Enough to serve what this UI is made of, and no more. An unknown suffix is
-#: refused rather than served as a guess.
-_CONTENT_TYPE_BY_SUFFIX = {
-    ".html": "text/html; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".json": "application/json",
-    ".svg": "image/svg+xml",
-    ".ico": "image/x-icon",
-    ".png": "image/png",
-}
-
 #: **CORS is open, and `/elements/` is why.** A console served from somewhere
 #: else imports these panels by URL and calls this daemon from its own origin;
 #: that is the contract, not an accident.
@@ -301,21 +318,6 @@ _CORS_HEADERS = [
     (b"access-control-expose-headers", b"*"),
     (b"cache-control", b"no-cache, must-revalidate"),
 ]
-
-
-def _read_asset(root: Path, relative: str) -> tuple[bytes, str] | None:
-    """One file under `root`, or nothing.
-
-    `resolve()` and then a containment check, because `..` in a URL is how a
-    static file server becomes a way to read `/etc/shadow`.
-    """
-    path = (root / relative).resolve()
-    if not path.is_file() or root.resolve() not in path.parents:
-        return None
-    content_type = _CONTENT_TYPE_BY_SUFFIX.get(path.suffix)
-    if content_type is None:
-        return None
-    return path.read_bytes(), content_type
 
 
 # -- the app --------------------------------------------------------------------
@@ -328,7 +330,7 @@ def build_edge(service: RigService, servicers: dict[str, object]):
     transports call one implementation. Nothing is wired by name here.
     """
     table = rpcs_of(servicers)
-    web_root = find_web_root()
+    web_root = web_directory()
     if not web_root.is_dir():  # pragma: no cover - only if built without the UI
         log.warning("no web UI at %s; serving the rpcs only", web_root)
 
@@ -374,8 +376,8 @@ def build_edge(service: RigService, servicers: dict[str, object]):
                 # The request message of a stream is enveloped like a response
                 # frame: strip the five-byte header before parsing it.
                 body = body[5:] if len(body) >= 5 else b""
-                return await _call_streaming(rpc, codec, body, send, receive)
-            return await _call_unary(rpc, codec, body, send)
+                return await _call_streaming(rpc, codec, body, send, receive, scope)
+            return await _call_unary(rpc, codec, body, send, scope)
 
         if method == "GET":
             # `/ui/<file>` is the published address of this daemon's own shell
@@ -389,7 +391,7 @@ def build_edge(service: RigService, servicers: dict[str, object]):
             relative = "index.html" if path == "/" else path.lstrip("/")
             if relative.startswith("ui/"):
                 relative = relative[len("ui/") :]
-            asset = _read_asset(web_root, relative)
+            asset = read_asset(web_root, relative)
             if asset is None:
                 return await _send(send, 404, "text/plain", f"no {relative}".encode())
             content, content_type = asset

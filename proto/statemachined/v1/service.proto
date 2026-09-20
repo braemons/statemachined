@@ -185,7 +185,7 @@ service Session {
 
   // Give the board up. The committed set stays on it, which is what makes a
   // reconnect cheap.
-  rpc Close(CloseSessionRequest) returns (SessionState);
+  rpc Close(CloseSessionRequest) returns (CloseSessionResult);
 
   // Which graph a trial gets when it names none. A bench convenience; triald
   // names one every trial and never relies on it.

@@ -28,21 +28,23 @@ license = "LGPL-3.0-or-later"
 # **Three tiers, three extras, one distribution.** What you install depends on
 # which way you want to drive a board, and the import tree says the same thing:
 #
-#   statemachined            model/, graph_set_compiler.py, client/
-#                            the documents, the translation, and talking to a
-#                            daemon over HTTP. pydantic, httpx, websockets.
+#   statemachined            model/, graph_set_compiler.py
+#                            the documents and the translation. pydantic.
 #
 #   statemachined[device]    + device/     open the port yourself. pyserial.
 #
-#   statemachined[serve]     + daemon/     be the daemon. fastapi, uvicorn,
+#   statemachined[serve]     + daemon/     be the daemon. grpcio, uvicorn,
 #                                          zeroconf, and the web UI.
 #
-# One distribution rather than a package plus a client package, because the
-# division would have had to cut somewhere, and every place it could cut leaves
-# the same models described twice. `model/` is what a graph *is*; the daemon
-# validates against it, the client sends it, a bench script builds one. A second
-# copy of that in a client library is a copy that is right until it is not, and
-# the day it is not is a session.
+# **The client is not one of them any more.** It was the base tier — which is
+# why that tier needed httpx and websockets — and it is `client/python/` now,
+# its own distribution over grpcio and protobuf. Talking to a rig should not
+# mean installing pydantic and this daemon's document models.
+#
+# What kept them together was that any cut left the same models described
+# twice: `model/` is what a graph *is*, and a second copy of it in a client
+# library is a copy that is right until it is not. The documents cross as
+# **text** now, so there is no second copy to keep.
 dependencies = [
     # The documents: a graph as somebody authored it, a line map, a config. This
     # is the boundary where a file somebody edited arrives and "refuse it, naming
@@ -50,14 +52,11 @@ dependencies = [
     # which is why it is pydantic rather than dataclasses plus hand-written
     # checks, and why it is in the base tier rather than behind an extra.
     "pydantic>=2.13.5",
-    # `client/`. httpx rather than requests for one reason that is not taste:
-    # `httpx.Client` is what Starlette's `TestClient` is, so a caller can point
-    # this client at a daemon in its own process -- which is how the integration
-    # suite exercises the real far end rather than a mock of it.
-    "httpx>=0.28.1",
-    # `WS /api/trace/stream`, which is the whole of subscribing to a rig. The
-    # sync client is used, so nothing here is async and no caller has to be.
-    "websockets>=13",
+    # **One**, and that is the point of the tier. httpx and websockets were
+    # here for `statemachined.client`, which is `statemachined-client` now and
+    # a distribution of its own; nothing in this package makes a network
+    # request any more. A bench script that reads a saved graph installs
+    # pydantic and nothing else.
 ]
 
 [project.optional-dependencies]
@@ -69,7 +68,7 @@ device = [
     "pyserial>=3.5",
 ]
 
-# Being the daemon: the HTTP API, the web UI, the stores, the trace.
+# Being the daemon: the API, the web UI, the stores, the trace.
 serve = [
     "statemachined[device]",
     # The API is gRPC. `grpc.aio` serves it on the daemon's own port, and
@@ -80,13 +79,17 @@ serve = [
     # runs from `make proto` and the output is committed, so a checkout needs
     # no compiler (`contracts/DAEMON_LAYOUT.md`).
     "protobuf>=5.27",
-    "fastapi>=0.141.1",
-    # `[standard]` for one reason: the WebSocket implementation. Plain uvicorn
-    # answers a WebSocket upgrade with 404 -- not an error in the log, a 404 --
-    # so `WS /api/stream`, the trace tail and the serial monitor would all be
-    # dead in the shipped daemon while every test passed, because Starlette's
-    # TestClient implements WebSockets in process and needs no server library at
-    # all. Found by connecting to a running one.
+    # **fastapi was here and is not.** The interface is authored in
+    # `proto/statemachined/v1/` and the types are generated from it, so a web
+    # framework's schema generation had nothing left to describe but itself,
+    # and the ten routers it carried were a second spelling of the rpcs.
+    # `web_edge.py` is a plain ASGI callable — the panels and the Connect
+    # protocol, in about four hundred lines — and uvicorn is all it needs.
+    #
+    # `[standard]` for httptools and uvloop. It used to be for the WebSocket
+    # implementation, without which plain uvicorn answers an upgrade with a 404
+    # and both streams die in a shipped daemon; there are no WebSockets left,
+    # and the streams are server-streaming rpcs now.
     "uvicorn[standard]>=0.52.4",
     # A console discovers a rig instead of being hand-configured with URLs --
     # docs/developer/daemon.md §5, and the same record vstimd already publishes. Imported
@@ -157,16 +160,11 @@ markers = [
 # One device, one order. Without this, a plugin that reorders or parallelises
 # would have several hardware tests arming the same board at once.
 addopts = "-p no:randomly"
-filterwarnings = [
-    # `statemachined.client` sets a deadline on every request, deliberately, so
-    # that its `timeout_seconds` means the same thing whoever opened the httpx
-    # client. Against Starlette's `TestClient` -- which is how two of these
-    # suites reach a daemon in one process -- there is no network to time out
-    # on, and the warning is right and useless.
-    "ignore::DeprecationWarning:starlette.*",
-    "ignore:Using `httpx` with `starlette.testclient` is deprecated",
-    "ignore:You should not use the 'timeout' argument with the TestClient",
-]
+# There were three warning filters here, all of them about Starlette's
+# `TestClient` and the deadline `statemachined.client` put on every request.
+# Both are gone: the suites reach a daemon over a real gRPC channel now
+# (`tests/grpc_harness.py`), and a filter kept past the thing it silenced is a
+# filter that will one day hide something real.
 
 [build-system]
 requires = ["hatchling"]

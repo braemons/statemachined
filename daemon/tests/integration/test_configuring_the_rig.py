@@ -319,8 +319,10 @@ def test_closing_a_session_leaves_the_set_on_the_board(rig):
     committed = a_session_of(rig, timed_graph("go-nogo", outcome="HIT"))
     closed = rig.close_session()
 
-    assert closed.committed_set is not None
-    assert closed.committed_set.set_version == committed.set_version
+    assert closed.was_open is True
+    assert closed.session is not None
+    assert closed.session.committed_set is not None
+    assert closed.session.committed_set.set_version == committed.set_version
 
 
 # ------------------------------------------------------ the two configurations ---

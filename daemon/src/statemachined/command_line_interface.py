@@ -423,41 +423,52 @@ async def _serve_both(
     """Both listeners, on one event loop, over **one** rig.
 
     The service is built here and handed to both, because two `RigService`
-    objects would be two daemons fighting over one serial port. Its lifecycle
-    stays with the app's lifespan — it starts the link and the trace, and stops
-    them — so this adds a listener rather than a second owner.
+    objects would be two daemons fighting over one serial port. This function
+    owns its lifetime now: there is no web framework left to hang a lifespan
+    off, so the link thread and the trace start here and stop here.
+
+    **Two listeners and not one**, because a Python daemon cannot serve both on
+    one socket: `grpc.aio` owns its port outright and no ASGI server speaks
+    native gRPC. So gRPC takes `port + 1` (`grpc_port_for`), and uvicorn serves
+    `api/web_edge.py` on `port` — the panels, and the Connect protocol a
+    browser can speak, dispatching into the *same* servicers. An rpc
+    implemented once is reachable from both and there is no private path for
+    either.
 
     `uvicorn.Server.serve()` and `grpc.aio` both run on the loop `asyncio.run`
     makes, so a blocking call in either would stall the other. Nothing blocks:
-    the servicers push their work onto threads (`servicers/refusals.py`) and
-    the routes are `def`, which Starlette does the same thing with.
+    the servicers push their work onto threads (`servicers/refusals.py`).
     """
     import uvicorn
 
-    from .daemon.api.application import create_application
     from .daemon.api.grpc_server import build_server
     from .daemon.api.rig_service import RigService
+    from .daemon.api.web_edge import build_edge
 
     service = RigService(configuration)
-    server, _servicers = build_server(service, f"{host}:{grpc_port}")
-
-    # The app answers the rpc addresses too, through the middleware it installs
-    # — so the panels' Connect client and `statemachined.client`'s routes work
-    # on one port while both exist. `create_application` has the reasoning.
-    application = create_application(
-        configuration, advertisement=advertisement, service=service
-    )
+    server, servicers = build_server(service, f"{host}:{grpc_port}")
     web = uvicorn.Server(
-        uvicorn.Config(application, host=host, port=web_port, log_level="warning")
+        uvicorn.Config(
+            build_edge(service, servicers), host=host, port=web_port, log_level="warning"
+        )
     )
+
+    service.start()
+    # After the service, and withdrawn before it stops: a console that finds a
+    # rig should find one that can answer. Advertising is never fatal — see
+    # `mdns_service_advertisement.py` — so nothing here is guarded.
+    if advertisement is not None:
+        advertisement.start()
     await server.start()
     try:
         await web.serve()
     finally:
+        if advertisement is not None:
+            advertisement.stop()
         # A short grace so an rpc in flight finishes rather than being cut off
-        # mid-answer. Nothing waits on the device here: `RigService.stop` is the
-        # app's lifespan's job and has already run by now.
+        # mid-answer, and only then the device.
         await server.stop(grace=2.0)
+        service.stop()
 
 
 # ------------------------------------------------------------------- main ---

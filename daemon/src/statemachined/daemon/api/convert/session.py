@@ -102,6 +102,23 @@ def loaded_config_result_to_wire(
     return result
 
 
+def close_session_result_to_wire(
+    closed: dict[str, Any], session: session_pb2.SessionState
+) -> session_pb2.CloseSessionResult:
+    """What closing did, and the session it left behind.
+
+    `cancelled_trial_id` is the one act closing performs on the board, and it
+    was answered by the route and dropped when this became an rpc: a caller
+    that armed a trial and then closed needs to know that trial is gone.
+    """
+    result = session_pb2.CloseSessionResult(was_open=bool(closed.get("was_open")))
+    result.session.CopyFrom(session)
+    cancelled = closed.get("cancelled_trial_id")
+    if cancelled is not None:
+        result.cancelled_trial_id = cancelled
+    return result
+
+
 def active_graph_to_wire(name: str | None) -> session_pb2.ActiveGraph:
     """Which graph a trial gets when it names none. Empty means nothing is
     selected, in which case a trial must name one."""

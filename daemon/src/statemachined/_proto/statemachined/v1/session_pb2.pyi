@@ -62,6 +62,16 @@ class OpenSessionResult(_message.Message):
     elapsed_milliseconds: int
     def __init__(self, state_machine_config: _Optional[str] = ..., set_version: _Optional[int] = ..., slots: _Optional[_Mapping[str, int]] = ..., pool_usage: _Optional[_Union[_device_pb2.GraphPoolCounts, _Mapping]] = ..., pool_capacity: _Optional[_Union[_device_pb2.GraphPoolCounts, _Mapping]] = ..., elapsed_milliseconds: _Optional[int] = ...) -> None: ...
 
+class CloseSessionResult(_message.Message):
+    __slots__ = ("was_open", "cancelled_trial_id", "session")
+    WAS_OPEN_FIELD_NUMBER: _ClassVar[int]
+    CANCELLED_TRIAL_ID_FIELD_NUMBER: _ClassVar[int]
+    SESSION_FIELD_NUMBER: _ClassVar[int]
+    was_open: bool
+    cancelled_trial_id: int
+    session: SessionState
+    def __init__(self, was_open: _Optional[bool] = ..., cancelled_trial_id: _Optional[int] = ..., session: _Optional[_Union[SessionState, _Mapping]] = ...) -> None: ...
+
 class SetActiveGraphRequest(_message.Message):
     __slots__ = ("graph",)
     GRAPH_FIELD_NUMBER: _ClassVar[int]

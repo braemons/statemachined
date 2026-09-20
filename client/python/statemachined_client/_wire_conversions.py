@@ -44,6 +44,7 @@ from ._proto.statemachined.v1 import (
 from .api_types import (
     Autorun,
     CancelTrialResult,
+    CloseSessionResult,
     CommittedGraphSet,
     ConfigureTrialResult,
     DeviceCapacities,
@@ -461,6 +462,17 @@ def session_state_from_wire(message: session_pb2.SessionState) -> SessionState:
         open_seconds=_maybe(message, "open_seconds"),
         active_graph=message.active_graph,
         stored_config_names=list(message.stored_config_names),
+    )
+
+
+def close_session_result_from_wire(
+    message: session_pb2.CloseSessionResult,
+) -> CloseSessionResult:
+    session = _maybe(message, "session")
+    return CloseSessionResult(
+        was_open=message.was_open,
+        cancelled_trial_id=_maybe(message, "cancelled_trial_id"),
+        session=None if session is None else session_state_from_wire(session),
     )
 
 

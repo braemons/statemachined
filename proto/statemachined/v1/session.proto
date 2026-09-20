@@ -73,6 +73,26 @@ message OpenSessionResult {
 }
 
 // Which graph a trial gets when it names none.
+// What closing a session did, beside the session it left behind.
+//
+// **Closing cancels an armed trial**, and that is the one act it performs on
+// the board rather than in its own bookkeeping: an armed trial with nobody
+// driving it is a rig that will run one more trial at whatever time somebody
+// next touches a lever. Which trial that was is a fact the record needs, so it
+// is answered rather than only traced.
+//
+// `was_open` distinguishes closing a session from closing nothing. Neither is
+// an error — closing twice is fine — and a caller that wanted to know which it
+// did could not tell from a `SessionState` that says `session_open: false`
+// either way.
+message CloseSessionResult {
+  bool was_open = 1 [json_name = "was_open"];
+  optional int64 cancelled_trial_id = 2 [json_name = "cancelled_trial_id"];
+
+  // The session as it now stands, so nothing has to read it back.
+  SessionState session = 3;
+}
+
 message SetActiveGraphRequest {
   string graph = 1;
 }

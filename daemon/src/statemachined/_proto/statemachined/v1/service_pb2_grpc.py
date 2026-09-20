@@ -1726,7 +1726,7 @@ class SessionStub:
         self.Close = channel.unary_unary(
                 '/statemachined.v1.Session/Close',
                 request_serializer=statemachined_dot_v1_dot_service__pb2.CloseSessionRequest.SerializeToString,
-                response_deserializer=statemachined_dot_v1_dot_session__pb2.SessionState.FromString,
+                response_deserializer=statemachined_dot_v1_dot_session__pb2.CloseSessionResult.FromString,
                 _registered_method=True)
         self.SetActiveGraph = channel.unary_unary(
                 '/statemachined.v1.Session/SetActiveGraph',
@@ -1812,7 +1812,7 @@ def add_SessionServicer_to_server(servicer, server):
             'Close': grpc.unary_unary_rpc_method_handler(
                     servicer.Close,
                     request_deserializer=statemachined_dot_v1_dot_service__pb2.CloseSessionRequest.FromString,
-                    response_serializer=statemachined_dot_v1_dot_session__pb2.SessionState.SerializeToString,
+                    response_serializer=statemachined_dot_v1_dot_session__pb2.CloseSessionResult.SerializeToString,
             ),
             'SetActiveGraph': grpc.unary_unary_rpc_method_handler(
                     servicer.SetActiveGraph,
@@ -1933,7 +1933,7 @@ class Session:
             target,
             '/statemachined.v1.Session/Close',
             statemachined_dot_v1_dot_service__pb2.CloseSessionRequest.SerializeToString,
-            statemachined_dot_v1_dot_session__pb2.SessionState.FromString,
+            statemachined_dot_v1_dot_session__pb2.CloseSessionResult.FromString,
             options,
             channel_credentials,
             insecure,

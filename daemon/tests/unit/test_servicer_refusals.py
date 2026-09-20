@@ -25,12 +25,14 @@ from statemachined.daemon.api.servicers.refusals import (
     refusal_for,
 )
 from statemachined.daemon.event_recording import (
+    ARecordingIsAlreadyOpen,
     BadRecordingName,
     RecordingIsInProgress,
     RecordingNameTaken,
     RecordingNotInStore,
     RecordingStateRefused,
 )
+from statemachined.daemon.api.rig_service import GraphNotInTheLoadedConfig
 from statemachined.daemon.graph_store import GraphNameMismatch, GraphNotInStore
 from statemachined.graph_set_compiler import GraphNotInSet, GraphSetCompilationError
 from statemachined.daemon.state_machine_config_store import (
@@ -39,6 +41,7 @@ from statemachined.daemon.state_machine_config_store import (
 )
 from statemachined.device.message_framing import DeviceRefusedTheCommand
 from statemachined.device.statemachined_device import DeviceNotConnected, NoGraphSetCommitted
+from statemachined.model.line_map import LineMapDoesNotMatchTheBoard
 
 #: Every exception the domain defines for a caller's benefit. Written out here
 #: so that adding one to the domain and forgetting the table is a failing test
@@ -57,6 +60,9 @@ EVERY_DOMAIN_REFUSAL = [
     GraphSetCompilationError,
     GraphNotInSet,
     RecordingIsInProgress,
+    ARecordingIsAlreadyOpen,
+    GraphNotInTheLoadedConfig,
+    LineMapDoesNotMatchTheBoard,
 ]
 
 
@@ -99,6 +105,25 @@ def test_a_recording_in_progress_is_not_the_same_as_the_wrong_moment():
         "recording_in_progress"
     )
     assert refusal_for(RecordingStateRefused("nothing is open")).error == "recording_state"
+
+
+def test_a_second_recording_is_not_the_same_as_the_wrong_moment():
+    """"Stop that one first" names the recording in the way; "there is nothing
+    open" says the verb does not apply. Different acts, different words."""
+    assert refusal_for(ARecordingIsAlreadyOpen("'first' is already recording")).error == (
+        "already_recording"
+    )
+
+
+def test_a_board_that_has_not_got_that_pin_is_a_bad_request_and_not_a_broken_daemon():
+    """It was `internal` — which tells the person holding the config that the
+    daemon broke, when what happened is that their config names a hole this
+    board has not got. `LineMap.resolved_against` raised a bare `ValueError`,
+    and a bare one cannot be told from "this file does not parse"."""
+    refusal = refusal_for(LineMapDoesNotMatchTheBoard("no pin called 'D6'"))
+    assert refusal.error == "line_map_does_not_match_the_board"
+    assert refusal.category is Category.BAD_REQUEST
+    assert refusal.context == "line_map"
 
 
 def test_the_table_only_names_exceptions_that_exist():

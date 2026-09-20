@@ -9,9 +9,9 @@ Four of them do work a build step would otherwise do:
 
   * **every module it imports exists**, and **every module parses** -- there is
     no bundler to notice a renamed file and no compiler to catch a stray brace;
-  * **every `/api/` path the UI mentions is a route this daemon serves** -- the
-    claim in docs/developer/daemon.md §5 that the web UI uses only this API, checked rather
-    than asserted, which is what keeps the UI an honest test of it;
+  * **no panel names a path at all** -- the panels call rpcs through a client
+    generated from `proto/`, so a `/api/...` reappearing in a hand-written one
+    means somebody has gone around it;
   * **the outcome names in the editor are the ones the store accepts** -- a menu
     offering a spelling the store refuses is a paradigm author's afternoon.
 
@@ -27,11 +27,12 @@ import re
 from json import dumps as json_dumps
 from pathlib import Path
 
-import pytest
-from fastapi.testclient import TestClient
+import asyncio
 
-from statemachined.daemon.api.application import create_application
-from statemachined.daemon.api.web_user_interface_routes import read_asset, web_directory
+import pytest
+
+from statemachined.daemon.api.web_edge import build_edge
+from statemachined.daemon.api.web_user_interface_assets import read_asset, web_directory
 from statemachined.daemon.rig_configuration import RigConfiguration
 from statemachined.model.graph_definition import TransitionPredicate
 from statemachined.model.trial_outcome import DECLARABLE_TERMINAL_OUTCOMES
@@ -50,13 +51,36 @@ ELEMENT_TAG_NAMES = [
 ]
 
 
-@pytest.fixture
-def client(tmp_path: Path) -> TestClient:
-    """The app, with nothing pointing at a real rig's directories.
+class Fetched:
+    """One response off the ASGI edge, in the terms these tests assert on."""
 
-    `connect_on_startup` off because there is no board and a test that waited
-    for a serial timeout would be slow for no reading.
+    def __init__(self, status: int, headers: dict[str, str], body: bytes) -> None:
+        self.status_code = status
+        self.headers = headers
+        self.content = body
+
+    @property
+    def text(self) -> str:
+        return self.content.decode()
+
+
+@pytest.fixture
+def get(tmp_path: Path):
+    """`GET <path>` against the edge, with no rig behind it.
+
+    **The edge and not an app**, because there is no longer an app: the panels
+    are served by `web_edge.py`, the same ASGI callable `statemachined serve`
+    puts uvicorn in front of. Driving it directly is a handful of lines and
+    needs no test framework's client — which is also why it is here rather than
+    in a `conftest.py`: one file uses it.
+
+    `connect_on_startup` off, and the service is never started: nothing below
+    reaches the device, and a test that waited for a serial timeout would be
+    slow for no reading.
     """
+    from statemachined.daemon.api.rig_service import RigService
+    from statemachined.daemon.api.servicers import build_servicers
+
     configuration = RigConfiguration(
         device_target="loop://",
         connect_on_startup=False,
@@ -64,8 +88,34 @@ def client(tmp_path: Path) -> TestClient:
         state_machine_config_directory=tmp_path / "configs",
         trace_directory=tmp_path / "trace",
     )
-    with TestClient(create_application(configuration)) as client:
-        yield client
+    service = RigService(configuration)
+    edge = build_edge(service, build_servicers(service))
+
+    def fetch(path: str) -> Fetched:
+        async def call() -> Fetched:
+            sent: list[dict] = []
+
+            async def receive() -> dict:
+                return {"type": "http.request", "body": b"", "more_body": False}
+
+            async def send(message: dict) -> None:
+                sent.append(message)
+
+            await edge(
+                {"type": "http", "method": "GET", "path": path, "headers": []},
+                receive,
+                send,
+            )
+            start = next(m for m in sent if m["type"] == "http.response.start")
+            body = b"".join(m.get("body", b"") for m in sent if m["type"] == "http.response.body")
+            headers = {
+                key.decode().lower(): value.decode() for key, value in start["headers"]
+            }
+            return Fetched(start["status"], headers, body)
+
+        return asyncio.run(call())
+
+    return fetch
 
 
 def element_sources() -> dict[str, str]:
@@ -77,23 +127,23 @@ def element_sources() -> dict[str, str]:
 # ------------------------------------------------------------------ serving ---
 
 
-def test_the_index_is_served_and_loads_the_shell(client: TestClient) -> None:
-    response = client.get("/")
+def test_the_index_is_served_and_loads_the_shell(get) -> None:
+    response = get("/")
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
     assert "/ui/application_shell.js" in response.text
 
 
-def test_the_elements_entry_point_is_served_as_javascript(client: TestClient) -> None:
+def test_the_elements_entry_point_is_served_as_javascript(get) -> None:
     """The one URL the console repo depends on. docs/developer/daemon.md §5."""
-    response = client.get("/elements/statemachined.js")
+    response = get("/elements/statemachined.js")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/javascript")
     for tag_name in ELEMENT_TAG_NAMES:
         assert tag_name in response.text
 
 
-def test_every_panel_registers_its_tag_name(client: TestClient) -> None:
+def test_every_panel_registers_its_tag_name() -> None:
     registered = {
         match
         for source in element_sources().values()
@@ -102,30 +152,40 @@ def test_every_panel_registers_its_tag_name(client: TestClient) -> None:
     assert registered == set(ELEMENT_TAG_NAMES)
 
 
-def test_nothing_is_cached(client: TestClient) -> None:
+def test_nothing_is_cached(get) -> None:
     """One daemon serves the elements and the API they call, which is what keeps
     them the same version. A cached element would give that away."""
     for path in ("/", "/elements/statemachined.js", "/ui/statemachined_user_interface.css"):
-        assert "no-cache" in client.get(path).headers["cache-control"]
+        assert "no-cache" in get(path).headers["cache-control"]
 
 
 def test_a_file_outside_the_ui_is_refused() -> None:
-    """This is the only route that turns a URL into a filesystem path, and the
+    """This is the only place that turns a URL into a filesystem path, and the
     daemon runs where a config file and a graph store are."""
-    with pytest.raises(Exception) as refusal:
-        read_asset("../daemon_configuration.py", web_directory())
-    assert refusal.value.status_code == 404
+    assert read_asset(web_directory(), "../daemon_configuration.py") is None
 
 
 def test_a_file_type_this_daemon_does_not_serve_is_refused(tmp_path: Path) -> None:
+    """A static server that will hand out any file with any type is a larger
+    promise than "here is a page"."""
     (tmp_path / "secrets.toml").write_text("token = 'x'")
-    with pytest.raises(Exception) as refusal:
-        read_asset("secrets.toml", tmp_path)
-    assert refusal.value.status_code == 404
+    assert read_asset(tmp_path, "secrets.toml") is None
 
 
-def test_a_missing_asset_is_a_404_that_says_which(client: TestClient) -> None:
-    response = client.get("/elements/no_such_panel.js")
+def test_the_three_ways_of_not_being_servable_are_not_told_apart() -> None:
+    """Outside the root, not there, or a suffix this daemon will not serve.
+
+    All three answer 404, and telling them apart would tell somebody probing
+    which of their guesses was closest.
+    """
+    root = web_directory()
+    assert read_asset(root, "../daemon_configuration.py") is None
+    assert read_asset(root, "elements/no_such_panel.js") is None
+    assert read_asset(root, "../../pyproject.toml") is None
+
+
+def test_a_missing_asset_is_a_404_that_says_which(get) -> None:
+    response = get("/elements/no_such_panel.js")
     assert response.status_code == 404
     assert "no_such_panel.js" in response.text
 
@@ -133,29 +193,12 @@ def test_a_missing_asset_is_a_404_that_says_which(client: TestClient) -> None:
 # ------------------------------------------------ the UI against the API ---
 
 
-def test_the_server_can_actually_speak_websocket() -> None:
-    """Two of this UI's panels are streams, and every test of them lies.
-
-    Starlette's TestClient implements WebSockets in process, so `WS /api/stream`
-    and the trace tail pass their tests with no WebSocket library installed at
-    all -- while the shipped daemon answers an upgrade with **404**, not an
-    error, and the Session and Trace panels reconnect forever showing nothing.
-    That is exactly what was happening until somebody connected to a running
-    one.
-
-    So the dependency is pinned by a test rather than by a comment in
-    pyproject.toml, since nothing else in this suite can notice it missing.
-    """
-    import importlib.util
-
-    installed = any(
-        importlib.util.find_spec(implementation) is not None
-        for implementation in ("websockets", "wsproto")
-    )
-    assert installed, (
-        "uvicorn has no WebSocket implementation, so the daemon will answer every "
-        "WebSocket upgrade with 404. Install uvicorn[standard]."
-    )
+# There was a test here pinning uvicorn's WebSocket implementation, because
+# plain `uvicorn` answers an upgrade with a 404 and every in-process test of a
+# stream passed anyway. There are no WebSockets left: the two streams are
+# server-streaming rpcs, carried by `grpc.aio` for a client and by the Connect
+# protocol over plain HTTP POST for a browser. `tests/e2e/` asks the successor
+# question — whether the shipped process really brought up both listeners.
 
 
 def test_every_view_says_what_it_is() -> None:
@@ -199,61 +242,28 @@ def test_every_module_the_ui_imports_exists() -> None:
             assert imported in available, f"{name} imports {imported}, which is not there"
 
 
-def test_the_shell_imports_only_files_that_are_served(client: TestClient) -> None:
+def test_the_shell_imports_only_files_that_are_served(get) -> None:
     shell = (web_directory() / "application_shell.js").read_text()
     for imported in re.findall(r'(?:from|import) "(/[^"]+)"', shell):
-        assert client.get(imported).status_code == 200, f"the shell imports {imported}"
+        assert get(imported).status_code == 200, f"the shell imports {imported}"
 
 
-def normalised(path: str) -> str:
-    """A path with its parameters blanked, so a UI template and a route match.
-
-    `/api/graphs/${encodeURIComponent(name)}/upload` and
-    `/api/graphs/{graph_name}/upload` are the same route said two ways.
-    """
-    path = path.split("?")[0]
-    path = re.sub(r"\$\{[^}]*\}", "{}", path)
-    return re.sub(r"\{[^}]*\}", "{}", path)
-
-
-def served_paths(app) -> set[str]:
-    """Every path the app routes to, websockets included.
-
-    Not `app.openapi()`: the two streams are WebSockets and are not in a schema,
-    and they are exactly the routes a UI is most likely to misspell.
-    """
-    paths: set[str] = set()
-    pending = list(app.routes)
-    while pending:
-        route = pending.pop()
-        if hasattr(route, "path"):
-            paths.add(normalised(route.path))
-        # FastAPI wraps included routers, so the routes are one level down.
-        pending.extend(getattr(getattr(route, "original_router", None), "routes", []))
-        pending.extend(getattr(route, "routes", []) if not hasattr(route, "path") else [])
-    return paths
-
-
-def test_the_ui_names_no_paths_at_all(client: TestClient) -> None:
+def test_the_ui_names_no_paths_at_all() -> None:
     """The panels call rpcs, so there is no path in them to check.
 
     This test used to scrape `/api/...` out of every element and hold each one
     to a served route. It cannot any more, and that is the point: the panels go
     through `DaemonApiClient`, which is generated from `proto/`, and the only
     thing that names an address is the generated bundle. What replaced the
-    check is `test_every_route_has_an_rpc` and `test_every_rpc_is_implemented`,
-    which ask the same question of the interface rather than of string
-    literals.
+    check is `test_every_rpc_is_implemented`, which asks the same question of
+    the interface rather than of string literals.
 
     Kept rather than deleted, inverted, because a `/api/...` reappearing in a
     hand-written panel means somebody has gone around the client — and that is
-    exactly the thing the `/elements/` contract cannot survive.
+    exactly the thing the `/elements/` contract cannot survive. There is
+    nothing left to serve one, so it would be a panel that silently does
+    nothing.
     """
-    served = served_paths(client.app)
-    # The walker is pinned, as before: it is the part most likely to be
-    # silently wrong, and a walker that found nothing would make this vacuous.
-    assert {"/api/device", "/api/stream"} <= served
-
     hand_written = {
         name: source
         for name, source in element_sources().items()

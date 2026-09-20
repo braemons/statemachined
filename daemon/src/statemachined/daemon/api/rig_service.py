@@ -26,7 +26,11 @@ import threading
 import time
 
 from ...device.device_line_monitor import DeviceLineMonitor
-from ...device.statemachined_device import StatemachinedDevice, ObservedStateVisit
+from ...device.statemachined_device import (
+    NoGraphSetCommitted,
+    ObservedStateVisit,
+    StatemachinedDevice,
+)
 from ...device.state_visit_trace import (
     KIND_ACTIVE_GRAPH_SELECTED,
     KIND_AUTORUN_CHANGED,
@@ -52,7 +56,7 @@ from ...device.state_visit_trace import (
 )
 from ..event_recording import EventRecorder
 from ..firmware_manifest import compare_firmware, installed_firmware_version
-from ...graph_set_compiler import CompiledGraphSet
+from ...graph_set_compiler import CompiledGraphSet, GraphSetCompilationError
 from ..graph_store import GraphStore
 from ...model.graph_definition import GraphDefinition
 from ...model.line_map import LineMap
@@ -666,6 +670,18 @@ class RigService:
     # ------------------------------------------------------------ the trial ---
 
     def configure_trial(self, **arguments) -> dict:
+        """Arm the device for one trial. Nothing is uploaded.
+
+        The distribution patches arrive here **by name**, like everything else
+        a caller says, and are turned into pool indices against the graph that
+        is actually on the board. That translation used to live in the route
+        and was left behind when the interface became an rpc, so every patched
+        trial met `bad_json: a patch entry has no i` from the firmware.
+        """
+        arguments["distribution_patches"] = self.distribution_patches_as_wire_fields(
+            arguments.get("distribution_patches") or [],
+            arguments.get("graph_name") or "",
+        )
         with self.device_lock:
             armed = self.supervisor.configure_trial(**arguments)
         self.trace.append(
@@ -676,6 +692,52 @@ class RigService:
             graph_index=armed.get("graph_index"),
         )
         return armed
+
+    def distribution_patches_as_wire_fields(
+        self, patches: list[dict], graph_name: str
+    ) -> list[dict]:
+        """Named distributions into pool indices and the wire's `a`/`b`/`c`.
+
+        The same translation `graph_set_compiler` does for an upload, and it
+        has to happen here too because a patch names a distribution of a graph
+        that is **already on the device** — where it is an index into a shared
+        pool and nothing remembers what it was called.
+
+        Only `a`, `b` and `c` may be patched, and never `kind`: changing the
+        shape of a distribution would be a different graph, and the board is
+        holding the one it was given.
+        """
+        if not patches:
+            return []
+        compiled = self.supervisor.committed_graph_set
+        if compiled is None:
+            raise NoGraphSetCommitted(
+                "no graph set is committed, so no distribution has an index"
+            )
+        compiled_graph = compiled.graph_named(graph_name)
+
+        wire_patches = []
+        for patch in patches:
+            name = patch["name"]
+            if name not in compiled_graph.distribution_pool_index_by_name:
+                known = ", ".join(sorted(compiled_graph.distribution_pool_index_by_name))
+                raise GraphSetCompilationError(
+                    f"graph {graph_name!r} has no distribution called {name!r}. Has: {known}"
+                )
+            fields: dict[str, object] = {
+                "i": compiled_graph.distribution_pool_index_by_name[name]
+            }
+            # Positional on the wire by `kind`; named here.
+            if "duration_ms" in patch:
+                fields["a"] = patch["duration_ms"]
+            if "minimum_ms" in patch:
+                fields["a"] = patch["minimum_ms"]
+            if "maximum_ms" in patch:
+                fields["b"] = patch["maximum_ms"]
+            if "mean_ms" in patch:
+                fields["c"] = patch["mean_ms"]
+            wire_patches.append(fields)
+        return wire_patches
 
     def start_trial(self, trial_id: int) -> dict:
         with self.device_lock:

@@ -77,6 +77,18 @@ class RecordingStateRefused(RuntimeError):
     """The verb does not apply to what is happening -- pause with nothing running."""
 
 
+class ARecordingIsAlreadyOpen(RecordingStateRefused):
+    """Something is already being recorded, so a second one cannot start.
+
+    Its own class because "stop that one first" is a different act from every
+    other `RecordingStateRefused` — those say the verb does not apply to what
+    is happening, and this one says a *different* recording is in the way and
+    names it. Refused rather than silently continuing the old one or silently
+    overwriting the file: both are how a morning's recording turns out to be
+    an afternoon's.
+    """
+
+
 class RecordingIsInProgress(RecordingStateRefused):
     """The recording named is the one being written to right now.
 
@@ -151,7 +163,7 @@ class EventRecorder:
         self._refuse_a_name_that_is_not_one(name)
         with self._lock:
             if self._active is not None:
-                raise RecordingStateRefused(
+                raise ARecordingIsAlreadyOpen(
                     f"{self._active['name']!r} is already {self._active['state']}. "
                     f"Stop it before starting another."
                 )

@@ -12,7 +12,7 @@ one?**
     far end   ─┬─ the firmware built for this machine, on a socket   (default)
                └─ an Arduino Uno R4 Minima on a cable   (--target=/dev/ttyACM0)
 
-    API path  ─┬─ StatemachinedClient -> the daemon's HTTP API -> the device
+    API path  ─┬─ StatemachinedClient -> the daemon's gRPC API -> the device
                └─ StatemachinedDevice, which opens the port itself
 
 Every test below runs in all four cells, and the paradigms are one definition
@@ -29,12 +29,12 @@ of these paradigms could only ever run on hardware and CI would test the other
 half twice.
 
 **Why the daemon is in-process here.** `tests/e2e/` already runs `statemachined
-serve` as a subprocess and is the only place uvicorn's WebSocket support is
-exercised; repeating that here would double the runtime to re-prove it. What
-this tier varies is the far end, and `TestClient` is an `httpx.Client`, so every
-call below is the real route, the real serialisation and the real device
-underneath -- only the socket between the client and the daemon is missing, and
-that socket has its own suite.
+serve` as a subprocess and is the only place the shipped command line and its
+two listeners are exercised; repeating that here would double the runtime to
+re-prove it. What this tier varies is the far end. The daemon here is the
+shipped servicers over a `grpc.aio` server on a loopback port
+(`tests/grpc_harness.py`), so every call below is the real rpc, the real
+serialisation, the real refusal and the real device underneath.
 
 **One board, one holder.** A serial port admits one opener, so the two API
 paths must never be up at once. Both fixtures are function-scoped and close what
@@ -44,18 +44,14 @@ second test with `device or resource busy`.
 
 from __future__ import annotations
 
-import contextlib
 import json
-import queue
-import threading
 import time
 
 import pytest
-from fastapi.testclient import TestClient
+from grpc_harness import DaemonOnALoopbackPort
 from paradigms import LOOPBACK_LINE_MAP
+from statemachined_client import DaemonRefusedTheRequest, StatemachinedClient
 
-from statemachined.client import StatemachinedClient, TransportError
-from statemachined.daemon.api.application import create_application
 from statemachined.daemon.rig_configuration import RigConfiguration
 from statemachined.device import native_device_on_a_socket
 from statemachined.device.native_device_on_a_socket import (
@@ -69,13 +65,6 @@ from statemachined.model.line_map import LineMap
 #: The same rule the jumper wires implement, so `paradigms.DRIVES` is true of
 #: both far ends. See `hal::set_native_loopback`.
 SOFTWARE_HARNESS = "8"
-
-#: What the client believes it is talking to. `TestClient` routes by path and
-#: ignores the host, so this is arbitrary -- and deliberately not localhost, so
-#: a test asserting on a URL asserts on the client's arithmetic rather than on a
-#: default that happens to match.
-RIG_URL = "http://statemachined.test"
-
 
 # `--target` is registered in daemon/tests/conftest.py rather than here, because
 # `hardware/` takes it as well and pytest registers each option once per run.
@@ -146,38 +135,37 @@ def rig(far_end, tmp_path):
         heartbeat_seconds=0.5,
         startup_state_machine_config="runs",
     )
-    with TestClient(create_application(configuration)) as daemon:
-        client = StatemachinedClient(
-            RIG_URL,
-            timeout_seconds=30.0,
-            http_client=daemon,
-            open_websocket=lambda url: WebSocketOverTheTestClient(daemon, url),
-        )
-        with client:
+    daemon = DaemonOnALoopbackPort(configuration)
+    daemon.start()
+    try:
+        with daemon.client() as client:
+            client.wait_until_ready(timeout_s=STARTUP_TIMEOUT_SECONDS)
             _wait_until_it_holds_the_device(client)
             yield client
+    finally:
+        daemon.stop()
 
 
 def _wait_until_it_holds_the_device(client: StatemachinedClient) -> None:
     """Up *and* greeted, because either alone is a false start.
 
-    `TestClient.__enter__` returns once the app's startup hook has run, and the
-    hook only starts the link thread -- greeting the far end is a round trip
-    that happens after it. A test that armed a trial in that window gets its
-    result read back across the daemon's first connection rather than after it,
-    and the daemon answers `no_result_yet` about a trial that plainly ran. That
-    is a race, not a flake: it is lost more often against a board, where the
-    greeting is a real serial round trip rather than a socket on loopback.
+    The harness returns once the server is listening and the link thread has
+    been started -- greeting the far end is a round trip that happens after it.
+    A test that armed a trial in that window gets its result read back across
+    the daemon's first connection rather than after it, and the daemon answers
+    `no_result_yet` about a trial that plainly ran. That is a race, not a
+    flake: it is lost more often against a board, where the greeting is a real
+    serial round trip rather than a socket on loopback.
     """
     deadline = time.monotonic() + STARTUP_TIMEOUT_SECONDS
     last: object = "it never answered"
     while time.monotonic() < deadline:
         try:
-            health = client.health()
-        except TransportError as exc:
-            last = str(exc)
+            health = client.read_health()
+        except DaemonRefusedTheRequest as refused:
+            last = str(refused)
         else:
-            if health.get("device_connected"):
+            if health.device_connected:
                 return
             last = f"the daemon is up and has no device: {health}"
         time.sleep(0.05)
@@ -290,63 +278,15 @@ def the_loopback_harness(device, a_board_is_attached):
 def the_loopback_harness_over_the_api(rig, a_board_is_attached):
     """The same question, asked down the daemon path. See above for why two."""
     probe = _harness_probe_document()
-    rig.graphs.write(probe)
-    rig.session.upload_graph_set(["harness-probe"])
-    # Subscribed before it is armed, which is the client's own rule: a
-    # subscription opened afterwards starts at the newest entry, and this trial
-    # is 60 ms long -- it ends before a late subscriber is watching.
-    with rig.trace.subscribe("harness-probe") as stream:
-        rig.trial.configure(9001, graph="harness-probe", cap_milliseconds=3000)
-        rig.trial.start(9001)
-        assert stream.wait_for_trial(9001, timeout_seconds=10), "the probe trial never finished"
-    result = rig.trial.result()
+    rig.write_graph(probe["name"], json.dumps(probe))
+    rig.upload_graph_set(["harness-probe"])
+    rig.configure_trial(9001, graph="harness-probe", cap_milliseconds=3000)
+    rig.start_trial(9001)
+    # `wait_for_trial` carries the ring's backlog, so a 60 ms trial that ended
+    # before this call is still seen. The deadline is the caller's: only this
+    # side knows a trial is in flight.
+    rig.wait_for_trial(9001, timeout_s=10)
+    result = rig.read_trial_result()
     return _the_harness_answer(
-        result["visits"][0]["exit_cause"] == "transition", a_board_is_attached
+        result.visits[0].exit_cause == "transition", a_board_is_attached
     )
-
-
-class WebSocketOverTheTestClient:
-    """Starlette's in-process WebSocket, with a deadline on receiving.
-
-    The same adapter `tests/integration/conftest.py` carries, and for the same
-    reason: `TestClient` runs a WebSocket route in this process, but
-    `WebSocketTestSession.receive_text()` blocks for ever -- the right default
-    for a test asserting on a frame it knows is coming, and the wrong one for a
-    subscription whose whole contract is that the deadline belongs to the
-    subscriber. One thread pumps frames into a queue and `recv` takes them with
-    a timeout, which is also what makes a *failing* test here fail in seconds
-    with a message rather than hang a CI job.
-
-    Without it the client falls back to its default -- a real `websockets`
-    connection to `RIG_URL`, which nothing is listening on.
-    """
-
-    def __init__(self, test_client: TestClient, url: str) -> None:
-        # ASGI routes by path; the ws:// host is the client's own arithmetic.
-        path_and_query = url.split("://", 1)[-1].split("/", 1)[-1]
-        self._session = test_client.websocket_connect("/" + path_and_query)
-        self._socket = self._session.__enter__()
-        self._frames: queue.Queue = queue.Queue()
-        threading.Thread(target=self._pump_frames, daemon=True).start()
-
-    def _pump_frames(self) -> None:
-        try:
-            while True:
-                self._frames.put(self._socket.receive_text())
-        except Exception as exc:  # noqa: BLE001
-            self._frames.put(exc)
-
-    def recv(self, timeout: float | None = None):
-        try:
-            frame = self._frames.get(timeout=timeout)
-        except queue.Empty:
-            raise TimeoutError("nothing arrived on the subscription") from None
-        if isinstance(frame, Exception):
-            raise frame
-        return frame
-
-    def close(self) -> None:
-        # The daemon may have closed it first, which it does deliberately to a
-        # subscriber that fell out of the ring.
-        with contextlib.suppress(Exception):
-            self._session.__exit__(None, None, None)

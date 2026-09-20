@@ -72,7 +72,7 @@ def test_the_record_carries_the_port_it_was_told_to_advertise() -> None:
 
 def test_a_failure_to_advertise_is_reported_and_not_raised(monkeypatch) -> None:
     """The whole reason this is a small class rather than three lines in
-    `create_application`."""
+    `statemachined serve`."""
     said = []
     advertisement = MdnsServiceAdvertisement(port=8081, report=said.append)
     monkeypatch.setattr(

@@ -73,8 +73,8 @@ class SessionServicer(service_pb2_grpc.SessionServicer):
         makes a reconnect cheap."""
 
         def body():
-            self.service.close_session()
-            return self._session_state()
+            closed = self.service.close_session()
+            return convert.close_session_result_to_wire(closed, self._session_state())
 
         return await answering(context, body)
 

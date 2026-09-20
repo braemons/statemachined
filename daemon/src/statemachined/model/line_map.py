@@ -25,6 +25,21 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 MAXIMUM_LINE_COUNT = 32
 
 
+class LineMapDoesNotMatchTheBoard(ValueError):
+    """A map this board cannot honour: a pin it does not have, or a
+    `line_index` and a `pin_label` that disagree.
+
+    **A named class rather than a bare `ValueError`**, because this reaches a
+    caller as a refusal and the refusal table has to be able to tell it from
+    "this file does not parse". It was a bare one, and every `LoadConfig` that
+    hit it answered `internal` — which tells the person holding the config that
+    the daemon broke, when what happened is that their config names a pin this
+    board has not got.
+
+    Still a `ValueError`, so everything that catches one still catches this.
+    """
+
+
 class InputLineDefinition(BaseModel):
     """One input line: what it is called, and how the rig conditions it."""
 
@@ -261,14 +276,14 @@ def _resolve_one(definition, direction: str, pin_map) -> int:
             return definition.line_index
         if from_the_board is not None:
             return from_the_board
-        raise ValueError(
+        raise LineMapDoesNotMatchTheBoard(
             f"the {where} line {definition.name!r} names pin {definition.pin_label!r}, and this "
             f"board did not say which pins it has -- its firmware is older than the `pins` "
             f"command. Give it a line_index, or flash firmware that answers `pins`"
         )
 
     if definition.pin_label and from_the_board is None:
-        raise ValueError(
+        raise LineMapDoesNotMatchTheBoard(
             f"the {where} line {definition.name!r} names pin {definition.pin_label!r}, which is "
             f"not {'an input' if direction == 'in' else 'an output'} on this board. It has: "
             f"{pin_map.known_pins(direction)}"
@@ -278,7 +293,7 @@ def _resolve_one(definition, direction: str, pin_map) -> int:
         return from_the_board
 
     if from_the_board is not None and from_the_board != definition.line_index:
-        raise ValueError(
+        raise LineMapDoesNotMatchTheBoard(
             f"the {where} line {definition.name!r} says line {definition.line_index} and pin "
             f"{definition.pin_label!r}, but this board's {where} line {definition.line_index} is "
             f"pin {pin_map.label_for(direction, definition.line_index)!r} and "
@@ -289,7 +304,7 @@ def _resolve_one(definition, direction: str, pin_map) -> int:
     if definition.line_index >= len(
         pin_map.input_pin_labels if direction == "in" else pin_map.output_pin_labels
     ):
-        raise ValueError(
+        raise LineMapDoesNotMatchTheBoard(
             f"the {where} line {definition.name!r} is line {definition.line_index}, and this "
             f"board has no such {where} line. Its pins are: {pin_map.known_pins(direction)}"
         )

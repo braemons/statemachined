@@ -529,6 +529,25 @@ class SessionState:
 
 
 @dataclass(frozen=True)
+class CloseSessionResult:
+    """What closing a session did, beside the session it left behind.
+
+    **Closing cancels an armed trial**, and that is the one act it performs on
+    the board rather than in its own bookkeeping: an armed trial with nobody
+    driving it is a rig that will run one more trial at whatever time somebody
+    next touches a lever. `cancelled_trial_id` says which, or `None`.
+
+    `was_open` distinguishes closing a session from closing nothing. Neither is
+    an error — closing twice is fine — and `session.session_open` is `False`
+    either way.
+    """
+
+    was_open: bool = False
+    cancelled_trial_id: int | None = None
+    session: SessionState | None = None
+
+
+@dataclass(frozen=True)
 class OpenSessionResult:
     """What opening a session, or uploading a set, committed to the board.
 

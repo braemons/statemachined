@@ -19,7 +19,7 @@ import pytest
 from bench_rig import BENCH_LINE_MAP, timed_graph  # noqa: F401  re-exported
 
 #: How long to wait for each process to come up. Generous, because a first run
-#: pays for an import of fastapi and uvicorn, and finite because a daemon that
+#: pays for an import of grpcio and uvicorn, and finite because a daemon that
 #: never answers should fail this suite rather than hang it.
 STARTUP_TIMEOUT_SECONDS = 30.0
 
