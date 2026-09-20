@@ -33,6 +33,7 @@ from .rig_service import RigService
 def create_application(
     configuration: RigConfiguration,
     advertisement: MdnsServiceAdvertisement | None = None,
+    service: RigService | None = None,
 ) -> FastAPI:
     """The whole surface: the API, the UI that uses only the API, and the record
     that says this rig exists.
@@ -41,7 +42,11 @@ def create_application(
     caller knows the port the server was actually told to listen on -- and a
     record advertising a port nothing is listening on is worse than no record.
     """
-    service = RigService(configuration)
+    # Built here unless the caller has one. `statemachined serve` builds it
+    # first so that the gRPC server and this app are two faces of **one**
+    # rig — two `RigService` objects would be two daemons fighting over one
+    # serial port, which is the failure this argument exists to prevent.
+    service = service if service is not None else RigService(configuration)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

@@ -622,6 +622,8 @@ device = [
 ]
 serve = [
     { name = "fastapi" },
+    { name = "grpcio" },
+    { name = "protobuf" },
     { name = "pyserial" },
     { name = "uvicorn", extra = ["standard"] },
     { name = "zeroconf" },
@@ -641,7 +643,9 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", marker = "extra == 'serve'", specifier = ">=0.141.1" },
+    { name = "grpcio", marker = "extra == 'serve'", specifier = ">=1.66" },
     { name = "httpx", specifier = ">=0.28.1" },
+    { name = "protobuf", marker = "extra == 'serve'", specifier = ">=5.27" },
     { name = "pydantic", specifier = ">=2.13.5" },
     { name = "pyserial", marker = "extra == 'device'", specifier = ">=3.5" },
     { name = "statemachined", extras = ["device"], marker = "extra == 'serve'", editable = "." },

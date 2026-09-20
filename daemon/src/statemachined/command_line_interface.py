@@ -11,6 +11,7 @@ session somebody was watching.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import sys
@@ -368,11 +369,9 @@ def cmd_serve(args) -> int:
     Deliberately not part of `open_session` above. A bench command borrows a
     board somebody is holding; a daemon takes it.
     """
-    import uvicorn
-
-    from .daemon.api.application import create_application
-    from .daemon.rig_configuration import DEFAULT_CONFIGURATION_PATH, RigConfiguration
+    from .daemon.api.grpc_server import grpc_port_for
     from .daemon.mdns_service_advertisement import MdnsServiceAdvertisement
+    from .daemon.rig_configuration import DEFAULT_CONFIGURATION_PATH, RigConfiguration
 
     configuration = RigConfiguration.load_from_toml_file(
         Path(args.config) if args.config else DEFAULT_CONFIGURATION_PATH
@@ -396,15 +395,66 @@ def cmd_serve(args) -> int:
         )
     )
 
+    grpc_port = grpc_port_for(args.port)
     note(f"statemachined serving on {args.host}:{args.port}, device {configuration.device_target}")
     note(f"           web UI  http://{args.host}:{args.port}/")
-    uvicorn.run(
-        create_application(configuration, advertisement=advertisement),
-        host=args.host,
-        port=args.port,
-        log_level="warning",
+    note(f"           gRPC    {args.host}:{grpc_port}")
+
+    asyncio.run(
+        _serve_both(
+            configuration,
+            advertisement=advertisement,
+            host=args.host,
+            web_port=args.port,
+            grpc_port=grpc_port,
+        )
     )
     return 0
+
+
+async def _serve_both(
+    configuration,
+    *,
+    advertisement,
+    host: str,
+    web_port: int,
+    grpc_port: int,
+) -> None:
+    """Both listeners, on one event loop, over **one** rig.
+
+    The service is built here and handed to both, because two `RigService`
+    objects would be two daemons fighting over one serial port. Its lifecycle
+    stays with the app's lifespan — it starts the link and the trace, and stops
+    them — so this adds a listener rather than a second owner.
+
+    `uvicorn.Server.serve()` and `grpc.aio` both run on the loop `asyncio.run`
+    makes, so a blocking call in either would stall the other. Nothing blocks:
+    the servicers push their work onto threads (`servicers/refusals.py`) and
+    the routes are `def`, which Starlette does the same thing with.
+    """
+    import uvicorn
+
+    from .daemon.api.application import create_application
+    from .daemon.api.grpc_server import build_server
+    from .daemon.api.rig_service import RigService
+
+    service = RigService(configuration)
+    application = create_application(
+        configuration, advertisement=advertisement, service=service
+    )
+    server, _servicers = build_server(service, f"{host}:{grpc_port}")
+
+    web = uvicorn.Server(
+        uvicorn.Config(application, host=host, port=web_port, log_level="warning")
+    )
+    await server.start()
+    try:
+        await web.serve()
+    finally:
+        # A short grace so an rpc in flight finishes rather than being cut off
+        # mid-answer. Nothing waits on the device here: `RigService.stop` is the
+        # app's lifespan's job and has already run by now.
+        await server.stop(grace=2.0)
 
 
 # ------------------------------------------------------------------- main ---

@@ -70,6 +70,14 @@ device = [
 # Being the daemon: the HTTP API, the web UI, the stores, the trace.
 serve = [
     "statemachined[device]",
+    # The API is gRPC. `grpc.aio` serves it on the daemon's own port, and
+    # `api/web_edge.py` — the panels, and the Connect protocol a browser can
+    # speak — goes beside it.
+    "grpcio>=1.66",
+    # The generated wire types and their JSON mapping. Runtime only: protoc
+    # runs from `make proto` and the output is committed, so a checkout needs
+    # no compiler (`contracts/DAEMON_LAYOUT.md`).
+    "protobuf>=5.27",
     "fastapi>=0.141.1",
     # `[standard]` for one reason: the WebSocket implementation. Plain uvicorn
     # answers a WebSocket upgrade with 404 -- not an error in the log, a 404 --
