@@ -106,8 +106,17 @@ statemachined = "statemachined.command_line_interface:main"
 # The group installs both extras, because the suites cover all three tiers:
 # `tests/unit` needs none of it, `tests/integration` and `tests/e2e` stand a
 # real daemon up in front of a real device.
+#
+# **The client is in here too, and it is a test dependency of the daemon on
+# purpose.** `client/python/` is a distribution of its own with its own
+# dependency list, and this package does not import it — but the integration
+# suites drive this daemon's interface *through* it, over a real gRPC channel.
+# That is the strongest form of "the interface works": the same servicers, the
+# same refusals, the same streams a rig gets, and no second description of the
+# API written in the test file. It already caught a constant this daemon and
+# its client spelled differently.
 [dependency-groups]
-test = ["pytest>=8.0", "statemachined[device,serve]"]
+test = ["pytest>=8.0", "statemachined[device,serve]", "statemachined-client"]
 dev = [
     "ruff>=0.8",
     "ty>=0.0.1a1",
@@ -185,6 +194,11 @@ packages = ["src/statemachined"]
 # The test group installs this project's own extras, which uv resolves to the
 # workspace copy rather than to a registry.
 statemachined = { workspace = true }
+
+# The client beside this project, not a git URL and not a registry: they ship
+# from one commit, so a test suite resolving the client from anywhere but this
+# checkout would be testing a different interface from the one being edited.
+statemachined-client = { path = "../client/python", editable = true }
 
 [tool.uv.workspace]
 members = ["."]

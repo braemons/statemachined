@@ -57,10 +57,10 @@ class OpenSessionResult(_message.Message):
     state_machine_config: str
     set_version: int
     slots: _containers.ScalarMap[str, int]
-    pool_usage: int
-    pool_capacity: int
+    pool_usage: _device_pb2.GraphPoolCounts
+    pool_capacity: _device_pb2.GraphPoolCounts
     elapsed_milliseconds: int
-    def __init__(self, state_machine_config: _Optional[str] = ..., set_version: _Optional[int] = ..., slots: _Optional[_Mapping[str, int]] = ..., pool_usage: _Optional[int] = ..., pool_capacity: _Optional[int] = ..., elapsed_milliseconds: _Optional[int] = ...) -> None: ...
+    def __init__(self, state_machine_config: _Optional[str] = ..., set_version: _Optional[int] = ..., slots: _Optional[_Mapping[str, int]] = ..., pool_usage: _Optional[_Union[_device_pb2.GraphPoolCounts, _Mapping]] = ..., pool_capacity: _Optional[_Union[_device_pb2.GraphPoolCounts, _Mapping]] = ..., elapsed_milliseconds: _Optional[int] = ...) -> None: ...
 
 class SetActiveGraphRequest(_message.Message):
     __slots__ = ("graph",)

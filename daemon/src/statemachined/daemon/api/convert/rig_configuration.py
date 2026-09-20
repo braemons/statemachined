@@ -29,6 +29,10 @@ PATCHABLE = (
     "expected_board",
     "graph_mode",
     "startup_state_machine_config",
+    # Pinning the seed is what somebody does to reproduce a session, and it is
+    # a setting rather than a consequence: it takes effect on the next
+    # connection, so nothing that has already happened depends on it.
+    "session_seed",
 )
 
 
@@ -45,6 +49,7 @@ def rig_configuration_to_wire(
         device_baud=configuration.device_baud,
         device_timeout_seconds=configuration.device_timeout_seconds,
         expected_board=configuration.expected_board,
+        session_seed=configuration.session_seed,
         connect_on_startup=configuration.connect_on_startup,
         startup_state_machine_config=configuration.startup_state_machine_config,
         graph_mode=configuration.graph_mode,

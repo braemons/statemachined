@@ -22,31 +22,34 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from statemachined_client._proto.statemachined.v1 import device_pb2 as statemachined_dot_v1_dot_device__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n statemachined/v1/documents.proto\x12\x10statemachined.v1\"(\n\nStoredFile\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\"\x1f\n\x0fReadFileRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\"!\n\x11\x44\x65leteFileRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\"\x19\n\tFileDraft\x12\x0c\n\x04text\x18\x01 \x01(\t\"o\n\x0cGraphSummary\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08readable\x18\x02 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12 \n\x0bstate_count\x18\x04 \x01(\x05R\x0bstate_count\x12\r\n\x05\x65ntry\x18\x05 \x01(\t\"@\n\x0eGraphSummaries\x12.\n\x06graphs\x18\x01 \x03(\x0b\x32\x1e.statemachined.v1.GraphSummary\"\x88\x01\n\x0fGraphValidation\x12\r\n\x05valid\x18\x01 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\x12\x1e\n\npool_usage\x18\x03 \x01(\x05R\npool_usage\x12$\n\rpool_capacity\x18\x04 \x01(\x05R\rpool_capacity\x12\x10\n\x08warnings\x18\x05 \x03(\t\"\xeb\x01\n\x19StateMachineConfigSummary\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08readable\x18\x02 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\x12\r\n\x05\x62oard\x18\x05 \x01(\t\x12 \n\x0bgraph_names\x18\x06 \x03(\tR\x0bgraph_names\x12*\n\x10input_line_count\x18\x07 \x01(\x05R\x10input_line_count\x12,\n\x11output_line_count\x18\x08 \x01(\x05R\x11output_line_count\"k\n\x1bStateMachineConfigSummaries\x12<\n\x07\x63onfigs\x18\x01 \x03(\x0b\x32+.statemachined.v1.StateMachineConfigSummary\x12\x0e\n\x06loaded\x18\x02 \x01(\tb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n statemachined/v1/documents.proto\x12\x10statemachined.v1\x1a\x1dstatemachined/v1/device.proto\"(\n\nStoredFile\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x0c\n\x04text\x18\x02 \x01(\t\"\x1f\n\x0fReadFileRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\"!\n\x11\x44\x65leteFileRequest\x12\x0c\n\x04name\x18\x01 \x01(\t\"\x19\n\tFileDraft\x12\x0c\n\x04text\x18\x01 \x01(\t\"o\n\x0cGraphSummary\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08readable\x18\x02 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12 \n\x0bstate_count\x18\x04 \x01(\x05R\x0bstate_count\x12\r\n\x05\x65ntry\x18\x05 \x01(\t\"@\n\x0eGraphSummaries\x12.\n\x06graphs\x18\x01 \x03(\x0b\x32\x1e.statemachined.v1.GraphSummary\"\xee\x01\n\x0fGraphValidation\x12\r\n\x05valid\x18\x01 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\x12\x41\n\npool_usage\x18\x03 \x01(\x0b\x32!.statemachined.v1.GraphPoolCountsR\npool_usage\x12G\n\rpool_capacity\x18\x04 \x01(\x0b\x32!.statemachined.v1.GraphPoolCountsR\rpool_capacity\x12\x30\n\x08warnings\x18\x05 \x03(\x0b\x32\x1e.statemachined.v1.GraphWarning\"^\n\x0cGraphWarning\x12\x0c\n\x04kind\x18\x01 \x01(\t\x12\r\n\x05state\x18\x02 \x01(\t\x12\x12\n\ntransition\x18\x03 \x01(\x05\x12\r\n\x05lines\x18\x04 \x03(\t\x12\x0e\n\x06\x64\x65tail\x18\x05 \x01(\t\"\xeb\x01\n\x19StateMachineConfigSummary\x12\x0c\n\x04name\x18\x01 \x01(\t\x12\x10\n\x08readable\x18\x02 \x01(\x08\x12\x0e\n\x06\x64\x65tail\x18\x03 \x01(\t\x12\x13\n\x0b\x64\x65scription\x18\x04 \x01(\t\x12\r\n\x05\x62oard\x18\x05 \x01(\t\x12 \n\x0bgraph_names\x18\x06 \x03(\tR\x0bgraph_names\x12*\n\x10input_line_count\x18\x07 \x01(\x05R\x10input_line_count\x12,\n\x11output_line_count\x18\x08 \x01(\x05R\x11output_line_count\"k\n\x1bStateMachineConfigSummaries\x12<\n\x07\x63onfigs\x18\x01 \x03(\x0b\x32+.statemachined.v1.StateMachineConfigSummary\x12\x0e\n\x06loaded\x18\x02 \x01(\tb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
 _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'statemachined.v1.documents_pb2', _globals)
 if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
-  _globals['_STOREDFILE']._serialized_start=54
-  _globals['_STOREDFILE']._serialized_end=94
-  _globals['_READFILEREQUEST']._serialized_start=96
-  _globals['_READFILEREQUEST']._serialized_end=127
-  _globals['_DELETEFILEREQUEST']._serialized_start=129
-  _globals['_DELETEFILEREQUEST']._serialized_end=162
-  _globals['_FILEDRAFT']._serialized_start=164
-  _globals['_FILEDRAFT']._serialized_end=189
-  _globals['_GRAPHSUMMARY']._serialized_start=191
-  _globals['_GRAPHSUMMARY']._serialized_end=302
-  _globals['_GRAPHSUMMARIES']._serialized_start=304
-  _globals['_GRAPHSUMMARIES']._serialized_end=368
-  _globals['_GRAPHVALIDATION']._serialized_start=371
-  _globals['_GRAPHVALIDATION']._serialized_end=507
-  _globals['_STATEMACHINECONFIGSUMMARY']._serialized_start=510
-  _globals['_STATEMACHINECONFIGSUMMARY']._serialized_end=745
-  _globals['_STATEMACHINECONFIGSUMMARIES']._serialized_start=747
-  _globals['_STATEMACHINECONFIGSUMMARIES']._serialized_end=854
+  _globals['_STOREDFILE']._serialized_start=85
+  _globals['_STOREDFILE']._serialized_end=125
+  _globals['_READFILEREQUEST']._serialized_start=127
+  _globals['_READFILEREQUEST']._serialized_end=158
+  _globals['_DELETEFILEREQUEST']._serialized_start=160
+  _globals['_DELETEFILEREQUEST']._serialized_end=193
+  _globals['_FILEDRAFT']._serialized_start=195
+  _globals['_FILEDRAFT']._serialized_end=220
+  _globals['_GRAPHSUMMARY']._serialized_start=222
+  _globals['_GRAPHSUMMARY']._serialized_end=333
+  _globals['_GRAPHSUMMARIES']._serialized_start=335
+  _globals['_GRAPHSUMMARIES']._serialized_end=399
+  _globals['_GRAPHVALIDATION']._serialized_start=402
+  _globals['_GRAPHVALIDATION']._serialized_end=640
+  _globals['_GRAPHWARNING']._serialized_start=642
+  _globals['_GRAPHWARNING']._serialized_end=736
+  _globals['_STATEMACHINECONFIGSUMMARY']._serialized_start=739
+  _globals['_STATEMACHINECONFIGSUMMARY']._serialized_end=974
+  _globals['_STATEMACHINECONFIGSUMMARIES']._serialized_start=976
+  _globals['_STATEMACHINECONFIGSUMMARIES']._serialized_end=1083
 # @@protoc_insertion_point(module_scope)

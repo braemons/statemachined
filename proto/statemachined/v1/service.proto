@@ -3,7 +3,6 @@ syntax = "proto3";
 
 package statemachined.v1;
 
-import "statemachined/v1/common.proto";
 import "statemachined/v1/device.proto";
 import "statemachined/v1/documents.proto";
 import "statemachined/v1/recording.proto";
@@ -119,7 +118,7 @@ service Device {
   // Write the board's own settings to its storage, so they survive a power
   // cycle. Explicit rather than implied by `WriteAutorun`: a bench changes
   // autorun a dozen times an hour, and a flash write is not free.
-  rpc SaveSettings(SaveSettingsRequest) returns (Ok);
+  rpc SaveSettings(SaveSettingsRequest) returns (SaveSettingsResult);
 }
 
 // The graph documents this rig holds.
@@ -153,7 +152,12 @@ service GraphStore {
 service StateMachineConfigStore {
   rpc ListConfigs(ListConfigsRequest) returns (StateMachineConfigSummaries);
   rpc ReadConfigFile(ReadFileRequest) returns (StoredFile);
-  rpc WriteConfigFile(StoredFile) returns (StateMachineConfigSummary);
+  // Answers with the **whole store**, as `DeleteConfig` does, rather than with
+  // the one summary. `loaded` beside the listing is what says whether this
+  // write landed on the config the rig is running — which is not derivable
+  // from a summary alone, and is the question somebody editing during a
+  // session is actually asking.
+  rpc WriteConfigFile(StoredFile) returns (StateMachineConfigSummaries);
   rpc DeleteConfig(DeleteFileRequest) returns (StateMachineConfigSummaries);
 
   // Make one the rig's: apply its line map, and push the wiring.

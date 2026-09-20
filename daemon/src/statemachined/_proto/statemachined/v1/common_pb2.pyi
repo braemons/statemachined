@@ -13,9 +13,3 @@ class Error(_message.Message):
     detail: str
     context: str
     def __init__(self, error: _Optional[str] = ..., detail: _Optional[str] = ..., context: _Optional[str] = ...) -> None: ...
-
-class Ok(_message.Message):
-    __slots__ = ("ok",)
-    OK_FIELD_NUMBER: _ClassVar[int]
-    ok: bool
-    def __init__(self, ok: _Optional[bool] = ...) -> None: ...

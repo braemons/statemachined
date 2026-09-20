@@ -26,11 +26,13 @@ from statemachined.daemon.api.servicers.refusals import (
 )
 from statemachined.daemon.event_recording import (
     BadRecordingName,
+    RecordingIsInProgress,
     RecordingNameTaken,
     RecordingNotInStore,
     RecordingStateRefused,
 )
 from statemachined.daemon.graph_store import GraphNameMismatch, GraphNotInStore
+from statemachined.graph_set_compiler import GraphNotInSet, GraphSetCompilationError
 from statemachined.daemon.state_machine_config_store import (
     ConfigNameMismatch,
     ConfigNotInStore,
@@ -52,6 +54,9 @@ EVERY_DOMAIN_REFUSAL = [
     RecordingStateRefused,
     DeviceNotConnected,
     NoGraphSetCommitted,
+    GraphSetCompilationError,
+    GraphNotInSet,
+    RecordingIsInProgress,
 ]
 
 
@@ -69,6 +74,31 @@ def test_every_refusal_names_what_to_change(kind):
     """Never empty. Where there is nothing specific it repeats `error`,
     because "which field" with no answer is worse than a coarse one."""
     assert refusal_for(kind("something went wrong")).context
+
+
+def test_a_set_without_the_graph_is_not_a_set_that_does_not_fit():
+    """Two different things to fix, and the table is walked in order.
+
+    `GraphNotInSet` subclasses `GraphSetCompilationError`, so a table that
+    listed the general one first would answer `does_not_fit` — and send
+    somebody looking for a board that was never full.
+    """
+    assert refusal_for(GraphNotInSet("this set has no graph called 'x'")).error == (
+        "graph_not_in_set"
+    )
+    assert refusal_for(GraphSetCompilationError("too many states")).error == "does_not_fit"
+
+
+def test_a_recording_in_progress_is_not_the_same_as_the_wrong_moment():
+    """"Stop it first" and "there is nothing open" are different things to do.
+
+    `RecordingIsInProgress` subclasses `RecordingStateRefused`, and the table
+    is walked in order, so the specific one has to come first.
+    """
+    assert refusal_for(RecordingIsInProgress("it is being written")).error == (
+        "recording_in_progress"
+    )
+    assert refusal_for(RecordingStateRefused("nothing is open")).error == "recording_state"
 
 
 def test_the_table_only_names_exceptions_that_exist():

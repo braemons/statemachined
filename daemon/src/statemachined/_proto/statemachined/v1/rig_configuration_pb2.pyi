@@ -6,12 +6,13 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 DESCRIPTOR: _descriptor.FileDescriptor
 
 class RigConfiguration(_message.Message):
-    __slots__ = ("device_target", "device_baud", "device_timeout_seconds", "expected_board", "connect_on_startup", "startup_state_machine_config", "graph_mode", "trace_ring_entries", "heartbeat_seconds", "trace_directory", "graph_store_directory", "recording_directory", "state_machine_config_directory")
+    __slots__ = ("device_target", "device_baud", "device_timeout_seconds", "expected_board", "connect_on_startup", "session_seed", "startup_state_machine_config", "graph_mode", "trace_ring_entries", "heartbeat_seconds", "trace_directory", "graph_store_directory", "recording_directory", "state_machine_config_directory")
     DEVICE_TARGET_FIELD_NUMBER: _ClassVar[int]
     DEVICE_BAUD_FIELD_NUMBER: _ClassVar[int]
     DEVICE_TIMEOUT_SECONDS_FIELD_NUMBER: _ClassVar[int]
     EXPECTED_BOARD_FIELD_NUMBER: _ClassVar[int]
     CONNECT_ON_STARTUP_FIELD_NUMBER: _ClassVar[int]
+    SESSION_SEED_FIELD_NUMBER: _ClassVar[int]
     STARTUP_STATE_MACHINE_CONFIG_FIELD_NUMBER: _ClassVar[int]
     GRAPH_MODE_FIELD_NUMBER: _ClassVar[int]
     TRACE_RING_ENTRIES_FIELD_NUMBER: _ClassVar[int]
@@ -25,6 +26,7 @@ class RigConfiguration(_message.Message):
     device_timeout_seconds: float
     expected_board: str
     connect_on_startup: bool
+    session_seed: str
     startup_state_machine_config: str
     graph_mode: str
     trace_ring_entries: int
@@ -33,21 +35,23 @@ class RigConfiguration(_message.Message):
     graph_store_directory: str
     recording_directory: str
     state_machine_config_directory: str
-    def __init__(self, device_target: _Optional[str] = ..., device_baud: _Optional[int] = ..., device_timeout_seconds: _Optional[float] = ..., expected_board: _Optional[str] = ..., connect_on_startup: _Optional[bool] = ..., startup_state_machine_config: _Optional[str] = ..., graph_mode: _Optional[str] = ..., trace_ring_entries: _Optional[int] = ..., heartbeat_seconds: _Optional[float] = ..., trace_directory: _Optional[str] = ..., graph_store_directory: _Optional[str] = ..., recording_directory: _Optional[str] = ..., state_machine_config_directory: _Optional[str] = ...) -> None: ...
+    def __init__(self, device_target: _Optional[str] = ..., device_baud: _Optional[int] = ..., device_timeout_seconds: _Optional[float] = ..., expected_board: _Optional[str] = ..., connect_on_startup: _Optional[bool] = ..., session_seed: _Optional[str] = ..., startup_state_machine_config: _Optional[str] = ..., graph_mode: _Optional[str] = ..., trace_ring_entries: _Optional[int] = ..., heartbeat_seconds: _Optional[float] = ..., trace_directory: _Optional[str] = ..., graph_store_directory: _Optional[str] = ..., recording_directory: _Optional[str] = ..., state_machine_config_directory: _Optional[str] = ...) -> None: ...
 
 class RigConfigurationPatch(_message.Message):
-    __slots__ = ("device_target", "device_baud", "expected_board", "graph_mode", "startup_state_machine_config")
+    __slots__ = ("device_target", "device_baud", "expected_board", "graph_mode", "startup_state_machine_config", "session_seed")
     DEVICE_TARGET_FIELD_NUMBER: _ClassVar[int]
     DEVICE_BAUD_FIELD_NUMBER: _ClassVar[int]
     EXPECTED_BOARD_FIELD_NUMBER: _ClassVar[int]
     GRAPH_MODE_FIELD_NUMBER: _ClassVar[int]
     STARTUP_STATE_MACHINE_CONFIG_FIELD_NUMBER: _ClassVar[int]
+    SESSION_SEED_FIELD_NUMBER: _ClassVar[int]
     device_target: str
     device_baud: int
     expected_board: str
     graph_mode: str
     startup_state_machine_config: str
-    def __init__(self, device_target: _Optional[str] = ..., device_baud: _Optional[int] = ..., expected_board: _Optional[str] = ..., graph_mode: _Optional[str] = ..., startup_state_machine_config: _Optional[str] = ...) -> None: ...
+    session_seed: str
+    def __init__(self, device_target: _Optional[str] = ..., device_baud: _Optional[int] = ..., expected_board: _Optional[str] = ..., graph_mode: _Optional[str] = ..., startup_state_machine_config: _Optional[str] = ..., session_seed: _Optional[str] = ...) -> None: ...
 
 class RigConfigurationUpdate(_message.Message):
     __slots__ = ("configuration", "reconnected", "until_restart")

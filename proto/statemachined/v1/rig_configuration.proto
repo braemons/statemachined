@@ -24,6 +24,12 @@ message RigConfiguration {
 
   bool connect_on_startup = 5 [json_name = "connect_on_startup"];
 
+  // Fixed for the life of the daemon when set, so that a whole session —
+  // including one interrupted by a reconnect — replays. Empty means one is
+  // drawn per connection, which is right for a rig and wrong for a
+  // reproduction.
+  string session_seed = 14 [json_name = "session_seed"];
+
   // A config to load when the daemon starts, so a rig comes back up loaded
   // rather than waiting for somebody to notice.
   string startup_state_machine_config = 6 [json_name = "startup_state_machine_config"];
@@ -57,6 +63,11 @@ message RigConfigurationPatch {
   optional string expected_board = 3 [json_name = "expected_board"];
   optional string graph_mode = 4 [json_name = "graph_mode"];
   optional string startup_state_machine_config = 5 [json_name = "startup_state_machine_config"];
+
+  // See `RigConfiguration.session_seed`. Patchable because pinning it is what
+  // somebody does to reproduce a session, and an empty string is a value —
+  // "draw one per connection" — which is why this is `optional`.
+  optional string session_seed = 6 [json_name = "session_seed"];
 }
 
 message RigConfigurationUpdate {

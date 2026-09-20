@@ -638,6 +638,7 @@ dev = [
 test = [
     { name = "pytest" },
     { name = "statemachined", extra = ["device", "serve"] },
+    { name = "statemachined-client" },
 ]
 
 [package.metadata]
@@ -664,6 +665,30 @@ dev = [
 test = [
     { name = "pytest", specifier = ">=8.0" },
     { name = "statemachined", extras = ["device", "serve"], editable = "." },
+    { name = "statemachined-client", editable = "../client/python" },
+]
+
+[[package]]
+name = "statemachined-client"
+version = "0.0.0"
+source = { editable = "../client/python" }
+dependencies = [
+    { name = "grpcio" },
+    { name = "protobuf" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "grpcio", specifier = ">=1.66" },
+    { name = "protobuf", specifier = ">=5.27" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "grpcio-tools", specifier = ">=1.66" },
+    { name = "pytest", specifier = ">=8.3" },
+    { name = "ruff", specifier = ">=0.8" },
+    { name = "ty", specifier = ">=0.0.1a1" },
 ]
 
 [[package]]

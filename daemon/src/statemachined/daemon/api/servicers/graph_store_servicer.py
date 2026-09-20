@@ -89,11 +89,33 @@ class GraphStoreServicer(service_pb2_grpc.GraphStoreServicer):
         return await answering(context, body)
 
     async def DeleteGraph(self, request, context):
+        """Remove a graph from the store — unless a session is running it.
+
+        **The guard is the point.** The board holds the compiled set, so
+        deleting the file does not stop a trial; what it does is make the
+        paradigm that ran unreproducible, halfway through the session that ran
+        it. A trial could still name it, and then the record would point at a
+        graph nobody can read.
+        """
+
         def body():
+            self._refuse_if_the_session_is_running(request.name)
             self.service.graph_store.delete(request.name)
             return convert.graph_summaries_to_wire(self._summaries())
 
         return await answering(context, body)
+
+    def _refuse_if_the_session_is_running(self, graph_name: str) -> None:
+        committed = self.service.supervisor.committed_graph_set
+        if committed is not None and any(
+            graph.name == graph_name for graph in committed.graphs_by_slot
+        ):
+            raise Refusal(
+                Category.WRONG_MOMENT,
+                "graph_in_use",
+                f"{graph_name!r} is in the committed set and a trial could still name it",
+                "name",
+            )
 
     def _validate(self, graph: GraphDefinition) -> dict:
         """Every rule, plus **this board's** capacities.
@@ -149,9 +171,26 @@ class GraphStoreServicer(service_pb2_grpc.GraphStoreServicer):
         return await answering(context, body)
 
     async def UploadGraph(self, request, context):
+        """Put one graph on the board on its own — a bench convenience.
+
+        **Refused while a session's set is committed**, because the board holds
+        one set and this replaces it: losing a session's paradigms because
+        somebody previewed a graph is not a recoverable mistake. A set of one
+        is not a session, so that case is allowed through.
+        """
+
         def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached()
+            committed = self.service.supervisor.committed_graph_set
+            if committed is not None and len(committed.graphs_by_slot) > 1:
+                raise Refusal(
+                    Category.WRONG_MOMENT,
+                    "session_set_committed",
+                    f"a session's set of {len(committed.graphs_by_slot)} graphs is "
+                    "committed; uploading one graph would replace it",
+                    "name",
+                )
             compiled, _elapsed = self.service.upload_session_graph_set([request.name])
             return convert.committed_set_to_wire(compiled)
 

@@ -83,6 +83,32 @@ def device_capacities_to_wire(
     )
 
 
+#: The pools a board has, in the order a panel reads them. Written out rather
+#: than taken from the dict's keys so that a pool the compiler adds and this
+#: message does not know about is a `KeyError` here — at the seam, where it is
+#: still cheap — instead of a column that silently stops being shown.
+POOL_NAMES = (
+    "graphs",
+    "states",
+    "transitions",
+    "output_actions",
+    "distributions",
+    "choice_options",
+)
+
+
+def pool_counts_to_wire(counts: dict[str, int]) -> device_pb2.GraphPoolCounts:
+    """What a set costs, or what a board holds. Six numbers, not one.
+
+    `graph_set_compiler` measures six pools and they fill independently: a set
+    can be two states short of the limit with room for forty more transitions.
+    This was one `int32` in the first cut of the interface, which made every
+    rpc carrying it raise `'dict' object cannot be interpreted as an integer` —
+    found by driving a session against a real board.
+    """
+    return device_pb2.GraphPoolCounts(**{name: int(counts[name]) for name in POOL_NAMES})
+
+
 def committed_set_to_wire(committed: Any | None) -> device_pb2.CommittedGraphSet | None:
     """The graph set on the board, by the names it was compiled from."""
     if committed is None:
@@ -90,8 +116,8 @@ def committed_set_to_wire(committed: Any | None) -> device_pb2.CommittedGraphSet
     return device_pb2.CommittedGraphSet(
         set_version=committed.set_version,
         graph_names=[graph.name for graph in committed.graphs_by_slot],
-        pool_usage=committed.pool_usage,
-        pool_capacity=committed.pool_capacity,
+        pool_usage=pool_counts_to_wire(committed.pool_usage),
+        pool_capacity=pool_counts_to_wire(committed.pool_capacity),
     )
 
 
@@ -178,6 +204,7 @@ def line_map_view_to_wire(
             pin_label=definition.pin_label,
             reads_active_low=definition.reads_active_low,
             is_enabled=definition.is_enabled,
+            debounce_milliseconds=definition.debounce_milliseconds,
         )
         if definition.line_index is not None:
             line.line_index = definition.line_index
@@ -277,7 +304,26 @@ def autorun_request_from_wire(request: device_pb2.WriteAutorunRequest) -> dict:
         arguments["seed"] = request.seed
     if request.HasField("first_trial_id"):
         arguments["first_trial_id"] = request.first_trial_id
+    if request.HasField("start_now"):
+        arguments["start_now"] = request.start_now
     return arguments
+
+
+def save_settings_result_to_wire(saved: dict[str, Any]) -> device_pb2.SaveSettingsResult:
+    """What the board said about writing its own flash.
+
+    Not "it worked". `write_count` is a wear budget — about 100,000 erase
+    cycles on the reference board — and `written: false` says the settings
+    were already there and no cycle was spent, which is what makes a save
+    button safe to press twice.
+    """
+    return device_pb2.SaveSettingsResult(
+        written=bool(saved.get("written")),
+        write_count=int(saved.get("write_count", 0)),
+        has_set=bool(saved.get("has_set")),
+        set_version=int(saved.get("set_version") or 0),
+        autorun=bool(saved.get("autorun")),
+    )
 
 
 def write_line_map_result_to_wire(

@@ -3,6 +3,10 @@ syntax = "proto3";
 
 package statemachined.v1;
 
+// For `GraphPoolCounts`: what a graph costs is measured against a board, and
+// the board's pools are described there.
+import "statemachined/v1/device.proto";
+
 // The three documents this daemon stores, and the rpcs that carry them.
 //
 // **A graph, a line map and a state-machine config are files, not messages.**
@@ -71,13 +75,38 @@ message GraphValidation {
   // Why not. Empty when it is.
   string detail = 2;
 
-  int32 pool_usage = 3 [json_name = "pool_usage"];
-  int32 pool_capacity = 4 [json_name = "pool_capacity"];
+  GraphPoolCounts pool_usage = 3 [json_name = "pool_usage"];
+  GraphPoolCounts pool_capacity = 4 [json_name = "pool_capacity"];
 
   // Legal, uploads, runs — and probably narrower than its author thinks.
   // **Reported rather than refused**: a graph whose predicate can never be
   // true is a paradigm somebody meant, right up until it is not.
-  repeated string warnings = 5;
+  repeated GraphWarning warnings = 5;
+}
+
+// One thing that is legal, runs exactly as written, and is probably not what
+// somebody meant.
+//
+// **Structured and not a sentence**, because an editor puts it next to the
+// line that caused it: `state` and `transition` are where to put the marker,
+// and `detail` is what to say there. A string would have made the editor
+// parse English to find the place.
+message GraphWarning {
+  // What kind of warning, as a stable word to branch on:
+  // `any_clause_has_no_effect` is the one this daemon raises today.
+  string kind = 1;
+
+  // Where. The state's name, and the transition's position within it — the
+  // position rather than a name because a transition has no name.
+  string state = 2;
+  int32 transition = 3;
+
+  // The lines the warning is about, by name.
+  repeated string lines = 4;
+
+  // One sentence, written to be read, usually ending in a question about what
+  // the author meant.
+  string detail = 5;
 }
 
 // Enough of one stored state-machine config to choose between them.

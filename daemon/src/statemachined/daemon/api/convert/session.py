@@ -15,7 +15,7 @@ from typing import Any
 
 from statemachined._proto.statemachined.v1 import session_pb2
 
-from .device import committed_set_to_wire
+from .device import committed_set_to_wire, pool_counts_to_wire
 
 
 def loaded_config_to_wire(
@@ -79,8 +79,8 @@ def open_session_result_to_wire(
         state_machine_config=state_machine_config,
         set_version=compiled.set_version,
         slots={graph.name: graph.slot for graph in compiled.graphs_by_slot},
-        pool_usage=compiled.pool_usage,
-        pool_capacity=compiled.pool_capacity,
+        pool_usage=pool_counts_to_wire(compiled.pool_usage),
+        pool_capacity=pool_counts_to_wire(compiled.pool_capacity),
         elapsed_milliseconds=elapsed_milliseconds,
     )
 

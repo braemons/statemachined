@@ -24,15 +24,9 @@ daemon ships.
 
 from __future__ import annotations
 
-import contextlib
-import queue
-import threading
-
 import pytest
-from fastapi.testclient import TestClient
+from grpc_harness import DaemonOnALoopbackPort
 from rig_harness import configuration_for
-from statemachined.client import StatemachinedClient
-from statemachined.daemon.api.application import create_application
 
 # The bridge is part of the daemon, not part of these tests: it is how anybody
 # runs this daemon with no board on the desk, from a checkout (`make
@@ -68,93 +62,40 @@ def native_device(tmp_path):
 
 # ------------------------------------------------ the client, over that daemon ---
 #
-# `statemachined.client` against the same daemon, in the same process. What this
-# adds over `test_http_api_against_native_device.py` is only the client: the
-# daemon and the device beneath it are identical, so a failure here is the
-# client's and a failure there is the daemon's, which is the whole reason both
-# suites exist rather than one.
+# `statemachined-client` against this daemon's own servicers, over a real gRPC
+# channel on a loopback port. What this exercises that nothing below it can is
+# the assembled thing: the servicers, the refusals as trailing metadata, the
+# streams, and the client's seam — all of it the code a rig runs.
 #
-# `tests/e2e/` is where the client's *defaults* are exercised -- a real httpx
-# connection and a real WebSocket handshake through uvicorn. Neither can be
-# reached from in-process, and neither is what these tests are about.
-
-#: What the client believes it is talking to. `TestClient` routes by path and
-#: ignores the host, so this is arbitrary -- and deliberately not localhost, so
-#: that a test asserting on a URL asserts on the client's own arithmetic rather
-#: than on a default that happens to match.
-RIG_URL = "http://statemachined.test"
+# **The client is the published one, with its published defaults.** There is no
+# injected transport and no test double, because the failure this suite is for
+# is precisely that the shipped client and the shipped daemon disagree.
+#
+# `tests/e2e/` is where the daemon is a *process*: `statemachined serve`, two
+# listeners, a real socket. Neither can be reached from in-process, and neither
+# is what these tests are about.
 
 
 @pytest.fixture
 def daemon(native_device, tmp_path):
-    """The shipped daemon, wired to that device, with stores of its own."""
-    with TestClient(create_application(configuration_for(native_device, tmp_path))) as client:
-        yield client
+    """The shipped servicers over the shipped service, wired to that device."""
+    harness = DaemonOnALoopbackPort(configuration_for(native_device, tmp_path))
+    harness.start()
+    try:
+        yield harness
+    finally:
+        harness.stop()
 
 
 @pytest.fixture
 def rig(daemon):
     """The client, pointed at that daemon.
 
-    Starlette's `TestClient` **is** an `httpx.Client`, and that is the trick: it
-    routes by path and ignores the host, so the client builds exactly the URL it
-    would build on a real network and the request lands in the app in this
-    process. `httpx.ASGITransport` cannot be used for it -- that one is
-    async-only, and everything in this package is synchronous on purpose.
-
-    The websocket factory is injected for the same reason from the other
-    direction: `TestClient` runs a WebSocket route in this process too, and
-    `WebSocketOverTheTestClient` below adapts its session to the one method a
-    subscription needs.
+    `wait_until_ready` before anything else: the harness has bound its port,
+    but the channel has not connected, and a first call that raced that would
+    fail as `unavailable` and say nothing about what it was testing.
     """
-    client = StatemachinedClient(
-        RIG_URL,
-        timeout_seconds=30.0,
-        http_client=daemon,
-        open_websocket=lambda url: WebSocketOverTheTestClient(daemon, url),
-    )
+    client = daemon.client()
+    client.wait_until_ready(timeout_s=10)
     with client:
         yield client
-
-
-class WebSocketOverTheTestClient:
-    """Starlette's in-process WebSocket, with a deadline on receiving.
-
-    `WebSocketTestSession.receive_text()` blocks for ever, which is the right
-    default for a test asserting on a frame it knows is coming and the wrong one
-    for a subscription whose whole contract is that the deadline belongs to the
-    subscriber. So one thread pumps frames into a queue and `recv` takes them
-    with a timeout -- which is also what makes a *failing* test here fail in
-    seconds with a message instead of hanging a CI job.
-    """
-
-    def __init__(self, test_client: TestClient, url: str) -> None:
-        # ASGI routes by path; the ws:// host in the URL is the client's own
-        # arithmetic and is not where this connects.
-        path_and_query = url.split("://", 1)[-1].split("/", 1)[-1]
-        self._session = test_client.websocket_connect("/" + path_and_query)
-        self._socket = self._session.__enter__()
-        self._frames: queue.Queue = queue.Queue()
-        threading.Thread(target=self._pump_frames, daemon=True).start()
-
-    def _pump_frames(self) -> None:
-        try:
-            while True:
-                self._frames.put(self._socket.receive_text())
-        except Exception as exc:  # noqa: BLE001
-            self._frames.put(exc)
-
-    def recv(self, timeout: float | None = None):
-        try:
-            frame = self._frames.get(timeout=timeout)
-        except queue.Empty:
-            raise TimeoutError("nothing arrived on the subscription") from None
-        if isinstance(frame, Exception):
-            raise frame
-        return frame
-
-    def close(self) -> None:
-        # The daemon may have closed it first -- which it does, deliberately, to
-        # a subscriber that fell out of the ring.
-        with contextlib.suppress(Exception):
-            self._session.__exit__(None, None, None)

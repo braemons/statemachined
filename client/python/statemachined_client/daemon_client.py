@@ -38,6 +38,7 @@ from ._proto.statemachined.v1 import (
 )
 from .api_types import (
     DEFAULT_OBSERVER_NAME,
+    KIND_TRIAL_RESULT,
     Autorun,
     CancelTrialResult,
     CommittedGraphSet,
@@ -59,19 +60,19 @@ from .api_types import (
     RigConfigurationPatch,
     RigConfigurationUpdate,
     RigState,
+    SaveSettingsResult,
     SerialMonitorEntry,
     SerialMonitorWindow,
     SessionState,
     StartTrialResult,
     StateMachineConfigSummaries,
-    StateMachineConfigSummary,
     StoredFile,
     TraceEntry,
     TraceWindow,
     TrialResult,
     WriteLineMapResult,
 )
-from .daemon_refusals import DaemonIsUnavailable
+from .daemon_refusals import DaemonIsUnavailable, DaemonRefusedTheRequest
 
 #: What a person types into a browser, and what a console's `rigs.json` holds.
 #: The panels are served here; this client does not talk to it.
@@ -232,14 +233,21 @@ class StatemachinedClient:
             call(lambda: self._state.ReadState(service_pb2.ReadStateRequest()))
         )
 
-    def watch_state(self) -> DaemonStreamSubscription[RigState]:
+    def watch_state(
+        self, *, timeout_s: float | None = None
+    ) -> DaemonStreamSubscription[RigState]:
         """The rig's state, as it changes. `State/WatchState`.
 
         The first frame is the state now, so a panel does not have to read and
         subscribe and then reconcile the two.
+
+        `timeout_s` is a deadline on the **whole subscription**, not on one
+        frame — that is what a gRPC deadline is. `None`, the default, is a
+        stream that runs until something closes it, which is what a panel
+        wants; a script that must not block for ever gives a number.
         """
         return DaemonStreamSubscription(
-            lambda: self._state.WatchState(service_pb2.WatchStateRequest()),
+            lambda: self._state.WatchState(service_pb2.WatchStateRequest(), timeout=timeout_s),
             lambda frame: convert.rig_state_from_wire(frame.state),
         )
 
@@ -263,7 +271,11 @@ class StatemachinedClient:
         )
 
     def watch_trace(
-        self, since_entry_number: int = 0, *, observer: str = DEFAULT_OBSERVER_NAME
+        self,
+        since_entry_number: int = 0,
+        *,
+        observer: str = DEFAULT_OBSERVER_NAME,
+        timeout_s: float | None = None,
     ) -> DaemonStreamSubscription[TraceEntry]:
         """Trace entries as they are recorded. `State/WatchTrace`.
 
@@ -286,8 +298,46 @@ class StatemachinedClient:
             lambda: self._state.WatchTrace(
                 state_pb2.WatchTraceRequest(since_entry_number=since_entry_number),
                 metadata=(("observer-name", observer),),
+                timeout=timeout_s,
             ),
             convert.trace_entry_from_wire,
+        )
+
+    def wait_for_trial(
+        self, trial_id: int, *, timeout_s: float, since_entry_number: int = 0
+    ) -> TraceEntry:
+        """Block until that trial ends, and give the entry that says so.
+
+        **The loop every caller of this API writes**, which is why it is here
+        rather than in each of them: subscribe, read until the result for one
+        trial goes past, stop. Getting it wrong quietly — no deadline, or the
+        wrong kind — is a script that hangs a rig at three in the morning.
+
+        `timeout_s` is required and has no default. Only the side that knows a
+        trial is in flight can tell "not yet" from "never", and that is the
+        caller; a client that picked a number would be guessing at somebody
+        else's experiment.
+
+        **Subscribe before you arm.** Call this after `start_trial` and the
+        backlog covers you — `since_entry_number=0` carries everything the ring
+        still holds — but only for as long as the ring holds it. On a busy rig,
+        read `newest_trace_entry_number` before arming and pass it here.
+
+        Raises:
+            DaemonRefusedTheRequest: with `status` `deadline_exceeded` if the
+                trial has not ended in `timeout_s`. That is an answer, not a
+                failure of this call: the trial is still running, or it ended
+                in a way that published nothing, and both are worth knowing.
+        """
+        with self.watch_trace(since_entry_number, timeout_s=timeout_s) as entries:
+            for entry in entries:
+                if entry.kind == KIND_TRIAL_RESULT and entry.trial_id == trial_id:
+                    return entry
+        raise DaemonRefusedTheRequest(
+            "deadline_exceeded",
+            "no_result_yet",
+            f"trial {trial_id} did not end within {timeout_s:g}s",
+            "trial_id",
         )
 
     def read_trial_trace(self, trial_id: int) -> list[TraceEntry]:
@@ -446,7 +496,7 @@ class StatemachinedClient:
         )
 
     def watch_serial_monitor(
-        self, since_entry_number: int = 0
+        self, since_entry_number: int = 0, *, timeout_s: float | None = None
     ) -> DaemonStreamSubscription[SerialMonitorEntry]:
         """The serial port's text, as it goes past. `Device/WatchSerialMonitor`.
 
@@ -455,7 +505,8 @@ class StatemachinedClient:
         """
         return DaemonStreamSubscription(
             lambda: self._device.WatchSerialMonitor(
-                device_pb2.WatchSerialMonitorRequest(since_entry_number=since_entry_number)
+                device_pb2.WatchSerialMonitorRequest(since_entry_number=since_entry_number),
+                timeout=timeout_s,
             ),
             convert.serial_monitor_entry_from_wire,
         )
@@ -481,6 +532,7 @@ class StatemachinedClient:
         cap_milliseconds: int = 0,
         seed: int | None = None,
         first_trial_id: int | None = None,
+        start_now: bool | None = None,
     ) -> Autorun:
         """Turn the board's own trial loop on or off. `Device/WriteAutorun`.
 
@@ -488,8 +540,13 @@ class StatemachinedClient:
         what makes a rig survive a host that goes away. `seed` fixes the draw,
         so a session can be repeated; left unset the board picks one.
 
-        The three `None` defaults are "leave it": an autorun already configured
-        keeps its graph when you enable it again.
+        The `None` defaults are "leave it": an autorun already configured keeps
+        its graph when you enable it again.
+
+        **`start_now=False` is how a rig is actually set up**: enable, save,
+        power cycle. `save_settings` is refused on a board that is running, and
+        a board arming its own trials is never idle — so without this the
+        setting could never reach the flash.
         """
         request = device_pb2.WriteAutorunRequest(
             enabled=enabled, cap_milliseconds=cap_milliseconds
@@ -500,15 +557,28 @@ class StatemachinedClient:
             request.seed = seed
         if first_trial_id is not None:
             request.first_trial_id = first_trial_id
+        if start_now is not None:
+            request.start_now = start_now
         return convert.autorun_from_wire(call(lambda: self._device.WriteAutorun(request)))
 
-    def save_settings(self) -> None:
+    def save_settings(self) -> SaveSettingsResult:
         """Persist the board's settings to its own flash. `Device/SaveSettings`.
 
-        The board's, not the daemon's: wiring and autorun survive a power cycle
-        only once this has been called.
+        The board's, not the daemon's: wiring, graph set and autorun survive a
+        power cycle only once this has been called.
+
+        **Read `write_count`.** Data flash wears out — about 100,000 erase
+        cycles on the reference board — and this is the only thing that says
+        how far through that budget a rig is. `written` is `False` when the
+        settings were already there, which is a success: the board compares
+        before it writes, so pressing save twice costs nothing.
+
+        Refused while a trial is running: it erases flash, and the board will
+        not stall its scan loop for that.
         """
-        call(lambda: self._device.SaveSettings(service_pb2.SaveSettingsRequest()))
+        return convert.save_settings_result_from_wire(
+            call(lambda: self._device.SaveSettings(service_pb2.SaveSettingsRequest()))
+        )
 
     # -- the graph store --------------------------------------------------------
 
@@ -606,10 +676,16 @@ class StatemachinedClient:
             call(lambda: self._configs.ReadConfigFile(documents_pb2.ReadFileRequest(name=name)))
         )
 
-    def write_config(self, name: str, text: str) -> StateMachineConfigSummary:
+    def write_config(self, name: str, text: str) -> StateMachineConfigSummaries:
         """Write one state machine config into the store.
-        `StateMachineConfigStore/WriteConfigFile`."""
-        return convert.config_summary_from_wire(
+        `StateMachineConfigStore/WriteConfigFile`.
+
+        **Saving is not loading.** The rig goes on running whatever it had; the
+        whole store comes back so `loaded` says whether this write landed on
+        the config in use, which is the question somebody editing during a
+        session is asking.
+        """
+        return convert.config_summaries_from_wire(
             call(
                 lambda: self._configs.WriteConfigFile(
                     documents_pb2.StoredFile(name=name, text=text)
@@ -799,7 +875,7 @@ class StatemachinedClient:
     def patch_configuration(self, patch: RigConfigurationPatch) -> RigConfigurationUpdate:
         """Change some of the rig config. `Configuration/PatchConfiguration`.
 
-        A patch and not a replace, and only five fields: the directories are
+        A patch and not a replace, and only six fields: the directories are
         where a running daemon's files *are*, and changing one over the network
         would move a store out from under an open session. Those are edited on
         the box.

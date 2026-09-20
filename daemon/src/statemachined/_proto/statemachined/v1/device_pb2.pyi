@@ -34,6 +34,22 @@ class DeviceCapacities(_message.Message):
     output_line_count: int
     def __init__(self, max_line: _Optional[int] = ..., max_states: _Optional[int] = ..., max_transitions: _Optional[int] = ..., max_output_actions: _Optional[int] = ..., max_distributions: _Optional[int] = ..., max_choice_options: _Optional[int] = ..., max_path: _Optional[int] = ..., max_graphs: _Optional[int] = ..., max_timers: _Optional[int] = ..., first_timer_line: _Optional[int] = ..., input_line_count: _Optional[int] = ..., output_line_count: _Optional[int] = ...) -> None: ...
 
+class GraphPoolCounts(_message.Message):
+    __slots__ = ("graphs", "states", "transitions", "output_actions", "distributions", "choice_options")
+    GRAPHS_FIELD_NUMBER: _ClassVar[int]
+    STATES_FIELD_NUMBER: _ClassVar[int]
+    TRANSITIONS_FIELD_NUMBER: _ClassVar[int]
+    OUTPUT_ACTIONS_FIELD_NUMBER: _ClassVar[int]
+    DISTRIBUTIONS_FIELD_NUMBER: _ClassVar[int]
+    CHOICE_OPTIONS_FIELD_NUMBER: _ClassVar[int]
+    graphs: int
+    states: int
+    transitions: int
+    output_actions: int
+    distributions: int
+    choice_options: int
+    def __init__(self, graphs: _Optional[int] = ..., states: _Optional[int] = ..., transitions: _Optional[int] = ..., output_actions: _Optional[int] = ..., distributions: _Optional[int] = ..., choice_options: _Optional[int] = ...) -> None: ...
+
 class CommittedGraphSet(_message.Message):
     __slots__ = ("set_version", "graph_names", "pool_usage", "pool_capacity")
     SET_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -42,9 +58,9 @@ class CommittedGraphSet(_message.Message):
     POOL_CAPACITY_FIELD_NUMBER: _ClassVar[int]
     set_version: int
     graph_names: _containers.RepeatedScalarFieldContainer[str]
-    pool_usage: int
-    pool_capacity: int
-    def __init__(self, set_version: _Optional[int] = ..., graph_names: _Optional[_Iterable[str]] = ..., pool_usage: _Optional[int] = ..., pool_capacity: _Optional[int] = ...) -> None: ...
+    pool_usage: GraphPoolCounts
+    pool_capacity: GraphPoolCounts
+    def __init__(self, set_version: _Optional[int] = ..., graph_names: _Optional[_Iterable[str]] = ..., pool_usage: _Optional[_Union[GraphPoolCounts, _Mapping]] = ..., pool_capacity: _Optional[_Union[GraphPoolCounts, _Mapping]] = ...) -> None: ...
 
 class LinkHealth(_message.Message):
     __slots__ = ("connection_count", "dropped_lines", "bad_lines", "last_error")
@@ -101,20 +117,22 @@ class DeviceState(_message.Message):
     def __init__(self, connected: _Optional[bool] = ..., target: _Optional[str] = ..., board: _Optional[str] = ..., firmware_version: _Optional[str] = ..., protocol_version: _Optional[int] = ..., measured_scan_hz: _Optional[int] = ..., capacities: _Optional[_Union[DeviceCapacities, _Mapping]] = ..., has_wiring: _Optional[bool] = ..., pin_labels_came_from: _Optional[str] = ..., committed_set: _Optional[_Union[CommittedGraphSet, _Mapping]] = ..., link: _Optional[_Union[LinkHealth, _Mapping]] = ..., scan: _Optional[_Union[ScanHealth, _Mapping]] = ..., uptime_device_microseconds: _Optional[int] = ...) -> None: ...
 
 class InputLine(_message.Message):
-    __slots__ = ("name", "line_index", "pin_label", "reads_active_low", "is_enabled", "is_high_now")
+    __slots__ = ("name", "line_index", "pin_label", "reads_active_low", "is_enabled", "debounce_milliseconds", "is_high_now")
     NAME_FIELD_NUMBER: _ClassVar[int]
     LINE_INDEX_FIELD_NUMBER: _ClassVar[int]
     PIN_LABEL_FIELD_NUMBER: _ClassVar[int]
     READS_ACTIVE_LOW_FIELD_NUMBER: _ClassVar[int]
     IS_ENABLED_FIELD_NUMBER: _ClassVar[int]
+    DEBOUNCE_MILLISECONDS_FIELD_NUMBER: _ClassVar[int]
     IS_HIGH_NOW_FIELD_NUMBER: _ClassVar[int]
     name: str
     line_index: int
     pin_label: str
     reads_active_low: bool
     is_enabled: bool
+    debounce_milliseconds: int
     is_high_now: bool
-    def __init__(self, name: _Optional[str] = ..., line_index: _Optional[int] = ..., pin_label: _Optional[str] = ..., reads_active_low: _Optional[bool] = ..., is_enabled: _Optional[bool] = ..., is_high_now: _Optional[bool] = ...) -> None: ...
+    def __init__(self, name: _Optional[str] = ..., line_index: _Optional[int] = ..., pin_label: _Optional[str] = ..., reads_active_low: _Optional[bool] = ..., is_enabled: _Optional[bool] = ..., debounce_milliseconds: _Optional[int] = ..., is_high_now: _Optional[bool] = ...) -> None: ...
 
 class OutputLine(_message.Message):
     __slots__ = ("name", "line_index", "pin_label", "safe_level_is_high", "is_high_now")
@@ -196,6 +214,20 @@ class WriteLineMapResult(_message.Message):
     state_machine_config: str
     def __init__(self, line_map: _Optional[_Union[LineMapView, _Mapping]] = ..., pushed_to_device: _Optional[bool] = ..., saved_to_the_store: _Optional[bool] = ..., state_machine_config: _Optional[str] = ...) -> None: ...
 
+class SaveSettingsResult(_message.Message):
+    __slots__ = ("written", "write_count", "has_set", "set_version", "autorun")
+    WRITTEN_FIELD_NUMBER: _ClassVar[int]
+    WRITE_COUNT_FIELD_NUMBER: _ClassVar[int]
+    HAS_SET_FIELD_NUMBER: _ClassVar[int]
+    SET_VERSION_FIELD_NUMBER: _ClassVar[int]
+    AUTORUN_FIELD_NUMBER: _ClassVar[int]
+    written: bool
+    write_count: int
+    has_set: bool
+    set_version: int
+    autorun: bool
+    def __init__(self, written: _Optional[bool] = ..., write_count: _Optional[int] = ..., has_set: _Optional[bool] = ..., set_version: _Optional[int] = ..., autorun: _Optional[bool] = ...) -> None: ...
+
 class FirmwareVersions(_message.Message):
     __slots__ = ("running", "installed", "running_is_stamped", "comparable", "matches")
     RUNNING_FIELD_NUMBER: _ClassVar[int]
@@ -229,15 +261,17 @@ class Autorun(_message.Message):
     def __init__(self, enabled: _Optional[bool] = ..., active: _Optional[bool] = ..., graph_name: _Optional[str] = ..., slot: _Optional[int] = ..., cap_milliseconds: _Optional[int] = ..., seed: _Optional[int] = ..., next_trial_id: _Optional[int] = ...) -> None: ...
 
 class WriteAutorunRequest(_message.Message):
-    __slots__ = ("enabled", "graph_name", "cap_milliseconds", "seed", "first_trial_id")
+    __slots__ = ("enabled", "graph_name", "cap_milliseconds", "seed", "first_trial_id", "start_now")
     ENABLED_FIELD_NUMBER: _ClassVar[int]
     GRAPH_NAME_FIELD_NUMBER: _ClassVar[int]
     CAP_MILLISECONDS_FIELD_NUMBER: _ClassVar[int]
     SEED_FIELD_NUMBER: _ClassVar[int]
     FIRST_TRIAL_ID_FIELD_NUMBER: _ClassVar[int]
+    START_NOW_FIELD_NUMBER: _ClassVar[int]
     enabled: bool
     graph_name: str
     cap_milliseconds: int
     seed: int
     first_trial_id: int
-    def __init__(self, enabled: _Optional[bool] = ..., graph_name: _Optional[str] = ..., cap_milliseconds: _Optional[int] = ..., seed: _Optional[int] = ..., first_trial_id: _Optional[int] = ...) -> None: ...
+    start_now: bool
+    def __init__(self, enabled: _Optional[bool] = ..., graph_name: _Optional[str] = ..., cap_milliseconds: _Optional[int] = ..., seed: _Optional[int] = ..., first_trial_id: _Optional[int] = ..., start_now: _Optional[bool] = ...) -> None: ...

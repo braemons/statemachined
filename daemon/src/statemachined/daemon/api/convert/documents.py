@@ -22,6 +22,8 @@ from typing import Any
 
 from statemachined._proto.statemachined.v1 import documents_pb2
 
+from .device import pool_counts_to_wire
+
 
 def stored_file_to_wire(name: str, text: str) -> documents_pb2.StoredFile:
     return documents_pb2.StoredFile(name=name, text=text)
@@ -57,12 +59,34 @@ def graph_validation_to_wire(result: dict[str, Any]) -> documents_pb2.GraphValid
     can never be true is legal, uploads, runs, and is probably narrower than
     its author thinks. Reported rather than refused.
     """
-    return documents_pb2.GraphValidation(
+    message = documents_pb2.GraphValidation(
         valid=bool(result.get("valid")),
         detail=str(result.get("detail", "")),
-        pool_usage=int(result.get("pool_usage", 0)),
-        pool_capacity=int(result.get("pool_capacity", 0)),
-        warnings=[str(warning) for warning in result.get("warnings", [])],
+        warnings=[graph_warning_to_wire(warning) for warning in result.get("warnings", ())],
+    )
+    # Only on a graph that compiled: a refusal has no pools to report, and a
+    # zeroed `GraphPoolCounts` would read as a board with no room at all.
+    if result.get("pool_usage") is not None:
+        message.pool_usage.CopyFrom(pool_counts_to_wire(result["pool_usage"]))
+        message.pool_capacity.CopyFrom(pool_counts_to_wire(result["pool_capacity"]))
+    return message
+
+
+def graph_warning_to_wire(warning: dict[str, Any]) -> documents_pb2.GraphWarning:
+    """One thing a graph does that its author probably did not mean.
+
+    **Structured, because an editor puts it next to the line that caused it.**
+    `GraphDefinition.warnings()` has always produced a dict with the state, the
+    transition's position and the lines; the first cut of the interface typed
+    this field as `repeated string` and stringified the dict, so the panel
+    showed `undefined, transition undefined: undefined`.
+    """
+    return documents_pb2.GraphWarning(
+        kind=str(warning.get("kind", "")),
+        state=str(warning.get("state", "")),
+        transition=int(warning.get("transition", 0)),
+        lines=[str(line) for line in warning.get("lines", ())],
+        detail=str(warning.get("detail", "")),
     )
 
 

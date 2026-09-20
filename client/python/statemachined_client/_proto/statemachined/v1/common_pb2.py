@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1dstatemachined/v1/common.proto\x12\x10statemachined.v1\"7\n\x05\x45rror\x12\r\n\x05\x65rror\x18\x01 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontext\x18\x03 \x01(\t\"\x10\n\x02Ok\x12\n\n\x02ok\x18\x01 \x01(\x08\x62\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1dstatemachined/v1/common.proto\x12\x10statemachined.v1\"7\n\x05\x45rror\x12\r\n\x05\x65rror\x18\x01 \x01(\t\x12\x0e\n\x06\x64\x65tail\x18\x02 \x01(\t\x12\x0f\n\x07\x63ontext\x18\x03 \x01(\tb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -33,6 +33,4 @@ if not _descriptor._USE_C_DESCRIPTORS:
   DESCRIPTOR._loaded_options = None
   _globals['_ERROR']._serialized_start=51
   _globals['_ERROR']._serialized_end=106
-  _globals['_OK']._serialized_start=108
-  _globals['_OK']._serialized_end=124
 # @@protoc_insertion_point(module_scope)

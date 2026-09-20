@@ -1,4 +1,3 @@
-from statemachined_client._proto.statemachined.v1 import common_pb2 as _common_pb2
 from statemachined_client._proto.statemachined.v1 import device_pb2 as _device_pb2
 from statemachined_client._proto.statemachined.v1 import documents_pb2 as _documents_pb2
 from statemachined_client._proto.statemachined.v1 import recording_pb2 as _recording_pb2

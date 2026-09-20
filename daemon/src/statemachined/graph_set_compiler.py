@@ -62,6 +62,20 @@ class GraphSetCompilationError(Exception):
     """
 
 
+class GraphNotInSet(GraphSetCompilationError):
+    """The committed set has no graph by that name.
+
+    **Its own class because it is a different thing to fix.** Everything else
+    here is a set that will not compile or will not fit — cut a state, drop a
+    graph. This one is a set that compiled perfectly and does not contain what
+    was asked for, and the fix is to commit a set that does. A caller told
+    `does_not_fit` would go looking for a board that was never full.
+
+    A subclass rather than a sibling so that anything catching
+    `GraphSetCompilationError` still catches it.
+    """
+
+
 class DeviceCapabilities(BaseModel):
     """What one board can hold, as `hello_ack` declares it.
 
@@ -159,9 +173,7 @@ class CompiledGraphSet:
             if graph.name == graph_name:
                 return graph
         known = ", ".join(graph.name for graph in self.graphs_by_slot)
-        raise GraphSetCompilationError(
-            f"this set has no graph called {graph_name!r}. It has: {known}"
-        )
+        raise GraphNotInSet(f"this set has no graph called {graph_name!r}. It has: {known}")
 
     def slot_for_graph_name(self, graph_name: str) -> int:
         """What `configure`'s `graph_index` must be for this paradigm.

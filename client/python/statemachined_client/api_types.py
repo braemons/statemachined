@@ -129,6 +129,28 @@ class DeviceCapacities:
 
 
 @dataclass(frozen=True)
+class GraphPoolCounts:
+    """What a graph set costs a board, pool by pool.
+
+    **Six numbers and not one**, because a board has six pools and they fill
+    independently: a set can be two states short of the limit with room for
+    forty more transitions. One total would say "it does not fit" without
+    saying what to cut, which is the only part somebody setting up a session
+    can act on.
+
+    The same type carries usage and capacity, so the two are read the same way
+    and put side by side without arithmetic.
+    """
+
+    graphs: int = 0
+    states: int = 0
+    transitions: int = 0
+    output_actions: int = 0
+    distributions: int = 0
+    choice_options: int = 0
+
+
+@dataclass(frozen=True)
 class CommittedGraphSet:
     """The graphs that are on the board right now.
 
@@ -139,10 +161,10 @@ class CommittedGraphSet:
 
     set_version: int = 0
     graph_names: list[str] = field(default_factory=list)
-    #: How much of the board's compiled-graph pool this set uses, and how much
-    #: there is. A set that does not fit is refused with both numbers.
-    pool_usage: int = 0
-    pool_capacity: int = 0
+    #: What this set costs the board, and what the board has. A set that does
+    #: not fit is refused naming the pool that overflowed and by how much.
+    pool_usage: GraphPoolCounts | None = None
+    pool_capacity: GraphPoolCounts | None = None
 
 
 @dataclass(frozen=True)
@@ -218,6 +240,10 @@ class InputLine:
     pin_label: str = ""
     reads_active_low: bool = False
     is_enabled: bool = True
+    #: How long a change must hold before it is believed. Per line rather than
+    #: per predicate, because a predicate over several lines is what chatters
+    #: worst, and no care in the graph can filter that afterwards.
+    debounce_milliseconds: int = 0
     #: The live level, where the daemon has one. `None` with no board attached.
     is_high_now: bool | None = None
 
@@ -273,8 +299,13 @@ class WriteLineMapResult:
 class SerialMonitorEntry:
     """One line of text on the serial port, in either direction.
 
-    This is the wire itself — `direction` is `"rx"` or `"tx"` — and it is a
-    debugging view, not a data path. The trace is where trials are recorded.
+    This is the wire itself — `direction` is `"to_device"` or `"from_device"`,
+    the daemon's own words — and it is a debugging view, not a data path. The
+    trace is where trials are recorded.
+
+    For the moment the layers stop agreeing: the line map says the valve is
+    line 3, the valve is not opening, and the question is what actually went
+    down the wire. Nothing here interprets anything.
     """
 
     entry_number: int = 0
@@ -298,6 +329,27 @@ class SerialMonitorWindow:
     oldest_entry_number_still_held: int = 0
     ring_capacity: int = 0
     lost_entries_before: int | None = None
+
+
+@dataclass(frozen=True)
+class SaveSettingsResult:
+    """What writing the board's settings to its own flash cost.
+
+    **`write_count` is a budget made visible.** Data flash wears out — about
+    100,000 erase cycles on the reference board — and a rig a third of the way
+    through that budget should be able to say so rather than failing one day
+    with no warning.
+
+    `written` is `False` when the settings were already there. That is a
+    success and not a refusal: a save button must not cost an erase cycle to
+    press twice, so the board compares before it writes.
+    """
+
+    written: bool = False
+    write_count: int = 0
+    has_set: bool = False
+    set_version: int = 0
+    autorun: bool = False
 
 
 @dataclass(frozen=True)
@@ -369,6 +421,28 @@ class GraphSummary:
 
 
 @dataclass(frozen=True)
+class GraphWarning:
+    """One thing a graph does that its author probably did not mean.
+
+    **Structured, not a sentence**, because an editor puts it next to the line
+    that caused it: `state` and `transition` are where to put the marker and
+    `detail` is what to say there. A string would have made the editor parse
+    English to find the place.
+
+    `transition` is a *position* within the state rather than a name, because a
+    transition has no name.
+    """
+
+    #: A stable word to branch on. `any_clause_has_no_effect` is the one this
+    #: daemon raises today.
+    kind: str = ""
+    state: str = ""
+    transition: int = 0
+    lines: list[str] = field(default_factory=list)
+    detail: str = ""
+
+
+@dataclass(frozen=True)
 class GraphValidation:
     """What compiling one graph against the attached board found.
 
@@ -379,9 +453,11 @@ class GraphValidation:
 
     valid: bool = False
     detail: str = ""
-    pool_usage: int = 0
-    pool_capacity: int = 0
-    warnings: list[str] = field(default_factory=list)
+    #: `None` on a graph that did not compile: a refusal has no pools to
+    #: report, and zeroes would read as a board with no room at all.
+    pool_usage: GraphPoolCounts | None = None
+    pool_capacity: GraphPoolCounts | None = None
+    warnings: list[GraphWarning] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -465,8 +541,8 @@ class OpenSessionResult:
     state_machine_config: str = ""
     set_version: int = 0
     slots: dict[str, int] = field(default_factory=dict)
-    pool_usage: int = 0
-    pool_capacity: int = 0
+    pool_usage: GraphPoolCounts | None = None
+    pool_capacity: GraphPoolCounts | None = None
     elapsed_milliseconds: int = 0
 
 
@@ -779,6 +855,10 @@ class RigConfiguration:
     device_baud: int = 0
     device_timeout_seconds: float = 0.0
     expected_board: str = ""
+    #: Fixed for the life of the daemon when set, so a whole session — one
+    #: interrupted by a reconnect included — replays. Empty means one is drawn
+    #: per connection, which is right for a rig and wrong for a reproduction.
+    session_seed: str = ""
     connect_on_startup: bool = False
     startup_state_machine_config: str = ""
     graph_mode: str = ""
@@ -794,7 +874,7 @@ class RigConfiguration:
 class RigConfigurationPatch:
     """The five fields of the rig config the API may change.
 
-    Five rather than all of them, on purpose: the directories are where a
+    Six rather than all of them, on purpose: the directories are where a
     running daemon's files *are*, and changing one over the network would move
     a store out from under an open session. Those are edited on the box.
 
@@ -806,6 +886,7 @@ class RigConfigurationPatch:
     expected_board: str | None = None
     graph_mode: str | None = None
     startup_state_machine_config: str | None = None
+    session_seed: str | None = None
 
 
 @dataclass(frozen=True)

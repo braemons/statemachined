@@ -1,3 +1,4 @@
+from statemachined._proto.statemachined.v1 import device_pb2 as _device_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -61,10 +62,24 @@ class GraphValidation(_message.Message):
     WARNINGS_FIELD_NUMBER: _ClassVar[int]
     valid: bool
     detail: str
-    pool_usage: int
-    pool_capacity: int
-    warnings: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, valid: _Optional[bool] = ..., detail: _Optional[str] = ..., pool_usage: _Optional[int] = ..., pool_capacity: _Optional[int] = ..., warnings: _Optional[_Iterable[str]] = ...) -> None: ...
+    pool_usage: _device_pb2.GraphPoolCounts
+    pool_capacity: _device_pb2.GraphPoolCounts
+    warnings: _containers.RepeatedCompositeFieldContainer[GraphWarning]
+    def __init__(self, valid: _Optional[bool] = ..., detail: _Optional[str] = ..., pool_usage: _Optional[_Union[_device_pb2.GraphPoolCounts, _Mapping]] = ..., pool_capacity: _Optional[_Union[_device_pb2.GraphPoolCounts, _Mapping]] = ..., warnings: _Optional[_Iterable[_Union[GraphWarning, _Mapping]]] = ...) -> None: ...
+
+class GraphWarning(_message.Message):
+    __slots__ = ("kind", "state", "transition", "lines", "detail")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    TRANSITION_FIELD_NUMBER: _ClassVar[int]
+    LINES_FIELD_NUMBER: _ClassVar[int]
+    DETAIL_FIELD_NUMBER: _ClassVar[int]
+    kind: str
+    state: str
+    transition: int
+    lines: _containers.RepeatedScalarFieldContainer[str]
+    detail: str
+    def __init__(self, kind: _Optional[str] = ..., state: _Optional[str] = ..., transition: _Optional[int] = ..., lines: _Optional[_Iterable[str]] = ..., detail: _Optional[str] = ...) -> None: ...
 
 class StateMachineConfigSummary(_message.Message):
     __slots__ = ("name", "readable", "detail", "description", "board", "graph_names", "input_line_count", "output_line_count")

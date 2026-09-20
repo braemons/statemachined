@@ -43,16 +43,30 @@ STARTUP_TIMEOUT_SECONDS = 60.0
 
 
 def a_free_port() -> int:
-    """Ask the kernel for one, and hand it over.
+    """A free port whose **successor is also free**, and hand both over.
 
-    There is a race between closing this socket and the child binding it, and
-    it is the one every test harness accepts: the alternative is a fixed port,
-    and a fixed port makes two runs of this suite on one machine collide —
-    which is a certainty rather than a race.
+    `statemachined serve` binds two: the panels on `--port` and gRPC on one
+    above it, which is the rule `DEFAULT_PORT` states on this side. Asking the
+    kernel for one port says nothing about the next, and a daemon that comes up
+    and then cannot bind its second listener fails this suite for a reason that
+    has nothing to do with the client.
+
+    There is still a race between closing these sockets and the child binding
+    them, and it is the one every test harness accepts: the alternative is a
+    fixed port, and a fixed port makes two runs of this suite on one machine
+    collide — which is a certainty rather than a race.
     """
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        return probe.getsockname()[1]
+    for _ in range(50):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+            try:
+                with socket.socket() as neighbour:
+                    neighbour.bind(("127.0.0.1", port + 1))
+            except OSError:
+                continue
+            return port
+    raise AssertionError("no pair of consecutive free ports after 50 tries")
 
 
 @pytest.fixture(scope="session")

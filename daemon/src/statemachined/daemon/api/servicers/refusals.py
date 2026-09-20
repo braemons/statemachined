@@ -47,6 +47,7 @@ from statemachined.daemon.api.convert.trial import Refused as ConversionRefused
 from statemachined.daemon.api.rig_service import NoActiveGraph, NoConfigLoaded
 from statemachined.daemon.event_recording import (
     BadRecordingName,
+    RecordingIsInProgress,
     RecordingNameTaken,
     RecordingNotInStore,
     RecordingStateRefused,
@@ -58,7 +59,7 @@ from statemachined.daemon.state_machine_config_store import (
 )
 from statemachined.device.message_framing import DeviceRefusedTheCommand
 from statemachined.device.statemachined_device import DeviceNotConnected, NoGraphSetCommitted
-from statemachined.graph_set_compiler import GraphSetCompilationError
+from statemachined.graph_set_compiler import GraphNotInSet, GraphSetCompilationError
 
 #: Where the typed refusal rides. `-bin` is gRPC's own spelling for a metadata
 #: value that is bytes rather than ASCII, which is what lets `detail` hold a
@@ -129,7 +130,16 @@ _RULES: list[tuple[type[BaseException], Category, str, str]] = [
     (ConfigNameMismatch, Category.BAD_REQUEST, "config_name_mismatch", "config_name"),
     (BadRecordingName, Category.BAD_REQUEST, "bad_recording_name", "name"),
     (RecordingNameTaken, Category.BAD_REQUEST, "recording_name_taken", "name"),
+    # Before `GraphSetCompilationError`, which it subclasses: the table is
+    # walked in order and the first match wins, so the specific one has to
+    # come first. "This set has no graph called X" and "this set does not fit
+    # on the board" are different things to fix.
+    (GraphNotInSet, Category.WRONG_MOMENT, "graph_not_in_set", "graph"),
     (GraphSetCompilationError, Category.BAD_REQUEST, "does_not_fit", "graphs"),
+    # Before `RecordingStateRefused`, which it subclasses: the table is walked
+    # in order. "Stop it first" and "there is nothing open" are different
+    # things to do, and `error` is what a caller branches on.
+    (RecordingIsInProgress, Category.WRONG_MOMENT, "recording_in_progress", "name"),
     (RecordingStateRefused, Category.WRONG_MOMENT, "recording_state", "recording"),
     (
         NoConfigLoaded,

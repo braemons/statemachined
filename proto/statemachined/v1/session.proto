@@ -67,8 +67,8 @@ message OpenSessionResult {
   // the board when a trial reports the wrong graph.
   map<string, int32> slots = 3;
 
-  int32 pool_usage = 4 [json_name = "pool_usage"];
-  int32 pool_capacity = 5 [json_name = "pool_capacity"];
+  GraphPoolCounts pool_usage = 4 [json_name = "pool_usage"];
+  GraphPoolCounts pool_capacity = 5 [json_name = "pool_capacity"];
   int32 elapsed_milliseconds = 6 [json_name = "elapsed_milliseconds"];
 }
 

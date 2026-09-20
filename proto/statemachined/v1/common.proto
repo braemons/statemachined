@@ -37,7 +37,10 @@ message Error {
   string context = 3;
 }
 
-// Nothing to say beyond that it worked.
-message Ok {
-  bool ok = 1;
-}
+// There is no `Ok`. There was, and nothing returns it any more.
+//
+// An rpc whose answer is "it worked" has thrown away the one thing the caller
+// could have used: `SaveSettings` answered `Ok` and the board had been telling
+// it how many erase cycles the flash had left. A refusal is raised, so success
+// needs no flag — what a result message is for is whatever the far end knows
+// and the caller does not.

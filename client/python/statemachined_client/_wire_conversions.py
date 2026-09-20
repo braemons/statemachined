@@ -50,8 +50,10 @@ from .api_types import (
     DeviceState,
     DistributionPatch,
     FirmwareVersions,
+    GraphPoolCounts,
     GraphSummary,
     GraphValidation,
+    GraphWarning,
     Health,
     InputLine,
     LineMapView,
@@ -70,6 +72,7 @@ from .api_types import (
     RigConfigurationPatch,
     RigConfigurationUpdate,
     RigState,
+    SaveSettingsResult,
     ScanHealth,
     SerialMonitorEntry,
     SerialMonitorWindow,
@@ -205,12 +208,28 @@ def capacities_from_wire(message: device_pb2.DeviceCapacities) -> DeviceCapaciti
     )
 
 
+def pool_counts_from_wire(message: device_pb2.GraphPoolCounts) -> GraphPoolCounts:
+    return GraphPoolCounts(
+        graphs=message.graphs,
+        states=message.states,
+        transitions=message.transitions,
+        output_actions=message.output_actions,
+        distributions=message.distributions,
+        choice_options=message.choice_options,
+    )
+
+
+def _pools(message, name: str) -> GraphPoolCounts | None:
+    counts = _maybe(message, name)
+    return None if counts is None else pool_counts_from_wire(counts)
+
+
 def committed_set_from_wire(message: device_pb2.CommittedGraphSet) -> CommittedGraphSet:
     return CommittedGraphSet(
         set_version=message.set_version,
         graph_names=list(message.graph_names),
-        pool_usage=message.pool_usage,
-        pool_capacity=message.pool_capacity,
+        pool_usage=_pools(message, "pool_usage"),
+        pool_capacity=_pools(message, "pool_capacity"),
     )
 
 
@@ -261,6 +280,7 @@ def input_line_from_wire(message: device_pb2.InputLine) -> InputLine:
         pin_label=message.pin_label,
         reads_active_low=message.reads_active_low,
         is_enabled=message.is_enabled,
+        debounce_milliseconds=message.debounce_milliseconds,
         is_high_now=_maybe(message, "is_high_now"),
     )
 
@@ -320,6 +340,18 @@ def serial_monitor_window_from_wire(
     )
 
 
+def save_settings_result_from_wire(
+    message: device_pb2.SaveSettingsResult,
+) -> SaveSettingsResult:
+    return SaveSettingsResult(
+        written=message.written,
+        write_count=message.write_count,
+        has_set=message.has_set,
+        set_version=message.set_version,
+        autorun=message.autorun,
+    )
+
+
 def firmware_from_wire(message: device_pb2.FirmwareVersions) -> FirmwareVersions:
     return FirmwareVersions(
         running=message.running,
@@ -359,13 +391,23 @@ def graph_summary_from_wire(message: documents_pb2.GraphSummary) -> GraphSummary
     )
 
 
+def graph_warning_from_wire(message: documents_pb2.GraphWarning) -> GraphWarning:
+    return GraphWarning(
+        kind=message.kind,
+        state=message.state,
+        transition=message.transition,
+        lines=list(message.lines),
+        detail=message.detail,
+    )
+
+
 def graph_validation_from_wire(message: documents_pb2.GraphValidation) -> GraphValidation:
     return GraphValidation(
         valid=message.valid,
         detail=message.detail,
-        pool_usage=message.pool_usage,
-        pool_capacity=message.pool_capacity,
-        warnings=list(message.warnings),
+        pool_usage=_pools(message, "pool_usage"),
+        pool_capacity=_pools(message, "pool_capacity"),
+        warnings=[graph_warning_from_wire(warning) for warning in message.warnings],
     )
 
 
@@ -429,8 +471,8 @@ def open_session_result_from_wire(
         state_machine_config=message.state_machine_config,
         set_version=message.set_version,
         slots=dict(message.slots),
-        pool_usage=message.pool_usage,
-        pool_capacity=message.pool_capacity,
+        pool_usage=_pools(message, "pool_usage"),
+        pool_capacity=_pools(message, "pool_capacity"),
         elapsed_milliseconds=message.elapsed_milliseconds,
     )
 
@@ -642,6 +684,7 @@ def rig_configuration_from_wire(
         device_baud=message.device_baud,
         device_timeout_seconds=message.device_timeout_seconds,
         expected_board=message.expected_board,
+        session_seed=message.session_seed,
         connect_on_startup=message.connect_on_startup,
         startup_state_machine_config=message.startup_state_machine_config,
         graph_mode=message.graph_mode,
@@ -670,6 +713,7 @@ def rig_configuration_patch_to_wire(
         "expected_board",
         "graph_mode",
         "startup_state_machine_config",
+        "session_seed",
     ):
         value = getattr(patch, name)
         if value is not None:

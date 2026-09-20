@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 
-from statemachined._proto.statemachined.v1 import common_pb2, service_pb2_grpc
+from statemachined._proto.statemachined.v1 import service_pb2_grpc
 from statemachined.daemon.api import convert
 from statemachined.daemon.api.rig_service import RigService
 from statemachined.daemon.firmware_manifest import compare_firmware, installed_firmware_version
@@ -180,10 +180,17 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
         return await answering(context, body)
 
     async def SaveSettings(self, request, context):
+        """Write the wiring, the graph set and autorun to the board's flash.
+
+        The answer is what the *board* said, not "it worked": `write_count` is
+        a wear budget made visible, and `written: false` means the settings
+        were already there and no erase cycle was spent. This returned an `Ok`
+        in the first cut of the interface, which threw both away.
+        """
+
         def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached()
-            self.service.save_device_settings()
-            return common_pb2.Ok(ok=True)
+            return convert.save_settings_result_to_wire(self.service.save_device_settings())
 
         return await answering(context, body)

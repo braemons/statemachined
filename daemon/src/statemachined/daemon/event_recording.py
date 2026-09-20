@@ -77,6 +77,18 @@ class RecordingStateRefused(RuntimeError):
     """The verb does not apply to what is happening -- pause with nothing running."""
 
 
+class RecordingIsInProgress(RecordingStateRefused):
+    """The recording named is the one being written to right now.
+
+    Its own class because it is a different thing to fix from every other
+    `RecordingStateRefused`. Those say "there is nothing open" or "it is
+    already paused" and the recovery is to do the other thing; this one says
+    "stop it first", and the file is fine — it is being written.
+
+    A subclass, so anything catching `RecordingStateRefused` still catches it.
+    """
+
+
 class BadRecordingName(ValueError):
     """A name that is not a name, which here also means not a file name."""
 
@@ -311,7 +323,7 @@ class EventRecorder:
         self._refuse_a_name_that_is_not_one(name)
         with self._lock:
             if self._active is not None and self._active["name"] == name:
-                raise RecordingStateRefused(
+                raise RecordingIsInProgress(
                     f"{name!r} is being recorded right now. Stop it first -- deleting the file "
                     f"under a running recording would leave the rig writing into nothing."
                 )

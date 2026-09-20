@@ -54,16 +54,12 @@ class StateMachineConfigStoreServicer(service_pb2_grpc.StateMachineConfigStoreSe
                     "name",
                 )
             self.service.save_state_machine_config(config)
-            return convert.config_summary_to_wire(
-                {
-                    "name": config.name,
-                    "description": config.description,
-                    "board": config.board,
-                    "graph_names": [graph.name for graph in config.graphs],
-                    "input_line_count": len(config.line_map.input_lines),
-                    "output_line_count": len(config.line_map.output_lines),
-                }
-            )
+            # The whole store, as `DeleteConfig` answers: `loaded` beside the
+            # listing is what says whether this write landed on the config the
+            # rig is running, and **saving is not loading** — a UI that could
+            # only save by also arming the rig is a UI nobody edits during a
+            # session.
+            return self._summaries()
 
         return await answering(context, body)
 

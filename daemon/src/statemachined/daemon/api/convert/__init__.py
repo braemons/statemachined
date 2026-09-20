@@ -40,6 +40,8 @@ from .device import (
     device_state_to_wire,
     firmware_versions_to_wire,
     line_map_view_to_wire,
+    pool_counts_to_wire,
+    save_settings_result_to_wire,
     scan_health_to_wire,
     serial_monitor_entry_to_wire,
     serial_monitor_window_to_wire,
@@ -51,6 +53,7 @@ from .documents import (
     graph_summaries_to_wire,
     graph_summary_to_wire,
     graph_validation_to_wire,
+    graph_warning_to_wire,
     stored_file_to_wire,
 )
 from .recording import (

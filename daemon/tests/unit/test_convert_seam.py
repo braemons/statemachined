@@ -400,18 +400,75 @@ def test_the_two_stores_say_unreadable_differently_and_the_wire_says_it_once() -
     assert convert.config_summary_to_wire({"name": "b"}).readable is True
 
 
+#: What `graph_set_compiler` measures, and what a board holds. Six pools, and
+#: they fill independently.
+SOME_POOLS = {
+    "graphs": 1,
+    "states": 12,
+    "transitions": 20,
+    "output_actions": 3,
+    "distributions": 2,
+    "choice_options": 0,
+}
+
+
 def test_warnings_survive_a_valid_graph() -> None:
-    """Legal, uploads, runs — and probably narrower than its author thinks."""
+    """Legal, uploads, runs — and probably narrower than its author thinks.
+
+    And they are **structured**: an editor puts a warning next to the line that
+    caused it, so `state` and `transition` are where to put the marker. This
+    field was `repeated string` in the first cut of the interface and the
+    conversion stringified the dict, which showed a panel `undefined,
+    transition undefined: undefined`.
+    """
     result = convert.graph_validation_to_wire(
         {
             "valid": True,
-            "pool_usage": 12,
-            "pool_capacity": 64,
-            "warnings": ["Go is unreachable"],
+            "pool_usage": SOME_POOLS,
+            "pool_capacity": dict(SOME_POOLS, states=64),
+            "warnings": [
+                {
+                    "kind": "any_clause_has_no_effect",
+                    "state": "Go",
+                    "transition": 1,
+                    "lines": ["lever"],
+                    "detail": "'lever' is in both `all` and `any`",
+                }
+            ],
         }
     )
     assert result.valid is True
-    assert list(result.warnings) == ["Go is unreachable"]
+    assert result.warnings[0].state == "Go"
+    assert result.warnings[0].transition == 1
+    assert list(result.warnings[0].lines) == ["lever"]
+    assert result.warnings[0].kind == "any_clause_has_no_effect"
+
+
+def test_a_valid_graph_reports_six_pools_and_not_one_total() -> None:
+    """A board's pools fill independently: a set can be two states short of
+    the limit with room for forty more transitions. One number would say "it
+    does not fit" without saying what to cut."""
+    result = convert.graph_validation_to_wire(
+        {"valid": True, "pool_usage": SOME_POOLS, "pool_capacity": dict(SOME_POOLS, states=64)}
+    )
+    assert result.pool_usage.states == 12
+    assert result.pool_capacity.states == 64
+    assert result.pool_usage.transitions == 20
+
+
+def test_a_graph_that_did_not_compile_reports_no_pools_at_all() -> None:
+    """Zeroes would read as a board with no room, which is a different answer
+    from "it never got as far as measuring"."""
+    result = convert.graph_validation_to_wire({"valid": False, "detail": "no entry state"})
+    assert not result.HasField("pool_usage")
+    assert not result.HasField("pool_capacity")
+
+
+def test_a_pool_the_compiler_added_and_the_message_does_not_know_fails_here() -> None:
+    """At the seam, where it is still cheap — rather than as a column that
+    silently stops being shown."""
+    with pytest.raises(KeyError):
+        convert.pool_counts_to_wire({"graphs": 1})
 
 
 # -- recordings -----------------------------------------------------------------

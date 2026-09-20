@@ -30,12 +30,32 @@ message DeviceCapacities {
   int32 output_line_count = 12 [json_name = "output_line_count"];
 }
 
+// What a graph set costs a board, pool by pool.
+//
+// **Six numbers and not one**, because a board has six pools and they fill
+// independently: a set can be two states short of the limit with room for
+// forty more transitions. One total would say "it does not fit" without
+// saying what to cut, which is the only part somebody setting up a session
+// can act on.
+//
+// The same message carries usage and capacity, so the two are read the same
+// way and a panel puts them side by side without arithmetic. A pool the
+// firmware adds is a field added here, which is a diff a reviewer sees.
+message GraphPoolCounts {
+  int32 graphs = 1;
+  int32 states = 2;
+  int32 transitions = 3;
+  int32 output_actions = 4 [json_name = "output_actions"];
+  int32 distributions = 5;
+  int32 choice_options = 6 [json_name = "choice_options"];
+}
+
 // The graph set the board is holding right now.
 message CommittedGraphSet {
   int32 set_version = 1 [json_name = "set_version"];
   repeated string graph_names = 2 [json_name = "graph_names"];
-  int32 pool_usage = 3 [json_name = "pool_usage"];
-  int32 pool_capacity = 4 [json_name = "pool_capacity"];
+  GraphPoolCounts pool_usage = 3 [json_name = "pool_usage"];
+  GraphPoolCounts pool_capacity = 4 [json_name = "pool_capacity"];
 }
 
 // How the serial link is behaving.
@@ -128,6 +148,16 @@ message InputLine {
   // says "nothing is plugged in there" without every graph having to avoid
   // naming it.
   bool is_enabled = 5 [json_name = "is_enabled"];
+
+  // How long a change must hold before it is believed. Per line rather than
+  // per predicate, because a predicate over several lines is what chatters
+  // worst: two lines each bouncing once can make a combination rise and fall
+  // several times, and no care in the graph can filter that afterwards.
+  //
+  // In the view because it is part of the wiring somebody is looking at. It
+  // was left out of the first cut of this message, which made a rig's
+  // debouncing invisible to every reader of `ReadLines`.
+  int32 debounce_milliseconds = 7 [json_name = "debounce_milliseconds"];
 
   // Its level right now, from the device's own `io` word. **The only way
   // anything outside the device can check that a graph's line numbers reach
@@ -241,6 +271,28 @@ message WriteLineMapResult {
 }
 
 // What the board is running, and what could be flashed onto it.
+// What writing the board's settings to its own flash cost.
+//
+// **`write_count` is a budget made visible.** Data flash wears out — about
+// 100,000 erase cycles on the reference board — and a rig a third of the way
+// through that budget should be able to say so rather than failing one day
+// with no warning.
+//
+// **A save that would store what is already stored writes nothing**, answers
+// `written: false`, and leaves `write_count` where it was. It is answered
+// rather than refused: "it is already saved" is a success, and a save button
+// must not cost an erase cycle to press twice.
+message SaveSettingsResult {
+  bool written = 1;
+  int64 write_count = 2 [json_name = "write_count"];
+
+  // What was saved: whether there was a graph set, which version, and whether
+  // autorun was on. The three things that come back after a power cut.
+  bool has_set = 3 [json_name = "has_set"];
+  int32 set_version = 4 [json_name = "set_version"];
+  bool autorun = 5;
+}
+
 message FirmwareVersions {
   // What the board greeted with.
   string running = 1;
@@ -305,4 +357,13 @@ message WriteAutorunRequest {
   optional int64 seed = 4;
 
   optional int64 first_trial_id = 5 [json_name = "first_trial_id"];
+
+  // Whether to start arming trials now, or only to store the setting.
+  //
+  // **This is how a rig is actually set up**: enable, save, power cycle. A
+  // save is refused on a board that is running, and a board arming its own
+  // trials is never idle — so without a way to say "store it, do not start",
+  // the setting could never be written to flash. Unset means start, which is
+  // what an operator turning autorun on by hand means.
+  optional bool start_now = 6 [json_name = "start_now"];
 }

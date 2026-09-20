@@ -3,7 +3,6 @@
 import grpc
 import warnings
 
-from statemachined_client._proto.statemachined.v1 import common_pb2 as statemachined_dot_v1_dot_common__pb2
 from statemachined_client._proto.statemachined.v1 import device_pb2 as statemachined_dot_v1_dot_device__pb2
 from statemachined_client._proto.statemachined.v1 import documents_pb2 as statemachined_dot_v1_dot_documents__pb2
 from statemachined_client._proto.statemachined.v1 import recording_pb2 as statemachined_dot_v1_dot_recording__pb2
@@ -666,7 +665,7 @@ class DeviceStub:
         self.SaveSettings = channel.unary_unary(
                 '/statemachined.v1.Device/SaveSettings',
                 request_serializer=statemachined_dot_v1_dot_service__pb2.SaveSettingsRequest.SerializeToString,
-                response_deserializer=statemachined_dot_v1_dot_common__pb2.Ok.FromString,
+                response_deserializer=statemachined_dot_v1_dot_device__pb2.SaveSettingsResult.FromString,
                 _registered_method=True)
 
 
@@ -803,7 +802,7 @@ def add_DeviceServicer_to_server(servicer, server):
             'SaveSettings': grpc.unary_unary_rpc_method_handler(
                     servicer.SaveSettings,
                     request_deserializer=statemachined_dot_v1_dot_service__pb2.SaveSettingsRequest.FromString,
-                    response_serializer=statemachined_dot_v1_dot_common__pb2.Ok.SerializeToString,
+                    response_serializer=statemachined_dot_v1_dot_device__pb2.SaveSettingsResult.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -1076,7 +1075,7 @@ class Device:
             target,
             '/statemachined.v1.Device/SaveSettings',
             statemachined_dot_v1_dot_service__pb2.SaveSettingsRequest.SerializeToString,
-            statemachined_dot_v1_dot_common__pb2.Ok.FromString,
+            statemachined_dot_v1_dot_device__pb2.SaveSettingsResult.FromString,
             options,
             channel_credentials,
             insecure,
@@ -1463,7 +1462,7 @@ class StateMachineConfigStoreStub:
         self.WriteConfigFile = channel.unary_unary(
                 '/statemachined.v1.StateMachineConfigStore/WriteConfigFile',
                 request_serializer=statemachined_dot_v1_dot_documents__pb2.StoredFile.SerializeToString,
-                response_deserializer=statemachined_dot_v1_dot_documents__pb2.StateMachineConfigSummary.FromString,
+                response_deserializer=statemachined_dot_v1_dot_documents__pb2.StateMachineConfigSummaries.FromString,
                 _registered_method=True)
         self.DeleteConfig = channel.unary_unary(
                 '/statemachined.v1.StateMachineConfigStore/DeleteConfig',
@@ -1495,7 +1494,12 @@ class StateMachineConfigStoreServicer:
         raise NotImplementedError('Method not implemented!')
 
     def WriteConfigFile(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Answers with the **whole store**, as `DeleteConfig` does, rather than with
+        the one summary. `loaded` beside the listing is what says whether this
+        write landed on the config the rig is running — which is not derivable
+        from a summary alone, and is the question somebody editing during a
+        session is actually asking.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
@@ -1533,7 +1537,7 @@ def add_StateMachineConfigStoreServicer_to_server(servicer, server):
             'WriteConfigFile': grpc.unary_unary_rpc_method_handler(
                     servicer.WriteConfigFile,
                     request_deserializer=statemachined_dot_v1_dot_documents__pb2.StoredFile.FromString,
-                    response_serializer=statemachined_dot_v1_dot_documents__pb2.StateMachineConfigSummary.SerializeToString,
+                    response_serializer=statemachined_dot_v1_dot_documents__pb2.StateMachineConfigSummaries.SerializeToString,
             ),
             'DeleteConfig': grpc.unary_unary_rpc_method_handler(
                     servicer.DeleteConfig,
@@ -1628,7 +1632,7 @@ class StateMachineConfigStore:
             target,
             '/statemachined.v1.StateMachineConfigStore/WriteConfigFile',
             statemachined_dot_v1_dot_documents__pb2.StoredFile.SerializeToString,
-            statemachined_dot_v1_dot_documents__pb2.StateMachineConfigSummary.FromString,
+            statemachined_dot_v1_dot_documents__pb2.StateMachineConfigSummaries.FromString,
             options,
             channel_credentials,
             insecure,
