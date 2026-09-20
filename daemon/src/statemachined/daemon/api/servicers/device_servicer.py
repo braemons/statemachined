@@ -11,6 +11,7 @@ from statemachined.daemon.api.rig_service import RigService
 from statemachined.daemon.firmware_manifest import compare_firmware, installed_firmware_version
 from statemachined.model.line_map import LineMap
 
+from .observer_registration import watching
 from .refusals import Category, Refusal, answering, no_board_attached, reading
 from .state_servicer import WATCH_PERIOD_SECONDS
 
@@ -122,19 +123,21 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
     async def WatchSerialMonitor(self, request, context):
         monitor = self.service.line_monitor
         next_entry_number = request.since_entry_number
-        while True:
-            # Bound explicitly: the lambda runs on another thread, and
-            # `next_entry_number` is reassigned in this loop. It happens to be
-            # awaited immediately, which is exactly the kind of "happens to"
-            # that stops being true when somebody adds a line.
-            entries = await reading(
-                lambda since=next_entry_number: monitor.lines_since(since, limit=500)
-            )
-            for entry in entries:
-                yield convert.serial_monitor_entry_to_wire(entry)
-                next_entry_number = entry["entry_number"] + 1
-            if not entries:
-                await asyncio.sleep(WATCH_PERIOD_SECONDS)
+        with watching(self.service, context, stream="monitor") as observer_id:
+            while True:
+                # Bound explicitly: the lambda runs on another thread, and
+                # `next_entry_number` is reassigned in this loop. It happens to
+                # be awaited immediately, which is exactly the kind of "happens
+                # to" that stops being true when somebody adds a line.
+                entries = await reading(
+                    lambda since=next_entry_number: monitor.lines_since(since, limit=500)
+                )
+                for entry in entries:
+                    yield convert.serial_monitor_entry_to_wire(entry)
+                    next_entry_number = entry["entry_number"] + 1
+                self.service.observers.note_delivery(observer_id, len(entries))
+                if not entries:
+                    await asyncio.sleep(WATCH_PERIOD_SECONDS)
 
     async def ReadFirmware(self, request, context):
         """What the board runs against what this package ships.

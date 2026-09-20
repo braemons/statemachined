@@ -7,13 +7,15 @@
 # because that is the name every repository in the family uses for the service
 # itself (`contracts/DAEMON_LAYOUT.md` §1).
 #
-# **`client/python/` is not split out yet, and that is on purpose.** The layout
-# says a daemon's client lives there, and the argument below — one distribution,
-# because any cut leaves the same models described twice — is what has kept them
-# together. That argument is about to stop applying: once the interface is
-# `proto/statemachined/v1/`, both sides are generated from one description and
-# there is nothing left to describe twice. The split belongs with that work, not
-# before it.
+# **`client/python/` is split out now**, which is what `proto/statemachined/v1/`
+# unlocked. The argument that kept the client in here — one distribution,
+# because any cut leaves the same models described twice — stopped applying the
+# day both sides were generated from one description. `statemachined-client`
+# depends on grpcio and protobuf and on nothing in this project: talking to a
+# rig should not mean installing a daemon, or pydantic.
+#
+# `statemachined.client` is the HTTP client it replaces and is on its way out
+# with the routes.
 [project]
 name = "statemachined"
 # The sentinel. packaging/scripts/git-version.sh stamps the real version from

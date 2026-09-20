@@ -85,6 +85,15 @@ check-web:                  ## fail if the committed browser client is not what 
 	}
 	@rm -f build/web-check.js
 
+# The Python client is its own project with its own Makefile, and is not part
+# of `ci` for the same reason `check-web` is not: it needs uv to build a second
+# environment, and a network the first time. Its own `check` regenerates its
+# stubs from proto/, lints, typechecks, and runs both suites — the second of
+# which stands a real daemon up and talks to it over gRPC.
+.PHONY: client
+client:                     ## the Python client's checks: its stubs, ruff, ty, both suites
+	@$(MAKE) --no-print-directory -C client/python check
+
 check-proto:                ## the proto compiles, and every copy of the taxonomy agrees
 	@protoc --proto_path=proto --descriptor_set_out=/dev/null \
 	  proto/statemachined/v1/*.proto proto/braemons/v1/*.proto

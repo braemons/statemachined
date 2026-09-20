@@ -15,6 +15,7 @@ from statemachined._proto.statemachined.v1 import service_pb2_grpc, state_pb2
 from statemachined.daemon.api import convert
 from statemachined.daemon.api.rig_service import RigService
 
+from .observer_registration import watching
 from .refusals import answering, reading
 
 #: How often a watcher looks for a change. Coarse on purpose: this is a console
@@ -65,15 +66,17 @@ class StateServicer(service_pb2_grpc.StateServicer):
         the moment it is sent — so `sequence` counts what was *sent* and a
         client never has to reconcile a backlog.
         """
-        sequence = 0
-        previous = None
-        while True:
-            state = await reading(self._state)
-            if previous is None or state != previous:
-                yield convert.state_frame_to_wire(sequence, state)
-                sequence += 1
-                previous = state
-            await asyncio.sleep(WATCH_PERIOD_SECONDS)
+        with watching(self.service, context, stream="state") as observer_id:
+            sequence = 0
+            previous = None
+            while True:
+                state = await reading(self._state)
+                if previous is None or state != previous:
+                    yield convert.state_frame_to_wire(sequence, state)
+                    sequence += 1
+                    previous = state
+                    self.service.observers.note_delivery(observer_id)
+                await asyncio.sleep(WATCH_PERIOD_SECONDS)
 
     async def ReadTrace(self, request, context):
         def body():
@@ -105,19 +108,29 @@ class StateServicer(service_pb2_grpc.StateServicer):
         """
         trace = self.service.trace
         next_entry_number = request.since_entry_number
-        while True:
-            # Bound explicitly: the lambda runs on another thread, and
-            # `next_entry_number` is reassigned in this loop. It happens to be
-            # awaited immediately, which is exactly the kind of "happens to"
-            # that stops being true when somebody adds a line.
-            entries = await reading(
-                lambda since=next_entry_number: trace.entries_since(since, limit=500)
-            )
-            for entry in entries:
-                yield convert.trace_entry_to_wire(entry)
-                next_entry_number = entry["entry_number"] + 1
-            if not entries:
-                await asyncio.sleep(WATCH_PERIOD_SECONDS)
+        with watching(self.service, context, stream="trace") as observer_id:
+            while True:
+                if trace.has_fallen_out_of_the_ring(next_entry_number):
+                    # The subscriber is behind the ring and entries are gone.
+                    # Noted rather than refused: the stream carries on from
+                    # whatever is left, and the client sees the gap in the
+                    # entry numbers. Marking it here is what makes a fallen
+                    # -behind consumer visible to the person looking for it.
+                    self.service.observers.note_fell_behind(observer_id)
+                    next_entry_number = trace.oldest_entry_number_still_held()
+                # Bound explicitly: the lambda runs on another thread, and
+                # `next_entry_number` is reassigned in this loop. It happens to
+                # be awaited immediately, which is exactly the kind of "happens
+                # to" that stops being true when somebody adds a line.
+                entries = await reading(
+                    lambda since=next_entry_number: trace.entries_since(since, limit=500)
+                )
+                for entry in entries:
+                    yield convert.trace_entry_to_wire(entry)
+                    next_entry_number = entry["entry_number"] + 1
+                self.service.observers.note_delivery(observer_id, len(entries))
+                if not entries:
+                    await asyncio.sleep(WATCH_PERIOD_SECONDS)
 
     async def ReadTrialTrace(self, request, context):
         def body():

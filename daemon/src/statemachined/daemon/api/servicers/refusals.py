@@ -163,10 +163,27 @@ def refusal_for(exception: BaseException) -> Refusal:
         return Refusal(Category.BAD_REQUEST, "bad_request", exception.detail, exception.context)
     for kind, category, error, context in _RULES:
         if isinstance(exception, kind):
-            return Refusal(category, error, str(exception), context)
+            return Refusal(category, error, _sentence(exception), context)
     return Refusal(
-        Category.THE_DAEMON_BROKE, "internal", str(exception) or exception.__class__.__name__
+        Category.THE_DAEMON_BROKE,
+        "internal",
+        _sentence(exception) or exception.__class__.__name__,
     )
+
+
+def _sentence(exception: BaseException) -> str:
+    """The message the domain wrote, without `KeyError`'s quotes around it.
+
+    `str(KeyError("no graph called 'nope' is stored"))` is that sentence with a
+    repr's quotes wrapped around it — because `KeyError` is meant to print a
+    key, not a sentence. `GraphNotInStore` and `ConfigNotInStore` are
+    `KeyError`s so that a caller inside the daemon can treat them as lookups,
+    and their messages are sentences written to be read by a person. Taking the
+    argument directly is what keeps both true.
+    """
+    if isinstance(exception, KeyError) and len(exception.args) == 1:
+        return str(exception.args[0])
+    return str(exception)
 
 
 def _code_for(category: Category) -> grpc.StatusCode:
