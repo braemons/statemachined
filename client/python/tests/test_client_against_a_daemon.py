@@ -333,4 +333,4 @@ def test_the_outcome_enum_is_the_one_the_daemon_speaks(rig):
         rig.read_trial_result()
     assert failure.value.error == "no_result_yet", "nothing has run, which is a moment"
     assert TrialOutcome.HIT == 1
-    assert KIND_STATE_VISIT == "state_visit"
+    assert KIND_STATE_VISIT == "visit"

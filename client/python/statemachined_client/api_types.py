@@ -840,7 +840,12 @@ class Health:
 
 #: The two trace kinds every consumer branches on. Spelled here so a typo is a
 #: `NameError` rather than a subscription that quietly never matches.
-KIND_STATE_VISIT = "state_visit"
+#:
+#: **`visit`, not `state_visit`.** The word is the daemon's, set in
+#: `device/state_visit_trace.py`, and the daemon's unit suite holds these two
+#: lines to it — because a constant that is *nearly* the daemon's word is worse
+#: than no constant at all: the comparison compiles, runs, and never matches.
+KIND_STATE_VISIT = "visit"
 KIND_TRIAL_RESULT = "trial_result"
 
 #: What a subscription calls itself when nothing else was said. It shows up in
