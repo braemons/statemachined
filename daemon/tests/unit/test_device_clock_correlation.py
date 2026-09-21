@@ -119,3 +119,35 @@ def test_the_host_time_reads_as_the_trace_writes_it():
     estimate = clock.host_time_for_unwrapped_device_microseconds(1_500_000)
     assert estimate is not None
     assert estimate.host_time_iso8601 == "1970-01-01T00:00:01.500000Z"
+
+
+def test_a_fraction_that_rounds_up_to_a_whole_second_still_prints_as_a_time():
+    """`round()` reaches 1_000_000 for a fraction within half a microsecond of a
+    whole second, and six-digit formatting then writes seven.
+
+    It produced `2023-11-14T22:13:20.1000000Z`: a fraction that is not one, on a
+    second that is also wrong by one. A trace line carrying that is found months
+    later by whatever refuses to parse it, which is the worst time to find it.
+    """
+    from statemachined.device.device_clock_correlation import HostTimeEstimate
+
+    just_under = HostTimeEstimate(
+        host_unix_seconds=1_700_000_000.9999995, uncertainty_microseconds=0
+    )
+    assert just_under.host_time_iso8601 == "2023-11-14T22:13:21.000000Z"
+
+    # The ordinary cases are unmoved.
+    for seconds, expected in (
+        (1_700_000_000.0, "2023-11-14T22:13:20.000000Z"),
+        (1_700_000_000.5, "2023-11-14T22:13:20.500000Z"),
+        (1_700_000_000.999999, "2023-11-14T22:13:20.999999Z"),
+    ):
+        estimate = HostTimeEstimate(host_unix_seconds=seconds, uncertainty_microseconds=0)
+        assert estimate.host_time_iso8601 == expected
+
+    # Whatever the fraction, the rendering is a timestamp.
+    for offset in (0.0, 0.4999e-6, 0.9999999, 0.123456789):
+        estimate = HostTimeEstimate(
+            host_unix_seconds=1_700_000_000 + offset, uncertainty_microseconds=0
+        )
+        assert len(estimate.host_time_iso8601) == len("2023-11-14T22:13:20.000000Z")

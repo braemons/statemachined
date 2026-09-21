@@ -60,9 +60,19 @@ class HostTimeEstimate:
 
     @property
     def host_time_iso8601(self) -> str:
-        """UTC, to the microsecond, the way a trace line carries it."""
+        """UTC, to the microsecond, the way a trace line carries it.
+
+        **The carry is not decoration.** `round()` on a fraction within half a
+        microsecond of a whole second gives 1_000_000, which formatted as six
+        digits is seven -- `...:20.1000000Z` -- and names a second that is also
+        wrong by one. A malformed timestamp in a trace line is the kind of thing
+        that is found months later by whatever refuses to parse it.
+        """
         seconds = int(self.host_unix_seconds)
         microseconds = round((self.host_unix_seconds - seconds) * 1_000_000)
+        if microseconds >= 1_000_000:
+            seconds += 1
+            microseconds -= 1_000_000
         formatted = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(seconds))
         return f"{formatted}.{microseconds:06d}Z"
 
