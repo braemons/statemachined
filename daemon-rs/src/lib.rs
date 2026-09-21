@@ -17,5 +17,6 @@
 
 pub mod daemon_state;
 pub mod grpc;
+pub mod model;
 pub mod web;
 pub mod wire;
