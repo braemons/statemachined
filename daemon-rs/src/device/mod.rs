@@ -16,4 +16,5 @@ pub mod device_pin_map;
 pub mod message_framing;
 pub mod request_response_session;
 pub mod serial_link;
+pub mod statemachined_device;
 pub mod message_vocabulary;

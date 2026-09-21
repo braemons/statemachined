@@ -15,7 +15,7 @@ use crate::device::device_pin_map::Direction;
 const UNO_R4_MINIMA_IN: [&str; 8] = ["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"];
 const UNO_R4_MINIMA_OUT: [&str; 8] = ["D10", "D11", "D12", "A0", "A1", "A2", "A3", "A4"];
 
-fn pins_of(board: &str, direction: Direction) -> &'static [&'static str] {
+pub fn pins_of(board: &str, direction: Direction) -> &'static [&'static str] {
     match (board, direction) {
         ("uno_r4_minima", Direction::In) => &UNO_R4_MINIMA_IN,
         ("uno_r4_minima", Direction::Out) => &UNO_R4_MINIMA_OUT,
@@ -23,6 +23,11 @@ fn pins_of(board: &str, direction: Direction) -> &'static [&'static str] {
     }
 }
 
+/// The pins this host believes a board has, or empty for one it does not know.
+///
+/// `pub` because the device falls back to it for firmware older than the `pins`
+/// command — and marks the result `Assumed` when it does.
+///
 /// `"3 (A0)"` where the pinout is known, `"3"` where it is not.
 pub fn pin_label(board: &str, direction: Direction, line: i64) -> String {
     let pins = pins_of(board, direction);

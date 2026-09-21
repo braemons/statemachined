@@ -15,6 +15,8 @@
 use std::sync::Arc;
 
 use crate::daemon_state::DaemonState;
+use crate::device::device_pin_map::{Direction, PinLabelSource};
+use crate::device::statemachined_device::{DeviceProblem, StatemachinedDevice};
 use crate::rig_configuration::RigConfiguration;
 use crate::model::graph_definition::{GraphDefinition, Refused};
 use crate::model::state_machine_config::StateMachineConfig;
@@ -58,6 +60,15 @@ impl DaemonServices {
 /// `invalid_argument`, and a caller that can tell them apart can retry one and
 /// not the other. The Python daemon draws the same line in
 /// `servicers/refusals.py`.
+/// A lock whose holder panicked.
+///
+/// Answered rather than propagated: one rpc that panicked mid-request should
+/// not make every later one panic too, and `internal` is the honest word for
+/// "this daemon is in a state it does not understand".
+fn poisoned<T>(_: std::sync::PoisonError<T>) -> tonic::Status {
+    tonic::Status::internal("the device lock was left poisoned by a failed request")
+}
+
 fn status_for(problem: StoreProblem) -> tonic::Status {
     match problem {
         StoreProblem::NotStored(sentence) => tonic::Status::not_found(sentence),
@@ -160,6 +171,134 @@ fn rig_configuration_to_wire(configuration: &RigConfiguration) -> wire::RigConfi
 /// directory somebody could not have typed into a TOML file either.
 fn path_to_wire(path: &std::path::Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+/// The board, as the wire describes it.
+///
+/// **Answered from what the daemon already knows**, never by asking the board:
+/// a status call that opened a link or waited on a serial port would be a
+/// status call that can hang, and this is the one a supervisor polls.
+fn device_state_to_wire(device: &StatemachinedDevice) -> wire::DeviceState {
+    let ack = device.hello_ack.clone().unwrap_or(serde_json::Value::Null);
+    let text = |key: &str| {
+        ack.get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let number = |key: &str| ack.get(key).and_then(serde_json::Value::as_i64).unwrap_or(0);
+    wire::DeviceState {
+        connected: device.is_connected(),
+        target: device.target.clone(),
+        board: text("board"),
+        firmware_version: text("fw"),
+        protocol_version: number("proto") as i32,
+        measured_scan_hz: number("scan_hz") as i32,
+        capacities: capacities_of(&ack),
+        has_wiring: ack.get("has_wiring").and_then(serde_json::Value::as_bool),
+        // The whole reason the `pins` command exists: before it there was no
+        // third answer to "which pin is line 4" beyond a table copied out of
+        // the firmware. So the provenance travels with the answer.
+        pin_labels_came_from: source_of(device.pin_map.source).to_string(),
+        uptime_device_microseconds: number("t_us"),
+        ..Default::default()
+    }
+}
+
+fn capacities_of(ack: &serde_json::Value) -> Option<wire::DeviceCapacities> {
+    let caps = ack.get("caps")?;
+    let number = |key: &str| caps.get(key).and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
+    Some(wire::DeviceCapacities {
+        max_line: number("max_line"),
+        max_states: number("max_states"),
+        max_transitions: number("max_transitions"),
+        max_output_actions: number("max_output_actions"),
+        max_distributions: number("max_distributions"),
+        max_choice_options: number("max_choice_options"),
+        max_path: number("max_path"),
+        max_graphs: number("max_graphs"),
+        max_timers: number("max_timers"),
+        ..Default::default()
+    })
+}
+
+/// The rig's lines, as somebody looking at the wiring sees them.
+///
+/// **The resolved map, not the configured one**, so a line written as a pin
+/// reports the index it will actually be uploaded with. Before a board has been
+/// attached the two are the same and the index is absent, which is a different
+/// thing from being zero.
+fn line_map_view(device: &StatemachinedDevice) -> wire::LineMapView {
+    let map = &device.resolved_line_map;
+    let pin_map = &device.pin_map;
+    wire::LineMapView {
+        input_lines: map
+            .input_lines
+            .iter()
+            .map(|line| wire::InputLine {
+                name: line.name.clone(),
+                line_index: line.line_index.map(|index| index as i32),
+                // The board's own name where it answered, and what the config
+                // said otherwise -- never a blank where a person could have
+                // been told something.
+                pin_label: match line.line_index {
+                    Some(index) if !pin_map.label_for(Direction::In, index).is_empty() => {
+                        pin_map.label_for(Direction::In, index).to_string()
+                    }
+                    _ => line.pin_label.clone(),
+                },
+                reads_active_low: line.reads_active_low,
+                is_enabled: line.is_enabled,
+                debounce_milliseconds: line.debounce_milliseconds as i32,
+                // Absent rather than false: the level is read from the device's
+                // own `io` word, and nothing has read one yet. Absent is not
+                // the same as low.
+                is_high_now: None,
+            })
+            .collect(),
+        output_lines: map
+            .output_lines
+            .iter()
+            .map(|line| wire::OutputLine {
+                name: line.name.clone(),
+                line_index: line.line_index.map(|index| index as i32),
+                pin_label: match line.line_index {
+                    Some(index) if !pin_map.label_for(Direction::Out, index).is_empty() => {
+                        pin_map.label_for(Direction::Out, index).to_string()
+                    }
+                    _ => line.pin_label.clone(),
+                },
+                safe_level_is_high: line.safe_level_is_high,
+                is_high_now: None,
+            })
+            .collect(),
+        pin_labels_came_from: source_of(pin_map.source).to_string(),
+        board_input_pins: pin_map.input_pin_labels.clone(),
+        board_output_pins: pin_map.output_pin_labels.clone(),
+    }
+}
+
+/// Where a pin label came from, as the wire spells it.
+fn source_of(source: PinLabelSource) -> &'static str {
+    match source {
+        PinLabelSource::Device => "device",
+        PinLabelSource::Assumed => "assumed",
+        PinLabelSource::Unknown => "unknown",
+    }
+}
+
+/// A device failure, as the status a client sees.
+fn status_for_device(problem: DeviceProblem) -> tonic::Status {
+    match problem {
+        // **`unavailable` means no board**, which is the one thing a panel may
+        // retry. Everything else is a request to change something.
+        DeviceProblem::NotConnected(sentence) => tonic::Status::unavailable(sentence),
+        DeviceProblem::Link(problem) => tonic::Status::unavailable(problem.to_string()),
+        DeviceProblem::WrongBoard(sentence) | DeviceProblem::LineMap(sentence) => {
+            tonic::Status::failed_precondition(sentence)
+        }
+        DeviceProblem::Request(problem) => tonic::Status::unavailable(problem.to_string()),
+    }
 }
 
 fn config_summaries(state: &DaemonState) -> wire::StateMachineConfigSummaries {
@@ -267,21 +406,29 @@ impl service::device_server::Device for DaemonServices {
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ReadDeviceRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::DeviceState>, tonic::Status> {
-        unported!("Device/read_device")
+        let device = self.state.device.lock().map_err(poisoned)?;
+        Ok(tonic::Response::new(device_state_to_wire(&device)))
     }
 
     async fn open_link(
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::OpenLinkRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::DeviceState>, tonic::Status> {
-        unported!("Device/open_link")
+        // Greet, which is what **takes the rig** from a board that was arming
+        // its own trials. Opening the port does not do that; the greeting does,
+        // and it is the whole point of the handover that a serial monitor
+        // cannot trigger it.
+        let mut device = self.state.device.lock().map_err(poisoned)?;
+        device.connect_and_greet().map_err(status_for_device)?;
+        Ok(tonic::Response::new(device_state_to_wire(&device)))
     }
 
     async fn read_lines(
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ReadLinesRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::LineMapView>, tonic::Status> {
-        unported!("Device/read_lines")
+        let device = self.state.device.lock().map_err(poisoned)?;
+        Ok(tonic::Response::new(line_map_view(&device)))
     }
 
     async fn write_line_map_file(

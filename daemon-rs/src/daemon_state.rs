@@ -8,13 +8,22 @@
 
 use std::sync::Mutex;
 
+use crate::device::statemachined_device::StatemachinedDevice;
 use crate::model::graph_definition::GraphDefinition;
+use crate::model::line_map::LineMap;
 pub use crate::rig_configuration::RigConfiguration;
 use crate::model::state_machine_config::StateMachineConfig;
 use crate::store::Store;
 
 /// The rig, as much of it as is ported.
 pub struct DaemonState {
+    /// The board, and the link to it.
+    ///
+    /// A `Mutex` and not a lock-free thing: **the device is serialised by
+    /// definition.** The protocol is one command in flight, so two rpcs that
+    /// both want the board must queue, and the queue is the honest shape for
+    /// it. The Python daemon calls the same thing `device_lock`.
+    pub device: Mutex<StatemachinedDevice>,
     pub configuration: RigConfiguration,
     pub graphs: Store<GraphDefinition>,
     pub configs: Store<StateMachineConfig>,
@@ -27,7 +36,20 @@ pub struct DaemonState {
 
 impl DaemonState {
     pub fn new(configuration: RigConfiguration) -> Self {
+        let mut device =
+            StatemachinedDevice::new(configuration.device_target.clone(), LineMap::default());
+        device.baud = configuration.device_baud.max(0) as u32;
+        device.timeout = std::time::Duration::from_secs_f64(
+            configuration.device_timeout_seconds.max(0.0),
+        );
+        device.expected_board = configuration.expected_board.clone();
+        device.configured_session_seed = if configuration.session_seed.is_empty() {
+            None
+        } else {
+            Some(configuration.session_seed.clone())
+        };
         Self {
+            device: Mutex::new(device),
             graphs: Store::new(configuration.graph_store_directory.clone()),
             configs: Store::new(configuration.state_machine_config_directory.clone()),
             loaded_config: Mutex::new(None),
@@ -48,9 +70,13 @@ impl DaemonState {
     /// Whether a board is attached and its link is open.
     ///
     /// **A daemon with no board is not a broken daemon**, which is why this is
-    /// a fact the API reports rather than a reason to refuse. Always false
-    /// until the device layer is ported (`RUST_REWRITE_PLAN.md` §4.1).
+    /// a fact the API reports rather than a reason to refuse — and why it is
+    /// answered without touching the board, so it stays cheap enough to poll
+    /// and cannot be made to hang by a serial port that is not draining.
     pub fn device_connected(&self) -> bool {
-        false
+        self.device
+            .lock()
+            .map(|device| device.is_connected())
+            .unwrap_or(false)
     }
 }
