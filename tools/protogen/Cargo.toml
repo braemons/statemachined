@@ -1,0 +1,9 @@
+[package]
+name = "protogen"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+prost-build = "0.14"
+tonic-prost-build = "0.14"

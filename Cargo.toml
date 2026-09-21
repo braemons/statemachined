@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["daemon-rs"]
+# The proto generator runs from `make proto` and is not part of any build.
+exclude = ["tools/protogen"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/braemons/statemachined"
+
+[profile.release]
+# Debug symbols stay in the release build: a stall on a rig is diagnosed where
+# it happens, and a stripped binary costs more than the disk it saves. The same
+# call mousewheeld makes, for the same reason.
+debug = true
