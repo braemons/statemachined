@@ -7,6 +7,11 @@
 //! held separate state would disagree about whether a board is open.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+use crate::model::graph_definition::GraphDefinition;
+use crate::model::state_machine_config::StateMachineConfig;
+use crate::store::Store;
 
 /// Where a rig's documents live, and how to reach its board.
 ///
@@ -38,11 +43,33 @@ impl Default for RigConfiguration {
 /// The rig, as much of it as is ported.
 pub struct DaemonState {
     pub configuration: RigConfiguration,
+    pub graphs: Store<GraphDefinition>,
+    pub configs: Store<StateMachineConfig>,
+    /// Which state-machine config this rig is loaded with, if any.
+    ///
+    /// A `Mutex` rather than an atomic because it is a name: `LoadConfig` sets
+    /// it and every listing reports it, and both are far away from any hot path.
+    pub loaded_config: Mutex<Option<String>>,
 }
 
 impl DaemonState {
     pub fn new(configuration: RigConfiguration) -> Self {
-        Self { configuration }
+        Self {
+            graphs: Store::new(configuration.graph_store_directory.clone()),
+            configs: Store::new(configuration.state_machine_config_directory.clone()),
+            loaded_config: Mutex::new(None),
+            configuration,
+        }
+    }
+
+    /// The name of the loaded config, or empty — which is how the proto spells
+    /// "none", because a summary listing has no other way to say it.
+    pub fn loaded_config_name(&self) -> String {
+        self.loaded_config
+            .lock()
+            .expect("the loaded-config name is never held across a panic")
+            .clone()
+            .unwrap_or_default()
     }
 
     /// Whether a board is attached and its link is open.

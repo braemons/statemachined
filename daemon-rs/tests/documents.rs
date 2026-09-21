@@ -23,6 +23,7 @@ use std::collections::BTreeMap;
 
 use serde::Deserialize;
 use statemachined::model::graph_definition::GraphDefinition;
+use statemachined::model::state_machine_config::StateMachineConfig;
 
 #[derive(Debug, Deserialize)]
 struct Case {
@@ -35,43 +36,82 @@ struct Case {
     parsed: Option<serde_json::Value>,
 }
 
-fn corpus() -> Vec<Case> {
-    let text = include_str!("document_corpus.json");
-    serde_json::from_str(text).expect("the corpus tools/document_corpus.py writes")
+fn graphs() -> Vec<Case> {
+    serde_json::from_str(include_str!("graph_corpus.json"))
+        .expect("the corpus tools/document_corpus.py writes")
+}
+
+fn configs() -> Vec<Case> {
+    serde_json::from_str(include_str!("config_corpus.json"))
+        .expect("the corpus tools/document_corpus.py writes")
+}
+
+/// Both corpora, each with the parser that owns it.
+///
+/// A closure rather than an enum: what varies between the two is one function
+/// call, and the rest of every test below is identical.
+#[allow(clippy::type_complexity)]
+fn both() -> Vec<(&'static str, Vec<Case>, Box<dyn Fn(&str) -> Result<serde_json::Value, String>>)> {
+    vec![
+        (
+            "graph",
+            graphs(),
+            Box::new(|text: &str| {
+                GraphDefinition::from_json(text)
+                    .map_err(|problem| problem.to_string())
+                    .and_then(|graph| {
+                        serde_json::to_value(&graph).map_err(|problem| problem.to_string())
+                    })
+            }),
+        ),
+        (
+            "config",
+            configs(),
+            Box::new(|text: &str| {
+                StateMachineConfig::from_json(text)
+                    .map_err(|problem| problem.to_string())
+                    .and_then(|config| {
+                        serde_json::to_value(&config).map_err(|problem| problem.to_string())
+                    })
+            }),
+        ),
+    ]
 }
 
 #[test]
-fn the_corpus_is_not_empty_and_covers_both_answers() {
+fn the_corpora_are_not_empty_and_cover_both_answers() {
     // A guard on the guard: a corpus that stopped being generated, or that
     // only held documents of one kind, would make every test below vacuous.
-    let cases = corpus();
-    assert!(cases.len() > 50, "only {} documents", cases.len());
-    assert!(cases.iter().any(|case| case.accepted), "nothing is accepted");
-    assert!(cases.iter().any(|case| !case.accepted), "nothing is refused");
+    for (kind, cases, _) in both() {
+        assert!(cases.len() > 20, "only {} {kind} documents", cases.len());
+        assert!(cases.iter().any(|case| case.accepted), "no {kind} is accepted");
+        assert!(cases.iter().any(|case| !case.accepted), "no {kind} is refused");
+    }
 }
 
 #[test]
 fn every_document_gets_the_same_answer_from_both() {
     let mut disagreed: Vec<String> = Vec::new();
-    for case in corpus() {
-        let text = serde_json::to_string(&case.document).expect("it came from json");
-        let ours = GraphDefinition::from_json(&text);
-        match (case.accepted, &ours) {
-            (true, Err(problem)) => disagreed.push(format!(
-                "{}: python accepted it, rust refused it -- {problem}",
-                case.name
-            )),
-            (false, Ok(_)) => disagreed.push(format!(
-                "{}: python refused it ({}), rust accepted it",
-                case.name,
-                case.refusal.as_deref().unwrap_or("?").lines().next().unwrap_or("")
-            )),
-            _ => {}
+    for (kind, cases, parse) in both() {
+        for case in cases {
+            let text = serde_json::to_string(&case.document).expect("it came from json");
+            match (case.accepted, parse(&text)) {
+                (true, Err(problem)) => disagreed.push(format!(
+                    "{kind} {}: python accepted it, rust refused it -- {problem}",
+                    case.name
+                )),
+                (false, Ok(_)) => disagreed.push(format!(
+                    "{kind} {}: python refused it ({}), rust accepted it",
+                    case.name,
+                    case.refusal.as_deref().unwrap_or("?").lines().next().unwrap_or("")
+                )),
+                _ => {}
+            }
         }
     }
     assert!(
         disagreed.is_empty(),
-        "{} of the corpus disagreed:\n  {}",
+        "{} documents disagreed:\n  {}",
         disagreed.len(),
         disagreed.join("\n  ")
     );
@@ -82,15 +122,16 @@ fn an_accepted_document_parses_to_the_same_thing() {
     // Agreeing to accept a file is not enough: two parsers can both say yes and
     // disagree about what a field meant. This compares the round trip.
     let mut wrong: Vec<String> = Vec::new();
-    for case in corpus() {
-        let (Some(expected), true) = (&case.parsed, case.accepted) else {
-            continue;
-        };
-        let text = serde_json::to_string(&case.document).expect("it came from json");
-        let ours = GraphDefinition::from_json(&text).expect("the previous test says it is accepted");
-        let mine = serde_json::to_value(&ours).expect("it serialises");
-        if let Some(difference) = first_difference(expected, &mine, "") {
-            wrong.push(format!("{}: {difference}", case.name));
+    for (kind, cases, parse) in both() {
+        for case in cases {
+            let (Some(expected), true) = (&case.parsed, case.accepted) else {
+                continue;
+            };
+            let text = serde_json::to_string(&case.document).expect("it came from json");
+            let mine = parse(&text).expect("the previous test says it is accepted");
+            if let Some(difference) = first_difference(expected, &mine, "") {
+                wrong.push(format!("{kind} {}: {difference}", case.name));
+            }
         }
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n  "));

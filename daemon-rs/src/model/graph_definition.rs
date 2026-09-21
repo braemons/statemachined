@@ -17,7 +17,9 @@
 //! it cannot refuse is a graph too big for a particular board — that needs the
 //! device's caps, so it lives in the compiler.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+
+use indexmap::IndexMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -39,9 +41,11 @@ impl std::fmt::Display for Refused {
 
 impl std::error::Error for Refused {}
 
-type Checked<T> = Result<T, Refused>;
+/// Shared with the other documents, which are refused the same way.
+pub type Result<T> = std::result::Result<T, Refused>;
+type Checked<T> = Result<T>;
 
-fn refuse<T>(sentence: impl Into<String>) -> Checked<T> {
+pub(crate) fn refuse<T>(sentence: impl Into<String>) -> Checked<T> {
     Err(Refused(sentence.into()))
 }
 
@@ -542,13 +546,13 @@ pub struct GraphDefinition {
     pub name: String,
     pub entry: String,
     #[serde(default)]
-    pub distributions: BTreeMap<String, DurationDistribution>,
+    pub distributions: IndexMap<String, DurationDistribution>,
     /// Global timers, by name. Declared on a graph because that is where the
     /// distributions they name are declared, but *pooled across the set* by the
     /// compiler — a timer outlives the run that started it, so it cannot belong
     /// to one graph.
     #[serde(default)]
-    pub timers: BTreeMap<String, GlobalTimerSpecification>,
+    pub timers: IndexMap<String, GlobalTimerSpecification>,
     pub states: Vec<StateDefinition>,
 }
 
@@ -601,6 +605,11 @@ impl GraphDefinition {
             }
         }
         found
+    }
+
+    /// The document's own rules, for a graph reached inside another document.
+    pub fn validate_document(&self) -> Checked<()> {
+        self.validate()
     }
 
     fn validate(&self) -> Checked<()> {

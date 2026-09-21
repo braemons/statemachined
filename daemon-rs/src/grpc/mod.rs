@@ -15,6 +15,10 @@
 use std::sync::Arc;
 
 use crate::daemon_state::DaemonState;
+use crate::model::graph_definition::{GraphDefinition, Refused};
+use crate::model::state_machine_config::StateMachineConfig;
+use crate::store::{Document, Store, StoreProblem};
+use crate::wire::statemachined::v1 as wire;
 
 use crate::wire::statemachined::v1::service;
 
@@ -43,6 +47,94 @@ pub struct DaemonServices {
 impl DaemonServices {
     pub fn new(state: Arc<DaemonState>) -> Self {
         Self { state }
+    }
+}
+
+/// A store's failure, as the status a client sees.
+///
+/// **The category is the daemon's own, not an HTTP status.** "no graph called
+/// that is stored" is `not_found` and "this file does not parse" is
+/// `invalid_argument`, and a caller that can tell them apart can retry one and
+/// not the other. The Python daemon draws the same line in
+/// `servicers/refusals.py`.
+fn status_for(problem: StoreProblem) -> tonic::Status {
+    match problem {
+        StoreProblem::NotStored(sentence) => tonic::Status::not_found(sentence),
+        StoreProblem::BadName(sentence) | StoreProblem::Unreadable(Refused(sentence)) => {
+            tonic::Status::invalid_argument(sentence)
+        }
+        StoreProblem::Io(sentence) => tonic::Status::internal(sentence),
+    }
+}
+
+/// One line about a stored graph, for a listing.
+///
+/// **A graph that does not parse still appears**, with `readable` false and the
+/// reason in `detail`. A listing that silently omitted a broken file would
+/// leave somebody looking at a directory that has a graph in it and a UI that
+/// says it has not.
+fn graph_summary(store: &Store<GraphDefinition>, name: &str) -> wire::GraphSummary {
+    match store.load(name) {
+        Ok(graph) => wire::GraphSummary {
+            name: name.to_string(),
+            readable: true,
+            detail: String::new(),
+            state_count: graph.states.len() as i32,
+            entry: graph.entry,
+        },
+        Err(problem) => wire::GraphSummary {
+            name: name.to_string(),
+            readable: false,
+            detail: problem.to_string(),
+            state_count: 0,
+            entry: String::new(),
+        },
+    }
+}
+
+fn graph_summaries(store: &Store<GraphDefinition>) -> wire::GraphSummaries {
+    wire::GraphSummaries {
+        graphs: store
+            .stored_names()
+            .iter()
+            .map(|name| graph_summary(store, name))
+            .collect(),
+    }
+}
+
+fn config_summary(
+    store: &Store<StateMachineConfig>,
+    name: &str,
+) -> wire::StateMachineConfigSummary {
+    match store.load(name) {
+        Ok(config) => wire::StateMachineConfigSummary {
+            name: name.to_string(),
+            readable: true,
+            detail: String::new(),
+            description: config.description,
+            board: config.board,
+            graph_names: config.graphs.iter().map(|g| g.name.clone()).collect(),
+            input_line_count: config.line_map.input_lines.len() as i32,
+            output_line_count: config.line_map.output_lines.len() as i32,
+        },
+        Err(problem) => wire::StateMachineConfigSummary {
+            name: name.to_string(),
+            readable: false,
+            detail: problem.to_string(),
+            ..Default::default()
+        },
+    }
+}
+
+fn config_summaries(state: &DaemonState) -> wire::StateMachineConfigSummaries {
+    wire::StateMachineConfigSummaries {
+        configs: state
+            .configs
+            .stored_names()
+            .iter()
+            .map(|name| config_summary(&state.configs, name))
+            .collect(),
+        loaded: state.loaded_config_name(),
     }
 }
 
@@ -214,28 +306,48 @@ impl service::graph_store_server::GraphStore for DaemonServices {
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ListGraphsRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::GraphSummaries>, tonic::Status> {
-        unported!("GraphStore/list_graphs")
+        Ok(tonic::Response::new(graph_summaries(&self.state.graphs)))
     }
 
     async fn read_graph_file(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::StoredFile>, tonic::Status> {
-        unported!("GraphStore/read_graph_file")
+        // **Re-serialised, not the bytes on disk.** What an editor gets is
+        // the graph as this daemon understands it, which is what makes the
+        // download/upload round trip a property of one parser rather than of
+        // whatever formatting the file happened to have.
+        let name = request.into_inner().name;
+        let graph = self.state.graphs.load(&name).map_err(status_for)?;
+        Ok(tonic::Response::new(wire::StoredFile {
+            name: graph.name.clone(),
+            text: graph.to_json(),
+        }))
     }
 
     async fn write_graph_file(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::StoredFile>,
+        request: tonic::Request<crate::wire::statemachined::v1::StoredFile>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::GraphSummary>, tonic::Status> {
-        unported!("GraphStore/write_graph_file")
+        // What crosses from an editor is the file's *text*, and it goes through
+        // this daemon's own parser. The name inside the document wins over the
+        // one beside it: a graph is stored under what it calls itself.
+        let file = request.into_inner();
+        let graph = self
+            .state
+            .graphs
+            .write_text(&file.text, &file.name)
+            .map_err(status_for)?;
+        Ok(tonic::Response::new(graph_summary(&self.state.graphs, &graph.name)))
     }
 
     async fn delete_graph(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::DeleteFileRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::DeleteFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::GraphSummaries>, tonic::Status> {
-        unported!("GraphStore/delete_graph")
+        let name = request.into_inner().name;
+        self.state.graphs.delete(&name).map_err(status_for)?;
+        Ok(tonic::Response::new(graph_summaries(&self.state.graphs)))
     }
 
     async fn validate_graph(
@@ -268,28 +380,44 @@ impl service::state_machine_config_store_server::StateMachineConfigStore for Dae
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ListConfigsRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::StateMachineConfigSummaries>, tonic::Status> {
-        unported!("StateMachineConfigStore/list_configs")
+        Ok(tonic::Response::new(config_summaries(&self.state)))
     }
 
     async fn read_config_file(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::StoredFile>, tonic::Status> {
-        unported!("StateMachineConfigStore/read_config_file")
+        let name = request.into_inner().name;
+        let config = self.state.configs.load(&name).map_err(status_for)?;
+        Ok(tonic::Response::new(wire::StoredFile {
+            name: config.name.clone(),
+            text: config.to_json(),
+        }))
     }
 
     async fn write_config_file(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::StoredFile>,
+        request: tonic::Request<crate::wire::statemachined::v1::StoredFile>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::StateMachineConfigSummaries>, tonic::Status> {
-        unported!("StateMachineConfigStore/write_config_file")
+        // Answers with the **whole store**, as DeleteConfig does, rather than
+        // with the one summary: `loaded` beside the listing is what says
+        // whether this write landed on the config the rig is running, which is
+        // the question somebody editing during a session is actually asking.
+        let file = request.into_inner();
+        self.state
+            .configs
+            .write_text(&file.text, &file.name)
+            .map_err(status_for)?;
+        Ok(tonic::Response::new(config_summaries(&self.state)))
     }
 
     async fn delete_config(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::DeleteFileRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::DeleteFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::StateMachineConfigSummaries>, tonic::Status> {
-        unported!("StateMachineConfigStore/delete_config")
+        let name = request.into_inner().name;
+        self.state.configs.delete(&name).map_err(status_for)?;
+        Ok(tonic::Response::new(config_summaries(&self.state)))
     }
 
     async fn load_config(

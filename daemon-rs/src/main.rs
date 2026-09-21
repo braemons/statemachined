@@ -30,6 +30,11 @@ struct Arguments {
     /// The board's port. `loop://` is no board at all.
     #[arg(long, default_value = "loop://")]
     device: String,
+
+    /// Where the documents live. A rig uses `/var/lib/braemons/statemachined`;
+    /// this is here so a bench can point at a copy.
+    #[arg(long)]
+    storage_dir: Option<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -37,10 +42,16 @@ async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let arguments = Arguments::parse();
 
-    let configuration = RigConfiguration {
+    let mut configuration = RigConfiguration {
         device_target: arguments.device.clone(),
         ..RigConfiguration::default()
     };
+    if let Some(root) = &arguments.storage_dir {
+        configuration.graph_store_directory = root.join("graphs");
+        configuration.state_machine_config_directory = root.join("configs");
+        configuration.trace_directory = root.join("trace");
+        configuration.recording_directory = root.join("recordings");
+    }
     let state = Arc::new(DaemonState::new(configuration));
     let services = DaemonServices::new(state);
 

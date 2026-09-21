@@ -27,6 +27,7 @@ HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE / "daemon" / "src"))
 
 from statemachined.model.graph_definition import GraphDefinition  # noqa: E402
+from statemachined.model.state_machine_config import StateMachineConfig  # noqa: E402
 
 
 def mutations(graph: dict) -> list[tuple[str, dict]]:
@@ -121,36 +122,109 @@ def mutations(graph: dict) -> list[tuple[str, dict]]:
     return out
 
 
-def verdict(document: dict) -> dict:
+def config_mutations(config: dict) -> list[tuple[str, dict]]:
+    """One document per refusal rule a *config* has of its own.
+
+    The graph rules are already covered by the graph corpus; a config reaches
+    them through its own `graphs` list, so only one case is needed to show that
+    it does. The rest are the config's and the line map's.
+    """
+    out: list[tuple[str, dict]] = []
+
+    def variant(label: str, change) -> None:
+        copied = copy.deepcopy(config)
+        try:
+            change(copied)
+        except (KeyError, IndexError, StopIteration):
+            return
+        out.append((label, copied))
+
+    variant("unknown_field_on_the_config", lambda c: c.update(colour="blue"))
+    variant("unknown_field_on_the_line_map", lambda c: c["line_map"].update(colour="blue"))
+    variant("unknown_field_on_an_input_line",
+            lambda c: c["line_map"]["input_lines"][0].update(colour="blue"))
+    variant("empty_name", lambda c: c.update(name=""))
+    variant("name_that_climbs_out_of_the_directory", lambda c: c.update(name="../escape"))
+    variant("name_that_hides_itself", lambda c: c.update(name=".hidden"))
+    variant("name_with_a_slash", lambda c: c.update(name="a/b"))
+    variant("over_long_name", lambda c: c.update(name="x" * 129))
+    variant("two_graphs_of_one_name",
+            lambda c: c["graphs"].append(copy.deepcopy(c["graphs"][0])))
+    # A config reaches the graph rules through its own list.
+    variant("a_graph_inside_it_is_refused",
+            lambda c: c["graphs"][0].update(entry="nowhere"))
+    variant("two_input_lines_of_one_name",
+            lambda c: c["line_map"]["input_lines"].append(
+                copy.deepcopy(c["line_map"]["input_lines"][0])))
+    variant("two_output_lines_of_one_name",
+            lambda c: c["line_map"]["output_lines"].append(
+                copy.deepcopy(c["line_map"]["output_lines"][0])))
+    variant("an_input_line_that_says_neither_index_nor_pin",
+            lambda c: c["line_map"]["input_lines"].append({"name": "mystery"}))
+    variant("an_output_line_that_says_neither_index_nor_pin",
+            lambda c: c["line_map"]["output_lines"].append({"name": "mystery"}))
+    variant("an_unnamed_input_line",
+            lambda c: c["line_map"]["input_lines"].append({"name": "", "line_index": 31}))
+    variant("two_input_lines_on_one_index",
+            lambda c: c["line_map"]["input_lines"].extend(
+                [{"name": "one", "line_index": 9}, {"name": "two", "line_index": 9}]))
+    variant("an_input_line_past_the_word",
+            lambda c: c["line_map"]["input_lines"].append({"name": "wide", "line_index": 32}))
+    variant("a_negative_line_index",
+            lambda c: c["line_map"]["input_lines"].append({"name": "under", "line_index": -1}))
+    variant("debounce_out_of_range",
+            lambda c: c["line_map"]["input_lines"][0].update(debounce_milliseconds=70000))
+    variant("negative_debounce",
+            lambda c: c["line_map"]["input_lines"][0].update(debounce_milliseconds=-1))
+    return out
+
+
+def verdict(document: dict, model) -> dict:
     """What the Python implementation says: accepted, or the refusal."""
     try:
-        graph = GraphDefinition.model_validate(document)
+        parsed = model.model_validate(document)
     except Exception as problem:  # pydantic's ValidationError, or a ValueError
         return {"accepted": False, "refusal": str(problem)}
-    return {
+    answer = {
         "accepted": True,
         # The round trip, so the Rust side can compare what each *parsed to*
         # rather than only whether each said yes.
-        "parsed": json.loads(graph.model_dump_json(exclude_none=True)),
-        "warnings": graph.warnings(),
+        "parsed": json.loads(parsed.model_dump_json(exclude_none=True)),
     }
+    if isinstance(parsed, GraphDefinition):
+        answer["warnings"] = parsed.warnings()
+    return answer
+
+
+def build(directory: str, model, generate) -> list[dict]:
+    corpus = []
+    for path in sorted((HERE / directory).glob("*.json")):
+        original = json.loads(path.read_text())
+        name = path.name.removesuffix(".json")
+        corpus.append({"name": name, "document": original, **verdict(original, model)})
+        for label, mutated in generate(original):
+            corpus.append(
+                {
+                    "name": f"{name}::{label}",
+                    "document": mutated,
+                    **verdict(mutated, model),
+                }
+            )
+    return corpus
 
 
 def main() -> int:
-    corpus = []
-    for path in sorted((HERE / "graphs").glob("*.json")):
-        original = json.loads(path.read_text())
-        corpus.append({"name": path.stem, "document": original, **verdict(original)})
-        for label, mutated in mutations(original):
-            corpus.append(
-                {"name": f"{path.stem}::{label}", "document": mutated, **verdict(mutated)}
-            )
-
-    out = HERE / "daemon-rs" / "tests" / "document_corpus.json"
-    out.write_text(json.dumps(corpus, indent=1, sort_keys=True) + "\n")
-    accepted = sum(1 for case in corpus if case["accepted"])
-    print(f"{len(corpus)} documents -> {out.relative_to(HERE)}")
-    print(f"  {accepted} accepted, {len(corpus) - accepted} refused")
+    out_directory = HERE / "daemon-rs" / "tests"
+    for directory, model, generate, filename in (
+        ("graphs", GraphDefinition, mutations, "graph_corpus.json"),
+        ("configs", StateMachineConfig, config_mutations, "config_corpus.json"),
+    ):
+        corpus = build(directory, model, generate)
+        out = out_directory / filename
+        out.write_text(json.dumps(corpus, indent=1, sort_keys=True) + "\n")
+        accepted = sum(1 for case in corpus if case["accepted"])
+        print(f"{len(corpus):4} {directory:8} -> {out.relative_to(HERE)}")
+        print(f"       {accepted} accepted, {len(corpus) - accepted} refused")
     return 0
 
 
