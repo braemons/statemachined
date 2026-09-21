@@ -16,6 +16,7 @@
 //! * `web/` — the panels, on the same port.
 
 pub mod daemon_state;
+pub mod device;
 pub mod grpc;
 pub mod model;
 pub mod rig_configuration;
