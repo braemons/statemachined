@@ -18,6 +18,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use super::graph_definition::{Refused, Result as Checked};
+use crate::device::device_pin_map::{Direction, DevicePinMap};
 
 /// One `uint32_t` of input word on the reference board.
 ///
@@ -185,4 +186,158 @@ impl LineMap {
                 ))
             })
     }
+}
+
+/// A map this board cannot honour: a pin it has not got, or a `line_index` and
+/// a `pin_label` that disagree.
+///
+/// **A kind of its own, not a bare refusal**, because it reaches a caller as a
+/// refusal and the refusal table has to tell it from "this file does not
+/// parse". It was not, once, and every `LoadConfig` that hit it answered
+/// `internal` — which tells the person holding the config that the daemon
+/// broke, when what happened is that their config names a pin this board has
+/// not got.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LineMapDoesNotMatchTheBoard(pub String);
+
+impl std::fmt::Display for LineMapDoesNotMatchTheBoard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for LineMapDoesNotMatchTheBoard {}
+
+/// One line, as the resolution sees it, whichever direction it came from.
+struct Unresolved<'a> {
+    name: &'a str,
+    line_index: Option<i64>,
+    pin_label: &'a str,
+}
+
+impl LineMap {
+    /// This map with every `line_index` filled in and checked against the board.
+    ///
+    /// The board answers with the same table `pinMode()` was called over, so a
+    /// pin label is no longer a comment. Three things happen here, and they are
+    /// the whole point of the command existing:
+    ///
+    /// * a line naming only a **pin** gets its index from the board, so the
+    ///   config says the thing a person can check against the hardware in front
+    ///   of them rather than a bit position nothing is labelled with;
+    /// * a line naming **both** has them checked, and a disagreement is
+    ///   refused. That is the silent wrong-valve bug: `pin_label = "A0"` on line
+    ///   4 looks right in every listing and drives A1;
+    /// * a line naming a **pin this board has not got** is refused, which is the
+    ///   typo that used to survive as far as an animal in the booth.
+    ///
+    /// **Only where the board actually answered.** A pin map this daemon
+    /// assumed is advisory: it fills in a missing index, and it never overrules
+    /// or refuses one that was written down. Refusing on a hand-copied table
+    /// would be asserting the very thing this exists to stop asserting.
+    ///
+    /// The caller closes the link on a refusal: masks built from a wrong index
+    /// are not something to push and then warn about.
+    pub fn resolved_against(
+        &self,
+        pin_map: &DevicePinMap,
+    ) -> Result<LineMap, LineMapDoesNotMatchTheBoard> {
+        let mut resolved = LineMap::default();
+        for line in &self.input_lines {
+            let mut line = line.clone();
+            line.line_index = Some(resolve_one(
+                &Unresolved {
+                    name: &line.name,
+                    line_index: line.line_index,
+                    pin_label: &line.pin_label,
+                },
+                Direction::In,
+                pin_map,
+            )?);
+            resolved.input_lines.push(line);
+        }
+        for line in &self.output_lines {
+            let mut line = line.clone();
+            line.line_index = Some(resolve_one(
+                &Unresolved {
+                    name: &line.name,
+                    line_index: line.line_index,
+                    pin_label: &line.pin_label,
+                },
+                Direction::Out,
+                pin_map,
+            )?);
+            resolved.output_lines.push(line);
+        }
+        Ok(resolved)
+    }
+}
+
+/// One line's index: what the board says, what the config says, or a refusal.
+fn resolve_one(
+    line: &Unresolved,
+    direction: Direction,
+    pin_map: &DevicePinMap,
+) -> Result<i64, LineMapDoesNotMatchTheBoard> {
+    let refuse = |sentence: String| Err(LineMapDoesNotMatchTheBoard(sentence));
+    let where_ = direction.spelled();
+    let from_the_board = if line.pin_label.is_empty() {
+        None
+    } else {
+        pin_map.line_index_for_label(direction, line.pin_label)
+    };
+
+    if !pin_map.came_from_the_device() {
+        // An assumed map may fill a gap and may not contradict anybody.
+        if let Some(index) = line.line_index {
+            return Ok(index);
+        }
+        if let Some(index) = from_the_board {
+            return Ok(index);
+        }
+        return refuse(format!(
+            "the {where_} line '{}' names pin '{}', and this board did not say which pins it \
+             has -- its firmware is older than the `pins` command. Give it a line_index, or \
+             flash firmware that answers `pins`",
+            line.name, line.pin_label
+        ));
+    }
+
+    if !line.pin_label.is_empty() && from_the_board.is_none() {
+        return refuse(format!(
+            "the {where_} line '{}' names pin '{}', which is not an {} on this board. It has: {}",
+            line.name,
+            line.pin_label,
+            where_,
+            pin_map.known_pins(direction)
+        ));
+    }
+
+    let Some(line_index) = line.line_index else {
+        return Ok(from_the_board.expect("a line with neither is refused when it is validated"));
+    };
+
+    if let Some(from_the_board) = from_the_board {
+        if from_the_board != line_index {
+            return refuse(format!(
+                "the {where_} line '{}' says line {line_index} and pin '{}', but this board's \
+                 {where_} line {line_index} is pin '{}' and '{}' is line {from_the_board}. One \
+                 of the two is wrong, and nothing downstream would notice which",
+                line.name,
+                line.pin_label,
+                pin_map.label_for(direction, line_index),
+                line.pin_label
+            ));
+        }
+    }
+
+    if line_index >= pin_map.line_count(direction) as i64 {
+        return refuse(format!(
+            "the {where_} line '{}' is line {line_index}, and this board has no such {where_} \
+             line. Its pins are: {}",
+            line.name,
+            pin_map.known_pins(direction)
+        ));
+    }
+    Ok(line_index)
 }
