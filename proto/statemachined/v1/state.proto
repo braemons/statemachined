@@ -1,0 +1,149 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+syntax = "proto3";
+
+package statemachined.v1;
+
+import "google/protobuf/struct.proto";
+import "statemachined/v1/device.proto";
+
+// What this rig is doing right now.
+//
+// Small on purpose: this is the thing a panel polls and a console shows, and
+// everything in it is one read of the device's own state report. The whole
+// attachment — capacities, firmware, the committed set — is `Device/ReadDevice`
+// and changes on the scale of a session rather than a trial.
+message RigState {
+  bool connected = 1;
+
+  // The device's link state, as the device reports it: 0 idle, 1 armed,
+  // 2 running.
+  int32 link_state = 2 [json_name = "link_state"];
+  bool running = 3;
+
+  optional int64 trial_id = 4 [json_name = "trial_id"];
+
+  // The armed graph, by name.
+  string graph = 5;
+
+  // **By name where the daemon can say it**: an index means nothing to
+  // somebody watching a rig, and the daemon holds the graph. Absent when there
+  // is no committed set to resolve it against, which is a different thing from
+  // "state 0".
+  optional string state_name = 6 [json_name = "state_name"];
+  optional int32 state_index = 7 [json_name = "state_index"];
+
+  // The device's input and output words, as bits. What a line monitor draws,
+  // and the only way to check that a graph's line numbers reach the pins
+  // somebody wired.
+  optional int64 input_word = 8 [json_name = "input_word"];
+  optional int64 output_word = 9 [json_name = "output_word"];
+
+  ScanHealth scan = 10;
+
+  // So a client can ask for what it has not seen without polling the ring.
+  int64 newest_trace_entry_number = 11 [json_name = "newest_trace_entry_number"];
+}
+
+// One thing that happened, as the trace recorded it.
+//
+// **The payload is a `Struct` and that is deliberate.** A trace entry is
+// whatever the device said — a state visit, a line edge, a trial boundary, a
+// refusal — and the set grows with the firmware. Describing each kind here
+// would mean this daemon could not carry an entry from a board newer than
+// itself, which is exactly what a trace is for. `kind` says what it is; a
+// reader that does not know a kind shows it as itself rather than dropping it.
+message TraceEntry {
+  int64 entry_number = 1 [json_name = "entry_number"];
+  string kind = 2;
+
+  // When **this daemon** recorded it. Its own clock, and deliberately not an
+  // estimate of the device's: a visit's own device timestamp is in the
+  // payload, and conflating the two is how a trace stops being joinable to a
+  // record.
+  string recorded_host_time = 3 [json_name = "recorded_host_time"];
+
+  // The trial this belongs to, when it belongs to one. Plenty do not — a line
+  // edge, a link event, a refusal.
+  optional int64 trial_id = 4 [json_name = "trial_id"];
+
+  // Everything else the entry carried.
+  google.protobuf.Struct payload = 5;
+}
+
+// A window of the trace's ring.
+//
+// `lost_entries_before` is the one place the ring's boundedness is visible
+// from outside. Saying nothing would hand back a shorter answer that looks
+// complete, which is how a gap in a record becomes a gap in an analysis.
+message TraceWindow {
+  repeated TraceEntry entries = 1;
+  int64 newest_entry_number = 2 [json_name = "newest_entry_number"];
+  int64 oldest_entry_number_still_held = 3 [json_name = "oldest_entry_number_still_held"];
+  int32 ring_capacity = 4 [json_name = "ring_capacity"];
+  optional int64 lost_entries_before = 5 [json_name = "lost_entries_before"];
+}
+
+message ReadTraceRequest {
+  int64 since_entry_number = 1 [json_name = "since_entry_number"];
+  int32 limit = 2;
+}
+
+message WatchTraceRequest {
+  int64 since_entry_number = 1 [json_name = "since_entry_number"];
+}
+
+// The trace of one trial, joined by `trial_id`.
+message ReadTrialTraceRequest {
+  int64 trial_id = 1 [json_name = "trial_id"];
+}
+
+message TrialTrace {
+  int64 trial_id = 1 [json_name = "trial_id"];
+  repeated TraceEntry entries = 2;
+}
+
+// Who is watching this rig right now.
+//
+// **A diagnostic, not a contract.** The daemon does not act on this list, does
+// not wait for anybody in it, and does not remember it across a restart — it
+// publishes and assumes nobody read it (`contracts/INTERACTIONS.md` §2). What
+// the list is for is the question a person asks when trials stop reaching
+// triald, which is otherwise answered with a packet capture.
+message Observer {
+  string observer_id = 1 [json_name = "observer_id"];
+  // What it called itself, when it said. Empty when it did not.
+  string name = 2;
+  // Which stream it is on: the state stream or the trace.
+  string stream = 3;
+  string address = 4;
+
+  double connected_at_unix_seconds = 5 [json_name = "connected_at_unix_seconds"];
+  double connected_seconds = 6 [json_name = "connected_seconds"];
+
+  int64 delivered = 7;
+
+  // Whether this observer has ever been dropped a frame because it could not
+  // keep up. The number that answers "is the rig slow, or is that browser
+  // tab".
+  bool fell_behind = 8 [json_name = "fell_behind"];
+}
+
+message Observers {
+  repeated Observer observers = 1;
+  int32 count = 2;
+}
+
+// One frame of `WatchState`.
+//
+// An envelope with a `oneof` in it, for the reason triald's has one: today
+// there is one arm, and a later message — a trace entry, a trial boundary —
+// can be added without every client having to learn a second stream.
+message StateFrame {
+  // Monotonic; a gap means frames were coalesced, which is not loss: each
+  // frame is a whole state, so the newest is always the truth.
+  int64 sequence = 1;
+
+  oneof frame {
+    RigState state = 2;
+  }
+}

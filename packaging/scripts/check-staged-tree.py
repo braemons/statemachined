@@ -40,8 +40,8 @@ def main() -> int:
     # The application, built the way the systemd unit builds it -- but pointed
     # at a temporary directory, because this runs as whoever is packaging and
     # /var/lib/braemons is the daemon user's.
-    from statemachined.api.application import create_application
-    from statemachined.rig_configuration import RigConfiguration
+    from statemachined.daemon.api.application import create_application
+    from statemachined.daemon.rig_configuration import RigConfiguration
 
     with tempfile.TemporaryDirectory() as scratch:
         here = Path(scratch)
@@ -63,7 +63,7 @@ def main() -> int:
 
     # Package data, which has gone missing from a wheel before and is invisible
     # until a browser asks for it.
-    web = files("statemachined") / "web"
+    web = files("statemachined.daemon") / "web"
     assert (web / "index.html").is_file(), "the web UI shell is not in the package"
     elements = sorted(p.name for p in (web / "elements").iterdir() if p.name.endswith(".js"))
     assert len(elements) >= 10, f"only {len(elements)} elements: {elements}"

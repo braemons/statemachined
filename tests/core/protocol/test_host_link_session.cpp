@@ -140,6 +140,18 @@ std::string field(const std::string& line, const char* key) {
   return "";
 }
 
+/// advance_trial() and the drain every real caller pairs with it.
+///
+/// On a board those are deliberately in different contexts -- the trial loop is
+/// the scan ISR, the formatting is the foreground -- so the session hands out
+/// two calls rather than one. A test that made only the first would see a
+/// silent visit stream and conclude the wrong thing.
+OutputUpdate advance(Host& h, LineBitmask word, Microseconds now) {
+  const OutputUpdate ops = h.device.advance_trial(word, now);
+  h.device.drain_outbound();
+  return ops;
+}
+
 void greet(Host& h) {
   const auto r = h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
                         R"(,"proto":1,"seed":"0123456789ABCDEF")");
@@ -216,6 +228,56 @@ void upload_relighting(Host& h) {
 
 constexpr Microseconds ms(uint32_t n) { return n * 1000u; }
 
+/// A set whose one graph runs `wait --(100 ms)--> done`, where `done` starts
+/// global timer 0 on entry. The timer waits 200 ms, then holds output line 0
+/// high for 100 ms -- an edge that lands well after the trial has ended, which
+/// is the point.
+void upload_with_a_timer(Host& h) {
+  auto r = h.open_set(7);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_begin","message_id":)" + h.next_message_id() +
+                 R"(,"slot":0,"n_states":2,"entry":0)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  // 0: the state's own dwell. 1: the timer's onset delay. 2: its width.
+  r = h.send(R"({"msg_type":"graph_dist","message_id":)" + h.next_message_id() +
+                 R"(,"i":0,"kind":"fixed","a":100)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_dist","message_id":)" + h.next_message_id() +
+                 R"(,"i":1,"kind":"fixed","a":200)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_dist","message_id":)" + h.next_message_id() +
+                 R"(,"i":2,"kind":"fixed","a":100)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_timer","message_id":)" + h.next_message_id() +
+                 R"(,"i":0,"delay":1,"width":2,"line":0)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
+                 R"(,"i":0,"terminal":null,"timeout":{"dist":0,"target":1})",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
+                 R"(,"i":1,"terminal":1,"timeout":null)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  // On entering the terminal state: start the timer. A pseudo-output, Bpod's
+  // way, so there is one action vocabulary rather than two.
+  r = h.send(R"({"msg_type":"graph_action","message_id":)" + h.next_message_id() +
+                 R"(,"on":"entry","kind":"timer_start","timer":0)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_end","message_id":)" + h.next_message_id() +
+                 R"(,"n_transitions":0,"n_output_actions":1)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.close_set(2, 0, 1);
+  REQUIRE(type_of(r[0]) == "set_ok");
+}
+
 /// A boolean member, which `field` cannot report: it renders numbers and
 /// strings, and `true` is neither.
 bool flag(const std::string& line, const char* key) {
@@ -230,7 +292,7 @@ void scan_for(Host& h, Microseconds us) {
   const Microseconds until = h.now + us;
   while (h.now < until) {
     h.now += 1000;
-    h.device.advance_trial(0, h.now);
+    advance(h, 0, h.now);
   }
 }
 
@@ -312,7 +374,7 @@ TEST_CASE("a whole trial: greet, upload, configure, start, run, result") {
   const size_t before = h.sink.lines.size();
   LineBitmask raised = 0, lowered = 0;
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100) {
-    const OutputUpdate ops = h.device.advance_trial(0, t);
+    const OutputUpdate ops = advance(h, 0, t);
     raised |= ops.set_high;
     lowered |= ops.set_low;
   }
@@ -417,7 +479,7 @@ std::string run_trial(Host& h, int trial_id, int graph_index) {
          std::to_string(trial_id));
   const size_t before = h.sink.lines.size();
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
   for (size_t i = before; i < h.sink.lines.size(); ++i)
     if (type_of(h.sink.lines[i]) == "result_begin") return h.sink.lines[i];
   FAIL("no result_begin");
@@ -463,7 +525,7 @@ TEST_CASE("state indices are per graph, not into the shared pool") {
 
   const size_t before = h.sink.lines.size();
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
 
   // The visit stream says the same thing: it left state 0 for state 1.
   for (size_t i = before; i < h.sink.lines.size(); ++i) {
@@ -545,7 +607,7 @@ TEST_CASE("every state visit is reported as it happens") {
 
   const size_t before = h.sink.lines.size();
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
 
   std::vector<std::string> visits;
   for (size_t i = before; i < h.sink.lines.size(); ++i)
@@ -592,7 +654,7 @@ TEST_CASE("a visit outside a trial carries trial_id 0") {
          R"(,"trial_id":5,"set_version":7)");
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":5)");
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
   CHECK(h.device.state() == LinkState::Idle);
 
   // Every visit of that trial named it.
@@ -614,7 +676,7 @@ TEST_CASE("result_begin says which window of the path it carries") {
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":8)");
   const size_t before = h.sink.lines.size();
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
 
   const std::vector<std::string> result =
       without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
@@ -636,7 +698,7 @@ TEST_CASE("the result's checksum covers every chunk") {
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":1)");
   const size_t before = h.sink.lines.size();
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
 
   uint16_t sum = 0xFFFF;
   std::string end;
@@ -696,7 +758,7 @@ TEST_CASE("a path longer than one line is split across chunks") {
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":5)");
   const size_t before = h.sink.lines.size();
   for (uint32_t t = 0; t < 5000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
 
   int chunks = 0;
   for (size_t i = before; i < h.sink.lines.size(); ++i) {
@@ -759,12 +821,391 @@ TEST_CASE("no trial runs that the device was not confirmed configured for") {
     CHECK(h.device.state() == LinkState::Armed);
   }
   SUBCASE("start when the trial is line-triggered") {
-    h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
-           R"(,"trial_id":1,"set_version":7,"start":"line")");
+    const auto c = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+                          R"(,"trial_id":1,"set_version":7,"start":"line","start_line":3)");
+    REQUIRE(type_of(c[0]) == "armed");
+    const auto r = h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() +
+                          R"(,"trial_id":1)");
+    CHECK(field(r[0], "code") == "not_ready");
+    // Armed still, not cancelled: the refusal is about this command, and the
+    // line it is waiting for is still coming.
+    CHECK(h.device.state() == LinkState::Armed);
+  }
+}
+
+// ------------------------------------------------- starting on a line ---
+
+namespace {
+
+/// Arm `h` for one trial that starts on line 3, and leave it armed.
+void arm_on_line(Host& h, int trial_id = 1, const char* start = "line") {
+  const auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+                        R"(,"trial_id":)" + std::to_string(trial_id) +
+                        R"(,"set_version":7,"start":")" + start + R"(","start_line":3)");
+  REQUIRE(type_of(r[0]) == "armed");
+  REQUIRE(h.device.state() == LinkState::Armed);
+}
+
+constexpr LineBitmask kStartBit = 1u << 3;
+
+/// The `started` lines the device sent of its own accord.
+std::vector<std::string> unsolicited_starteds(const RecordingSink& sink) {
+  std::vector<std::string> out;
+  for (const auto& l : sink.lines)
+    if (type_of(l) == "started" && field(l, "in_reply_to").empty()) out.push_back(l);
+  return out;
+}
+
+}  // namespace
+
+TEST_CASE("a trial armed on a line starts on that line's rising edge") {
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  arm_on_line(h);
+
+  // Low: nothing starts, and nothing is said about it.
+  advance(h, 0, ms(10));
+  CHECK(h.device.state() == LinkState::Armed);
+  CHECK(unsolicited_starteds(h.sink).empty());
+
+  // The edge. The entry action's line goes up in the same update -- one call,
+  // so the pins and the timestamp cannot disagree.
+  const OutputUpdate ops = advance(h, kStartBit, ms(20));
+  CHECK(h.device.state() == LinkState::Running);
+  CHECK((ops.set_high & (1u << 2)) != 0);
+
+  const auto started = unsolicited_starteds(h.sink);
+  REQUIRE(started.size() == 1);
+  check_wire_valid(started[0]);
+  CHECK(field(started[0], "trial_id") == "1");
+  CHECK(field(started[0], "by") == "line");
+  CHECK(field(started[0], "line") == "3");
+  // The scan that saw the edge, not an acknowledgement of anything: this is the
+  // instant the trial began.
+  CHECK(field(started[0], "at_us") == std::to_string(ms(20)));
+}
+
+TEST_CASE("the line's own start is what the first state is stamped with") {
+  // The same guarantee the deferred serial start buys, arrived at for free:
+  // there is no foreground work between the edge and start(), because the scan
+  // that sees one calls the other.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  arm_on_line(h);
+
+  advance(h, 0, ms(10));
+  advance(h, kStartBit, ms(20));
+  scan_for(h, ms(600));
+
+  const auto r = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
+  // The result the run produced carries the entry state's own clock.
+  bool saw = false;
+  for (const auto& l : h.sink.lines) {
+    if (type_of(l) != "visit") continue;
+    if (field(l, "trial_id") != "1") continue;
+    const std::string body = l.substr(0, l.size() - 1);
+    JsonObject m(body.data(), body.size());
+    JsonArray v;
+    REQUIRE(m.array("v", &v));
+    // [state_index, cause, transition_index, drawn_ms, entered_us, duration_us]
+    JsonSpan span;
+    JsonType type = JsonType::Missing;
+    for (int i = 0; i < 4; ++i) REQUIRE(v.next(&span, &type));
+    uint32_t entered = 0;
+    REQUIRE(v.next_u32(&entered));
+    CHECK(entered == ms(20));
+    saw = true;
+    break;
+  }
+  CHECK(saw);
+  CHECK(type_of(r[0]) == "state_report");
+}
+
+TEST_CASE("a line already asserted when the trial is armed does not start it") {
+  // An edge, not a level. A line nobody had lowered yet is not a start signal,
+  // and treating it as one would start the trial on the scan after `configure`
+  // -- which is to say, on the host's timing rather than the subject's.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+
+  advance(h, kStartBit, ms(5));  // high before anything is armed
+  arm_on_line(h);
+  advance(h, kStartBit, ms(10));
+  advance(h, kStartBit, ms(20));
+  CHECK(h.device.state() == LinkState::Armed);
+  CHECK(unsolicited_starteds(h.sink).empty());
+
+  // Released, then asserted again: that is the edge.
+  advance(h, 0, ms(30));
+  advance(h, kStartBit, ms(40));
+  CHECK(h.device.state() == LinkState::Running);
+  REQUIRE(unsolicited_starteds(h.sink).size() == 1);
+}
+
+TEST_CASE("one edge starts one trial") {
+  // The arming is spent by the edge that uses it, so the line going high again
+  // mid-trial is an ordinary input and the trial after this one waits for its
+  // own `configure`.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  arm_on_line(h);
+
+  advance(h, 0, ms(10));
+  advance(h, kStartBit, ms(20));
+  advance(h, 0, ms(30));
+  advance(h, kStartBit, ms(40));
+  CHECK(unsolicited_starteds(h.sink).size() == 1);
+
+  scan_for(h, ms(600));
+  CHECK(h.device.state() == LinkState::Idle);
+  // The run ended; the line is not armed for another.
+  advance(h, 0, h.now + 1000);
+  advance(h, kStartBit, h.now + 2000);
+  CHECK(h.device.state() == LinkState::Idle);
+  CHECK(unsolicited_starteds(h.sink).size() == 1);
+}
+
+TEST_CASE("start \"both\" takes whichever comes first") {
+  SUBCASE("serial wins, and the line does not start a second run") {
+    Host h;
+    greet(h);
+    upload_minimal(h);
+    arm_on_line(h, 1, "both");
+    const auto r = h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() +
+                          R"(,"trial_id":1)");
+    REQUIRE(type_of(r[0]) == "started");
+    CHECK(field(r[0], "by") == "serial");
+    advance(h, 0, ms(10));
+    advance(h, kStartBit, ms(20));
+    // One run, announced once, by the source that actually started it.
+    CHECK(unsolicited_starteds(h.sink).empty());
+  }
+  SUBCASE("the line wins, and serial is then refused") {
+    Host h;
+    greet(h);
+    upload_minimal(h);
+    arm_on_line(h, 1, "both");
+    advance(h, 0, ms(10));
+    advance(h, kStartBit, ms(20));
+    REQUIRE(unsolicited_starteds(h.sink).size() == 1);
     const auto r = h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() +
                           R"(,"trial_id":1)");
     CHECK(field(r[0], "code") == "not_ready");
   }
+}
+
+TEST_CASE("a start line that could never rise is refused at configure") {
+  // Not left to hang armed forever. A trial waiting on an edge the board cannot
+  // produce reports nothing at all, which a host cannot tell from a subject who
+  // has not responded yet -- so the refusal has to be here, while there is
+  // still a message to refuse.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+
+  SUBCASE("no start_line at all") {
+    const auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+                          R"(,"trial_id":1,"set_version":7,"start":"line")");
+    CHECK(field(r[0], "code") == "bad_json");
+    CHECK(field(r[0], "context") == "start_line");
+    CHECK(h.device.state() == LinkState::Idle);
+  }
+  SUBCASE("a line the board does not have") {
+    // One past the last, expressed in the board's own count: the check is also
+    // what keeps the shift that builds the bit mask inside the word.
+    const auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+                          R"(,"trial_id":1,"set_version":7,"start":"line","start_line":)" +
+                          std::to_string(kMaxLines));
+    CHECK(field(r[0], "code") == "bad_index");
+    CHECK(h.device.state() == LinkState::Idle);
+  }
+  SUBCASE("a line the wiring has disabled") {
+    // The conditioner zeroes it, so the bit cannot rise whatever the pin does.
+    h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() + R"(,"enable":3)");
+    const auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+                          R"(,"trial_id":1,"set_version":7,"start":"line","start_line":3)");
+    CHECK(field(r[0], "code") == "bad_index");
+    CHECK(field(r[0], "context") == "start_line");
+    CHECK(h.device.state() == LinkState::Idle);
+  }
+  SUBCASE("start_line is ignored when the trial starts on serial") {
+    const auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+                          R"(,"trial_id":1,"set_version":7,"start":"serial","start_line":)" +
+                          std::to_string(kMaxLines));
+    CHECK(type_of(r[0]) == "armed");
+  }
+}
+
+TEST_CASE("a global timer outlives the trial that started it, and starts the next one") {
+  // The whole point, and the thing the eight-wire loopback could not do on its
+  // own: a trial is only armed while none is running, and the only thing that
+  // moves an input on that harness is a *running* trial's output. A global
+  // timer breaks the deadlock, because it is still going when the run that
+  // started it has ended.
+  //
+  // The test plays the loopback itself -- output line 0 is fed back as input
+  // line 4 on the following scan, which is the harness's own rule.
+  Host h;
+  greet(h);
+  upload_with_a_timer(h);
+
+  // Trial A: 100 ms in `wait`, then the terminal state starts the timer.
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":1,"set_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":1)");
+
+  LineBitmask word = 0;
+  auto step = [&](Microseconds at) {
+    const OutputUpdate ops = advance(h, word, at);
+    // out 0 -> in 4, one scan later.
+    if (ops.set_high & 1u) word |= 1u << 4;
+    if (ops.set_low & 1u) word &= ~(1u << 4);
+  };
+
+  for (Microseconds t = ms(1); t <= ms(150); t += ms(1)) step(t);
+  REQUIRE(h.device.state() == LinkState::Idle);  // A is over
+  CHECK((word & (1u << 4)) == 0);                // and the timer has not fired
+
+  // Arm B on the line the timer will drive. Nothing else can move it.
+  const auto armed = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+                            R"(,"trial_id":2,"set_version":7,"start":"line","start_line":4)");
+  REQUIRE(type_of(armed[0]) == "armed");
+  REQUIRE(h.device.state() == LinkState::Armed);
+
+  // The timer was started at ~100 ms with a 200 ms delay, so it comes up around
+  // 300 ms -- well after A ended and while B sits armed.
+  for (Microseconds t = ms(151); t <= ms(400); t += ms(1)) {
+    step(t);
+    if (h.device.state() == LinkState::Running) break;
+  }
+  CHECK(h.device.state() == LinkState::Running);
+
+  bool announced = false;
+  for (const auto& l : h.sink.lines) {
+    if (type_of(l) != "started" || !field(l, "in_reply_to").empty()) continue;
+    CHECK(field(l, "trial_id") == "2");
+    CHECK(field(l, "by") == "line");
+    announced = true;
+  }
+  CHECK(announced);
+}
+
+TEST_CASE("the timers command says which timers may run") {
+  Host h;
+  greet(h);
+  upload_with_a_timer(h);
+
+  const auto r =
+      h.send(R"({"msg_type":"timers","message_id":)" + h.next_message_id() + R"(,"enable":0)");
+  REQUIRE(type_of(r[0]) == "ack");
+  CHECK(field(r[0], "enable") == "0");
+  CHECK(field(r[0], "n_timers") == "1");
+
+  // Same trial as above; the timer's action runs and does nothing.
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":1,"set_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":1)");
+  for (Microseconds t = ms(1); t <= ms(400); t += ms(1)) advance(h, 0, t);
+
+  const auto st = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
+  CHECK(st[0].find(R"("timers_enabled":0)") != std::string::npos);
+  CHECK(st[0].find(R"("timers_running":0)") != std::string::npos);
+}
+
+TEST_CASE("timers is refused while a trial is armed or running") {
+  // The same rule as `wiring`, and the same reason: this changes what the scan
+  // does, and a timer switched off under a running trial would move a timing
+  // that trial's record could not account for.
+  Host h;
+  greet(h);
+  upload_with_a_timer(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":1,"set_version":7)");
+  const auto r =
+      h.send(R"({"msg_type":"timers","message_id":)" + h.next_message_id() + R"(,"enable":0)");
+  CHECK(field(r[0], "code") == "busy");
+}
+
+TEST_CASE("configure's timer mask lasts exactly one trial") {
+  // A trial type selects its timers the way it selects its graph. The override
+  // is reverted when the trial ends, like a distribution patch -- a mask that
+  // outlived its trial would be a timer running, or not, that nobody could
+  // account for afterwards.
+  Host h;
+  greet(h);
+  upload_with_a_timer(h);
+  h.send(R"({"msg_type":"timers","message_id":)" + h.next_message_id() + R"(,"enable":1)");
+
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":1,"set_version":7,"timers":0)");
+  auto st = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
+  CHECK(st[0].find(R"("timers_enabled":0)") != std::string::npos);
+
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":1)");
+  for (Microseconds t = ms(1); t <= ms(400); t += ms(1)) advance(h, 0, t);
+  REQUIRE(h.device.state() == LinkState::Idle);
+
+  // Back to what the device was told, not left where the trial put it.
+  st = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
+  CHECK(st[0].find(R"("timers_enabled":1)") != std::string::npos);
+}
+
+TEST_CASE("a graph naming a timer that does not exist is refused at upload") {
+  Host h;
+  greet(h);
+  auto r = h.open_set(7);
+  r = h.send(R"({"msg_type":"graph_begin","message_id":)" + h.next_message_id() +
+                 R"(,"slot":0,"n_states":1,"entry":0)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  r = h.send(R"({"msg_type":"graph_state","message_id":)" + h.next_message_id() +
+                 R"(,"i":0,"terminal":1,"timeout":null)",
+             true);
+  REQUIRE(type_of(r[0]) == "ack");
+  // Checked against the timers, not against the output lines: they are
+  // different index spaces, and the wrong check would let this through to do
+  // nothing at the moment it mattered.
+  r = h.send(R"({"msg_type":"graph_action","message_id":)" + h.next_message_id() +
+                 R"(,"on":"entry","kind":"timer_start","timer":99)",
+             true);
+  CHECK(type_of(r[0]) == "error");
+  CHECK(field(r[0], "context") == "timer");
+}
+
+TEST_CASE("hello says where the timer lines are") {
+  // Not derivable from the line count -- they are counted down from the top of
+  // the word -- so a host writing a predicate against a timer has to be told.
+  Host h;
+  greet(h);
+  const std::string body = h.sink.lines[0].substr(0, h.sink.lines[0].size() - 1);
+  JsonObject m(body.data(), body.size());
+  JsonObject caps;
+  REQUIRE(m.object("caps", &caps));
+  uint32_t v = 0;
+  CHECK(caps.u32("max_timers", &v));
+  CHECK(v == kMaxTimers);
+  CHECK(caps.u32("first_timer_line", &v));
+  CHECK(v == kFirstTimerLine);
+}
+
+TEST_CASE("a link lost disarms a trial waiting on a line") {
+  // Otherwise a board left armed across a reconnect starts a trial the
+  // returning host never asked for, on an id it has forgotten.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  arm_on_line(h);
+  h.device.link_lost(ms(10));
+  CHECK(h.device.state() == LinkState::Idle);
+
+  advance(h, 0, ms(20));
+  advance(h, kStartBit, ms(30));
+  CHECK(h.device.state() == LinkState::Idle);
+  CHECK(unsolicited_starteds(h.sink).empty());
 }
 
 TEST_CASE("configure against a graph the device does not hold is refused") {
@@ -794,7 +1235,7 @@ TEST_CASE("cancel reports what actually happened") {
   h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
          R"(,"trial_id":4,"set_version":7)");
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":4)");
-  h.device.advance_trial(0, 1000);
+  advance(h, 0, 1000);
 
   // The cancel's own state visit is reported before the reply to it, since
   // force_end() records one on the way out.
@@ -809,7 +1250,7 @@ TEST_CASE("cancel reports what actually happened") {
   // trial is recorded rather than dropped, so a gap in the numbering never has
   // to be explained.
   const size_t before = h.sink.lines.size();
-  h.device.advance_trial(0, 2000);
+  advance(h, 0, 2000);
   const std::vector<std::string> result =
       without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
   REQUIRE(result.size() >= 3);
@@ -831,7 +1272,7 @@ TEST_CASE("a patch changes a duration for one trial and puts it back") {
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":1)");
   size_t before = h.sink.lines.size();
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
 
   std::vector<std::string> result =
       without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
@@ -845,7 +1286,7 @@ TEST_CASE("a patch changes a duration for one trial and puts it back") {
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":2)");
   before = h.sink.lines.size();
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
   result = without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
   CHECK(field(result.front(), "total_us") == "500000");
 }
@@ -875,7 +1316,7 @@ TEST_CASE("a malformed patch leaves every distribution as it was") {
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":2)");
   const size_t before = h.sink.lines.size();
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
   const std::vector<std::string> result =
       without_visits({h.sink.lines.begin() + before, h.sink.lines.end()});
   CHECK(field(result.front(), "total_us") == "500000");
@@ -892,7 +1333,7 @@ TEST_CASE("a cancel that loses the race gets the real outcome back") {
          R"(,"trial_id":6,"set_version":7)");
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":6)");
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
   REQUIRE(h.device.state() == LinkState::Idle);
 
   const auto r = h.send(R"({"msg_type":"cancel","message_id":)" + h.next_message_id() +
@@ -1153,7 +1594,7 @@ TEST_CASE("every reply is a line the bridge can parse") {
          R"(,"trial_id":11,"set_version":7)");
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":11)");
   for (uint32_t t = 0; t < 1000000u && h.device.state() == LinkState::Running; t += 100)
-    h.device.advance_trial(0, t);
+    advance(h, 0, t);
   h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
   h.send(R"({"msg_type":"nonsense","message_id":)" + h.next_message_id());
 
@@ -1239,7 +1680,77 @@ TEST_CASE("a lost link cancels the trial in flight and lowers what it raised") {
   CHECK(h.device.state() == LinkState::Idle);
 }
 
-TEST_CASE("link loss and fail-safe discard un-applied entry actions") {
+TEST_CASE("a trial is stamped by the scan that starts it, not by the command that asked") {
+  // The finding this exists to hold: `entered_us` used to come from the
+  // timestamp the link read the `start` command at, while the entry state's
+  // outputs waited for the next scan. On a board those are ~1.1 ms apart --
+  // docs/operations/hardware.md, "Response latency and duration accuracy" --
+  // so every trial's first state reported about a millisecond it had not spent,
+  // and its entry action reached the pin about a millisecond after the
+  // timestamp that said it had.
+  //
+  // They are one call now, so the gap cannot exist. Here it is asserted at a
+  // scale no board would show: the command arrives at 1 000 us and the scan
+  // comes at 900 000, and the entry state is stamped 900 000 -- along with the
+  // output it raises, which the same call returns.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":11,"set_version":7)");
+  h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":11)");
+
+  const size_t before = h.sink.lines.size();
+  const OutputUpdate first = advance(h, 0, 900000);
+  CHECK((first.set_high & (1u << 2)) != 0);  // the entry action, on this scan
+  for (uint32_t t = 900100; t < 3000000u && h.device.state() == LinkState::Running; t += 100)
+    advance(h, 0, t);
+
+  for (size_t i = before; i < h.sink.lines.size(); ++i) {
+    if (type_of(h.sink.lines[i]) != "visit") continue;
+    const std::string body = h.sink.lines[i].substr(0, h.sink.lines[i].size() - 1);
+    JsonObject m(body.data(), body.size());
+    JsonArray row;
+    REQUIRE(m.array("v", &row));
+    // [state_index, cause, transition_index, drawn_ms, entered_us, duration_us]
+    JsonSpan element;
+    JsonType element_type = JsonType::Missing;
+    std::string entered;
+    for (int at = 0; row.next(&element, &element_type); ++at) {
+      if (at == 4) entered.assign(element.p, element.n);
+    }
+    CHECK(entered == "900000");  // the scan's clock, not the command's 1 000
+    return;
+  }
+  FAIL("no visit");
+}
+
+TEST_CASE(
+    "a state_report between start and the first scan agrees with the started it follows") {
+  // The same window from the host's side. It has been told the trial started;
+  // asking what the device is doing must not answer "not running", and must not
+  // answer with whatever state the previous trial ended in.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":12,"set_version":7)");
+  const auto started = h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() +
+                              R"(,"trial_id":12)");
+  REQUIRE(type_of(started[0]) == "started");
+
+  const auto r = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
+  REQUIRE(type_of(r[0]) == "state_report");
+  CHECK(r[0].find(R"("running":true)") != std::string::npos);
+  CHECK(field(r[0], "current_state") == "0");
+  CHECK(field(r[0], "trial_id") == "12");
+}
+
+TEST_CASE("a link lost between start and the first scan raises nothing") {
+  // A trial begins on the scan, not on the `start` command, so there is a
+  // window of one scan period in which the run has been promised to the host
+  // and no pin has moved. A link lost inside it must not leave the entry
+  // action to be applied by a later scan: there is no trial any more.
   Host h;
   greet(h);
   upload_minimal(h);
@@ -1248,16 +1759,37 @@ TEST_CASE("link loss and fail-safe discard un-applied entry actions") {
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":9)");
 
   h.device.link_lost(1000);
-  const OutputUpdate after_link_loss = h.device.advance_trial(0, 2000);
+  const OutputUpdate after_link_loss = advance(h, 0, 2000);
   CHECK((after_link_loss.set_high & (1u << 2)) == 0);
+  CHECK_FALSE(h.device.state() == LinkState::Running);
+}
 
+TEST_CASE("a fail-safe does not end a trial, so a pending start still reaches the pins") {
+  // fail_safe() drives every line to its safe level; it does not cancel
+  // anything, and it never has. So a trial that is still Running when it
+  // happens goes on running, and the entry action of one that has not been
+  // scanned yet lands on the following scan like any other output the graph
+  // owes.
+  //
+  // That is a change: it used to be discarded, because the entry outputs sat in
+  // pending_ops_ where fail_safe() clears them, while the trial itself had
+  // already started. The result was a running trial whose entry action never
+  // reached a pin -- the "house light on at trial start silently did nothing"
+  // failure in a second guise. The two are now one call and cannot come apart.
+  //
+  // Unreachable in the firmware either way: main.cpp calls fail_safe() at boot,
+  // on the halt path, and on link loss -- and link loss cancels first, which is
+  // the case above.
+  Host h;
   greet(h);
+  upload_minimal(h);
   h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
          R"(,"trial_id":10,"set_version":7)");
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":10)");
   h.device.fail_safe();
-  const OutputUpdate after_fail_safe = h.device.advance_trial(0, 3000);
-  CHECK((after_fail_safe.set_high & (1u << 2)) == 0);
+  CHECK(h.device.state() == LinkState::Running);
+  const OutputUpdate after_fail_safe = advance(h, 0, 3000);
+  CHECK((after_fail_safe.set_high & (1u << 2)) != 0);
 }
 
 TEST_CASE("a lost link keeps the committed graph, so a reconnect costs no re-upload") {
@@ -1295,8 +1827,9 @@ TEST_CASE("state_report carries the scan health the board measured") {
   const auto r = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
   REQUIRE(r.size() == 1);
   REQUIRE(type_of(r[0]) == "state_report");
-  CHECK(r[0].find(R"("scan":{"hz":9871,"overruns":4,"worst_gap":2,"tx_stalls":3})") !=
-        std::string::npos);
+  CHECK(r[0].find(
+            R"("scan":{"hz":9871,"overruns":4,"worst_gap":2,"tx_stalls":3,"visits_dropped":0,)"
+            R"("timers_enabled":4294967295,"timers_running":0})") != std::string::npos);
 }
 
 TEST_CASE("the entry state's output actions reach the caller of advance_trial") {
@@ -1317,11 +1850,11 @@ TEST_CASE("the entry state's output actions reach the caller of advance_trial") 
       h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":4)");
   REQUIRE(type_of(started[0]) == "started");
 
-  const OutputUpdate first = h.device.advance_trial(0, 1000);
+  const OutputUpdate first = advance(h, 0, 1000);
   CHECK((first.set_high & (1u << 2)) != 0);
 
   // And only once: the next scan owes nothing.
-  const OutputUpdate second = h.device.advance_trial(0, 2000);
+  const OutputUpdate second = advance(h, 0, 2000);
   CHECK((second.set_high & (1u << 2)) == 0);
 }
 

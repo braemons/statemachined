@@ -34,8 +34,10 @@ or skip the toolchain entirely and take the image CI publishes on every run:
 gh run download --name statemachined-uno_r4_minima-<sha>
 ```
 
-Check `MANIFEST.txt` against the commit you believe you are testing. A board in
-a rack cannot be asked what it is running, which is why that file exists.
+Check `MANIFEST.txt` against the version you believe you are testing. Once
+flashed, the board reports the same version as `fw` in its `hello_ack`
+(`statemachined hello`), and the daemon compares the two at
+`GET /api/device/firmware`.
 
 There is one image. There used to be two -- a bench build carrying a demo
 paradigm and a rig build with it compiled out -- and there is now nothing to
@@ -140,7 +142,7 @@ Erratic or self-starting chases are the pull-downs, not the firmware.
 Every line carries a CRC-16/CCITT-FALSE, so typing JSON into a serial monitor
 gets no reply. Use the repository's own bench instrument, which frames commands
 with the same helper CI drives the emulated board with
-([`python/`](https://github.com/braemons/statemachined/blob/main/python/README.md)):
+([`daemon/`](https://github.com/braemons/statemachined/blob/main/daemon/README.md)):
 
 ```sh
 make bringup ARGS="hello"
@@ -358,7 +360,7 @@ make bench                       # /dev/ttyACM0, or make bench TARGET=...
 
 Then open **http://127.0.0.1:8081/**. The daemon greets the board on startup,
 pushes the wiring from the line map in
-`python/bench/statemachined_bench_rig_config.toml`, and seeds its graph store
+`daemon/bench/statemachined_bench_rig_config.toml`, and seeds its graph store
 from `graphs/` into `build/bench/graphs` -- a copy, so deleting a graph in the
 browser does not delete an example from the repository. Greeting takes the rig,
 as it does anywhere else.

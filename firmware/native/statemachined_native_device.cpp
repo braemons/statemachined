@@ -25,6 +25,7 @@
 #include <cstring>
 #include <ctime>
 
+#include "protocol/firmware_version.h"
 #include "hal.h"
 #include "io/input_conditioner.h"
 #include "io/reply_queue.h"
@@ -68,7 +69,7 @@ class QueueingReplySink : public ReplySink {
 DeviceIdentity native_device_identity() {
   DeviceIdentity identity;
   identity.board = "native";
-  identity.firmware_version = "0.0.0";
+  identity.firmware_version = firmware_version();
   identity.input_line_count = kMaxLines;
   identity.output_line_count = kMaxOutputLines;
   // Declared rather than measured, unlike a board's: there is no scan floor to
@@ -199,6 +200,10 @@ int main() {
 
     const LineBitmask word = input_conditioner.apply(hal::read_inputs(), now_us);
     apply_output_update(session.advance_trial(word, now_us));
+    // The visit stream is formatted outside the trial loop on a board, because
+    // there it is an interrupt. Same call here so the host build's byte stream
+    // is the board's byte stream.
+    session.drain_outbound();
     drain_reply_queue();
 
     timespec scan_period{0, kScanPeriodNanoseconds};

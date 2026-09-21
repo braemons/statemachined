@@ -68,6 +68,7 @@
 #include "io/input_conditioner.h"
 #include "io/reply_queue.h"
 #include "io/settings_store.h"
+#include "protocol/firmware_version.h"
 #include "protocol/host_link_session.h"
 #include "trial/trial_runner.h"
 
@@ -228,7 +229,7 @@ FlashSettingsPort g_settings;
 DeviceIdentity make_identity() {
   DeviceIdentity id;
   id.board = "uno_r4_minima";
-  id.firmware_version = "0.1.0";
+  id.firmware_version = firmware_version();
   id.input_line_count = kBoardInputLines;
   id.output_line_count = kBoardOutputLines;
   id.measured_scan_hz = g_health.hz;
@@ -489,6 +490,17 @@ void loop() {
   // What is left is the link -- milliseconds of vendor USB stack that share
   // nothing with the engine and are preempted rather than waited for.
   service_link();
+  // The visit stream, formatted here rather than in the ISR that produced it.
+  // Building one of these lines costs ~120 us, and paying that inside the scan
+  // made the scan overrun its own tick -- which pushed the *next* scan late and
+  // took the board's answer to a line from one scan period to 220 us. Measured
+  // both ways; see HostLinkSession::drain_visits(). No hold: the ring is
+  // single-producer, single-consumer, and this is the only consumer.
+  // One per pass, not the whole ring: drain_tx() below is what actually moves
+  // bytes, and handing it a burst bigger than the queue is what makes
+  // send_line() spin. loop() turns far faster than a graph changes state, so
+  // one at a time still empties it immediately.
+  g_session->drain_outbound(1);
   // Last, so a reply produced by the command just serviced starts moving in
   // this same pass instead of waiting for the next one.
   drain_tx();

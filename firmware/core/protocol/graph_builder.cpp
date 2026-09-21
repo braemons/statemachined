@@ -338,6 +338,85 @@ UploadError GraphBuilder::add_transition(const JsonObject& m, JsonSpan covered) 
   return UploadError::None;
 }
 
+UploadError GraphBuilder::add_timer(const JsonObject& m, JsonSpan covered) {
+  // Inside a graph block, like `graph_dist`, and into a pool that belongs to
+  // the whole set. The nesting is about ordering, not ownership: a timer names
+  // distributions, so it has to arrive after the ones it names, and a graph
+  // block is where distributions are declared. What it *means* is set-scope --
+  // a timer outlives the run that started it, so it cannot belong to one graph.
+  // See graph/global_timer.h.
+  if (!graph_open_) return fail(UploadError::NotOpen, "graph_timer");
+  if (g_.n_timers >= kMaxTimers) return fail(UploadError::TooMany, "max_timers");
+
+  uint8_t index = 0;
+  if (!m.u8("i", &index)) return fail(UploadError::BadField, "i");
+  // Declared in order, like every other pooled thing, so that a set cannot
+  // leave a hole -- an undeclared timer between two declared ones would be one
+  // an action could name and nothing would ever run.
+  if (index != g_.n_timers)
+    return fail(UploadError::BadOrder, "timers must be declared in order");
+
+  GlobalTimer t;
+  bool bad = false;
+  uint32_t v = 0;
+  if (opt_u32(m, "all", &v, &bad)) t.all_high = v;
+  if (opt_u32(m, "any", &v, &bad)) t.any_high = v;
+  if (opt_u32(m, "none", &v, &bad)) t.none_high = v;
+  if (bad) return fail(UploadError::BadField, "all/any/none");
+  // Unlike a transition, no predicate at all is legal and means "started only
+  // by a timer_start action". The bank never evaluates a timer with no masks,
+  // so the vacuously-true predicate that would fire it every scan is not
+  // reachable. See has_trigger() in machine/global_timers.cpp.
+
+  // The width is the one duration a timer cannot do without: a timer that is
+  // never high is a line that never moves and a predicate that never fires.
+  uint8_t width = 0;
+  if (!m.u8("width", &width)) return fail(UploadError::BadField, "width");
+  if (width >= g_.n_distributions) return fail(UploadError::BadIndex, "width");
+  t.width = width;
+
+  if (m.type_of("delay") != JsonType::Missing && !m.is_null("delay")) {
+    uint8_t d = 0;
+    if (!m.u8("delay", &d)) return fail(UploadError::BadField, "delay");
+    if (d >= g_.n_distributions) return fail(UploadError::BadIndex, "delay");
+    t.delay = d;
+  }
+  if (m.type_of("gap") != JsonType::Missing && !m.is_null("gap")) {
+    uint8_t gp = 0;
+    if (!m.u8("gap", &gp)) return fail(UploadError::BadField, "gap");
+    if (gp >= g_.n_distributions) return fail(UploadError::BadIndex, "gap");
+    t.gap = gp;
+  }
+
+  if (m.type_of("line") != JsonType::Missing && !m.is_null("line")) {
+    uint8_t line = 0;
+    if (!m.u8("line", &line)) return fail(UploadError::BadField, "line");
+    if (line >= kMaxOutputLines) return fail(UploadError::BadField, "line");
+    t.output_line = line;
+  }
+
+  if (m.type_of("loops") != JsonType::Missing) {
+    uint32_t loops = 0;
+    if (!opt_u32(m, "loops", &loops, &bad) || bad) return fail(UploadError::BadField, "loops");
+    if (loops > UINT8_MAX) return fail(UploadError::BadField, "loops");
+    t.loops = static_cast<uint8_t>(loops);
+  }
+
+  bool flag = false;
+  if (m.type_of("active_low") != JsonType::Missing) {
+    if (!m.boolean("active_low", &flag)) return fail(UploadError::BadField, "active_low");
+    t.active_low = flag;
+  }
+  if (m.type_of("trial_bound") != JsonType::Missing) {
+    if (!m.boolean("trial_bound", &flag)) return fail(UploadError::BadField, "trial_bound");
+    t.trial_bound = flag;
+  }
+
+  g_.timers[g_.n_timers++] = t;
+  fold(covered);
+  return UploadError::None;
+}
+
 UploadError GraphBuilder::add_action(const JsonObject& m, JsonSpan covered) {
   if (!graph_open_) return fail(UploadError::NotOpen, "graph_action");
   if (current_state_ == kNoState)
@@ -358,28 +437,22 @@ UploadError GraphBuilder::add_action(const JsonObject& m, JsonSpan covered) {
     return fail(UploadError::BadOrder, "entry action after an exit action");
 
   OutputAction a;
-  uint8_t line = 0;
-  if (!m.u8("line", &line)) return fail(UploadError::BadField, "line");
-  if (line >= kMaxOutputLines) return fail(UploadError::BadField, "line");
-  a.output_line = line;
-
   JsonSpan kind;
   if (!m.str("kind", &kind)) return fail(UploadError::BadField, "kind");
-  if (json_str_eq(kind, "high")) {
-    a.kind = OutputActionKind::High;
-  } else if (json_str_eq(kind, "low")) {
-    a.kind = OutputActionKind::Low;
-  } else if (json_str_eq(kind, "toggle")) {
-    a.kind = OutputActionKind::Toggle;
-  } else if (json_str_eq(kind, "pulse")) {
-    a.kind = OutputActionKind::Pulse;
-    uint32_t ms = 0;
-    bool bad = false;
-    if (!opt_u32(m, "ms", &ms, &bad) || bad) return fail(UploadError::BadField, "pulse ms");
-    if (ms == 0 || ms > UINT16_MAX) return fail(UploadError::BadField, "pulse ms");
-    a.pulse_ms = static_cast<NarrowMilliseconds>(ms);
-  } else {
-    return fail(UploadError::BadField, "kind");
+
+  // The two kinds whose `line` is a timer index rather than an output line.
+  // Bounds-checked against the timers, not against kMaxOutputLines: they are
+  // different index spaces and the wrong check would let a set name a timer
+  // that does not exist and silently do nothing at the moment it mattered.
+  if (json_str_eq(kind, "timer_start") || json_str_eq(kind, "timer_cancel")) {
+    uint8_t timer = 0;
+    if (!m.u8("timer", &timer)) return fail(UploadError::BadField, "timer");
+    if (timer >= kMaxTimers) return fail(UploadError::BadField, "timer");
+    a.output_line = timer;
+    a.kind = json_str_eq(kind, "timer_start") ? OutputActionKind::TimerStart
+                                              : OutputActionKind::TimerCancel;
+  } else if (!parse_line_action(m, kind, &a)) {
+    return fail(UploadError::BadField, context_);
   }
 
   State& s = g_.states[current_state_];
@@ -397,6 +470,41 @@ UploadError GraphBuilder::add_action(const JsonObject& m, JsonSpan covered) {
   }
   fold(covered);
   return UploadError::None;
+}
+
+/// The action kinds whose `line` really is an output line. Split out only so
+/// that add_action's timer branch and this one share one piece of bookkeeping
+/// rather than each keeping its own copy of the entry/exit slice arithmetic --
+/// two copies of that is how a state ends up owning another state's actions.
+/// `context_` names what failed, since the caller reports it.
+bool GraphBuilder::parse_line_action(const JsonObject& m, JsonSpan kind, OutputAction* out) {
+  OutputAction& a = *out;
+  uint8_t line = 0;
+  context_ = "line";
+  if (!m.u8("line", &line)) return false;
+  if (line >= kMaxOutputLines) return false;
+  a.output_line = line;
+
+  context_ = "kind";
+  if (json_str_eq(kind, "high")) {
+    a.kind = OutputActionKind::High;
+  } else if (json_str_eq(kind, "low")) {
+    a.kind = OutputActionKind::Low;
+  } else if (json_str_eq(kind, "toggle")) {
+    a.kind = OutputActionKind::Toggle;
+  } else if (json_str_eq(kind, "pulse")) {
+    a.kind = OutputActionKind::Pulse;
+    uint32_t ms = 0;
+    bool bad = false;
+    context_ = "pulse ms";
+    if (!opt_u32(m, "ms", &ms, &bad) || bad) return false;
+    if (ms == 0 || ms > UINT16_MAX) return false;
+    a.pulse_ms = static_cast<NarrowMilliseconds>(ms);
+  } else {
+    context_ = "kind";
+    return false;
+  }
+  return true;
 }
 
 UploadError GraphBuilder::end_graph(const JsonObject& m, JsonSpan covered) {

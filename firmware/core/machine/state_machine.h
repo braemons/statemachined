@@ -70,6 +70,23 @@ class VisitSink {
   virtual void on_visit(const StateVisit& v, uint32_t seq) = 0;
 };
 
+/// Somewhere for a TimerStart or TimerCancel action to go.
+///
+/// The machine applies output actions, and two of the kinds address a global
+/// timer rather than a line (graph/output_action.h). It must not act on those
+/// itself: the timers outlive the run and so live a layer up, and a machine
+/// holding a pointer to them would be a machine that knew what a trial boundary
+/// was. So it reports them, the way it reports visits, and the session that
+/// owns the bank does the work.
+class TimerActionSink {
+ public:
+  virtual ~TimerActionSink() = default;
+  /// `start` false means cancel. `timer` is the index the action named; the
+  /// machine does not check it against anything, because the graph builder
+  /// already refused a set naming a timer that does not exist.
+  virtual void on_timer_action(uint8_t timer, bool start, Microseconds now_us) = 0;
+};
+
 /// What the machine saw during one run, with no interpretation attached.
 ///
 /// `path` is a genuine ring: when a looping graph overruns it, the OLDEST visit
@@ -212,6 +229,11 @@ class StateMachine {
   /// with no sink behaves exactly as it did before there was one.
   void set_visit_sink(VisitSink* sink) { visits_ = sink; }
 
+  /// Where TimerStart and TimerCancel actions go. Null by default, in which
+  /// case a set declaring them still runs -- the actions simply do nothing,
+  /// which is what a machine with no timers behind it means by them.
+  void set_timer_sink(TimerActionSink* sink) { timers_ = sink; }
+
  private:
   void enter(StateIndex state, Microseconds now_us, LineBitmask word);
   OutputUpdate leave(StateExitCause cause, TransitionIndex fired, Microseconds now_us);
@@ -225,6 +247,7 @@ class StateMachine {
   const GraphSet* set_;
   uint8_t graph_index_ = 0;
   VisitSink* visits_ = nullptr;
+  TimerActionSink* timers_ = nullptr;
   Rng rng_;
   StateMachineRunRecord record_;
   TransitionState trans_state_[kMaxTransitions];

@@ -72,6 +72,9 @@ class GraphBuilder {
   UploadError add_state(const JsonObject& m, JsonSpan covered);
   UploadError add_transition(const JsonObject& m, JsonSpan covered);
   UploadError add_action(const JsonObject& m, JsonSpan covered);
+  /// `graph_timer`: one global timer. Set-scope despite the nesting -- see the
+  /// note on the definition.
+  UploadError add_timer(const JsonObject& m, JsonSpan covered);
 
   /// Close one graph and check its own totals.
   UploadError end_graph(const JsonObject& m, JsonSpan covered);
@@ -99,6 +102,13 @@ class GraphBuilder {
   /// change", so an empty context is a defect here rather than a terse style.
   const char* context() const { return context_; }
 
+ private:
+  /// The half of add_action that reads an ordinary output line, split out so
+  /// the timer kinds and the line kinds share one copy of the entry/exit slice
+  /// bookkeeping. Sets `context_` and returns false on a bad field.
+  bool parse_line_action(const JsonObject& m, JsonSpan kind, OutputAction* out);
+
+ public:
   /// Set when end_set() returned Invalid, so the caller can report which rule
   /// the assembled set broke rather than just that it broke one.
   GraphError graph_error() const { return graph_error_; }

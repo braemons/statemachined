@@ -66,6 +66,12 @@ class TrialRunner {
   /// StateMachine::set_visit_sink().
   void set_visit_sink(VisitSink* sink) { machine_.set_visit_sink(sink); }
 
+  /// Likewise for the two output-action kinds that address a global timer
+  /// rather than a line. Passed straight through: the trial layer has nothing
+  /// to add to a timer action, and the timers themselves live above even this
+  /// -- they outlive the trial, and a TrialRunner does not.
+  void set_timer_sink(TimerActionSink* sink) { machine_.set_timer_sink(sink); }
+
  private:
   /// Read the run's ending, if it has one, and write down what it meant for the
   /// trial -- terminal code to TrialOutcome, or the wall-clock cap to

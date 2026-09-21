@@ -1,0 +1,82 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+syntax = "proto3";
+
+package statemachined.v1;
+
+// The box's own settings: which device, and how this daemon talks to it.
+//
+// **The rig configuration, never a state-machine config.** The two are
+// unrelated and both were once called "config": this one changes when the
+// hardware does and lives in `/etc/braemons`, and a state-machine config is
+// one experiment's graphs and line map and changes per session. Every name
+// here says which.
+message RigConfiguration {
+  // The board. A serial path, or a `socket://` URL for one on a switch or the
+  // native build.
+  string device_target = 1 [json_name = "device_target"];
+  int32 device_baud = 2 [json_name = "device_baud"];
+  double device_timeout_seconds = 3 [json_name = "device_timeout_seconds"];
+
+  // Refuse a board that is not this one. Empty accepts whatever answers, which
+  // is right for a bench and wrong for a rig with four of them on a bench
+  // beside it.
+  string expected_board = 4 [json_name = "expected_board"];
+
+  bool connect_on_startup = 5 [json_name = "connect_on_startup"];
+
+  // Fixed for the life of the daemon when set, so that a whole session —
+  // including one interrupted by a reconnect — replays. Empty means one is
+  // drawn per connection, which is right for a rig and wrong for a
+  // reproduction.
+  string session_seed = 14 [json_name = "session_seed"];
+
+  // A config to load when the daemon starts, so a rig comes back up loaded
+  // rather than waiting for somebody to notice.
+  string startup_state_machine_config = 6 [json_name = "startup_state_machine_config"];
+
+  // `set` uploads every graph once and selects per trial; `per_trial` uploads
+  // one each time. The first is how a session runs and the second is how a
+  // board too small for the set still runs it.
+  string graph_mode = 7 [json_name = "graph_mode"];
+
+  int32 trace_ring_entries = 8 [json_name = "trace_ring_entries"];
+  double heartbeat_seconds = 9 [json_name = "heartbeat_seconds"];
+
+  // Where things are written. Empty `recording_directory` means nothing is
+  // recorded, which is right for a bench and wrong for a rig — so this says
+  // which it is rather than failing at the first `Recording/Start`.
+  string trace_directory = 10 [json_name = "trace_directory"];
+  string graph_store_directory = 11 [json_name = "graph_store_directory"];
+  string recording_directory = 12 [json_name = "recording_directory"];
+  string state_machine_config_directory = 13 [json_name = "state_machine_config_directory"];
+}
+
+// Change it, and do whatever the change implies.
+//
+// **Until the daemon restarts.** This does not write `/etc/braemons`, on
+// purpose: a rig's configuration is a file somebody owns and reviews, and an
+// API that rewrote it would make the running daemon the authority on what the
+// box is. Every field is `optional`, so absent means "leave it alone".
+message RigConfigurationPatch {
+  optional string device_target = 1 [json_name = "device_target"];
+  optional int32 device_baud = 2 [json_name = "device_baud"];
+  optional string expected_board = 3 [json_name = "expected_board"];
+  optional string graph_mode = 4 [json_name = "graph_mode"];
+  optional string startup_state_machine_config = 5 [json_name = "startup_state_machine_config"];
+
+  // See `RigConfiguration.session_seed`. Patchable because pinning it is what
+  // somebody does to reproduce a session, and an empty string is a value —
+  // "draw one per connection" — which is why this is `optional`.
+  optional string session_seed = 6 [json_name = "session_seed"];
+}
+
+message RigConfigurationUpdate {
+  RigConfiguration configuration = 1;
+
+  // Whether the change reopened the link, which a changed `device_target`
+  // does.
+  bool reconnected = 2;
+
+  // Always true, and said out loud: nothing here survives a restart.
+  bool until_restart = 3 [json_name = "until_restart"];
+}

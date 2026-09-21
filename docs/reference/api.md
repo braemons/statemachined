@@ -20,7 +20,7 @@ library; a thing you can ask *"is the valve wired to A0 and did it open"* at two
 in the morning cannot.
 
 Everything here is JSON. The models are the ones in
-`python/src/statemachined/model/`, so the generated schema at `/openapi.json` is
+`daemon/src/statemachined/model/`, so the generated schema at `/openapi.json` is
 not a second description of them that can drift. **The web UI uses only this
 API** — no private route — which is what keeps the UI an honest test of it.
 
@@ -223,7 +223,18 @@ when it goes.
 ### `GET /api/device/firmware`
 
 The version running against what the installed package ships, and whether they
-agree. See DAEMON.md §6.3. Flashing is not here and is deferred: it means
+agree. See DAEMON.md §6.3.
+
+```json
+{"running": "0.3.0~alpha1", "installed": "0.3.0~alpha1",
+ "running_is_stamped": true, "comparable": true, "matches": true}
+```
+
+Both versions are stamped from the git tag. `comparable` is false when the board
+reports the unstamped `0.0.0` or no image is installed; `matches` is only true
+when they are comparable and equal. The same comparison is recorded on every
+`link_connected` trace entry (`installed_firmware_version`,
+`firmware_matches_package`, null when not comparable). Flashing is not here and is deferred: it means
 dropping the port mid-session, which is a different risk from anything else the
 daemon does.
 

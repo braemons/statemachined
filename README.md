@@ -161,13 +161,14 @@ is a file you can edit, and there is one binary to flash.
 
 Every CI run publishes that binary as an artifact
 (`statemachined-uno_r4_minima-<sha>`), so a board can be brought up without a
-toolchain, with a `MANIFEST.txt` recording the commit, sizes and checksums — a
-board in a rack cannot be asked which commit it is running. `make image` builds
+toolchain, with a `MANIFEST.txt` recording the version, commit, sizes and
+checksums. The board reports the same version in its `hello_ack`, and the daemon
+compares the two. `make image` builds
 the same thing locally.
 
 ## Drive it from Python
 
-`python/` is one package with three tiers, and which one you install says how
+`daemon/` is one package with three tiers, and which one you install says how
 you mean to drive a board.
 
 ```sh
@@ -282,14 +283,17 @@ Also: **VStim** (Andreas Kreiter, Cognitive Neurophysiology Lab, Bremen), whose
 ## License
 
 **Firmware, core, tests and tools: [GPLv3-or-later](LICENSE).
-The importable Python library — `model/`, `client/`, `device/`,
-`graph_set_compiler.py`: [LGPLv3-or-later](python/LICENSE)**, so an experiment
-importing it is not placed under copyleft — the same split, and the same reason,
-as vstimd's client. **The daemon — `daemon/` (API and web UI) and the command
-line that serves it: [AGPLv3-or-later](python/LICENSE.AGPL)**, like vstimd and
-triald: it is a network service, and whoever runs a modified one for others owes
-them its source. The split is by *what the code is*, not by directory:
-`python/tests/` is a test suite and stays GPL. Every source file carries an
+The importable Python library — `model/`, `device/`, `graph_set_compiler.py`,
+and the client in `client/python/`: [LGPLv3-or-later](daemon/LICENSE)**, so an
+experiment importing it is not placed under copyleft — the same split, and the
+same reason, as vstimd's client. **The daemon — `daemon/src/statemachined/daemon/`
+and the panels in `client/web/` it serves, and the command line that serves
+them: [AGPLv3-or-later](daemon/LICENSE.AGPL)**, like vstimd and triald: it is a
+network service, and whoever runs a modified one for others owes them its
+source. The split is by *what the code is*, not by directory: `daemon/tests/` is
+a test suite and stays GPL, and `client/python/` is a distribution of its own
+that a script imports, so it takes the library's licence rather than the
+daemon's. Every source file carries an
 `SPDX-License-Identifier`.
 
 The GPL here is a *choice*, not an inheritance: no Bpod source is copied,

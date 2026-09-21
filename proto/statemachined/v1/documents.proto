@@ -1,0 +1,133 @@
+// SPDX-License-Identifier: LGPL-3.0-or-later
+syntax = "proto3";
+
+package statemachined.v1;
+
+// For `GraphPoolCounts`: what a graph costs is measured against a board, and
+// the board's pools are described there.
+import "statemachined/v1/device.proto";
+
+// The three documents this daemon stores, and the rpcs that carry them.
+//
+// **A graph, a line map and a state-machine config are files, not messages.**
+// `contracts/DAEMON_LAYOUT.md` §2 keeps them that way: they are documents
+// somebody writes, reviews in a diff and copies between rigs, so they keep
+// their own pydantic models and their own JSON Schema, and what crosses this
+// API is their *text*.
+//
+// That is not a shortcut. A graph is a discriminated union five levels deep —
+// four duration distributions, six output-action kinds, predicates over three
+// line sets — and protobuf would describe it as a flattened shape with every
+// field optional, which is a *worse* description than the one that already
+// exists and refuses a bad file by field name. The day the two disagreed, the
+// file would be right and the message would be what a client had been told.
+//
+// So an editor reads and writes text, the daemon parses it with the model that
+// owns it, and a refusal names the field. `ValidateGraphFile` gives the same
+// answer without storing anything, which is what a draft in a text box needs.
+// mousewheeld's zone sets work exactly this way and for exactly this reason.
+
+// One stored document: its name and its text.
+message StoredFile {
+  string name = 1;
+  string text = 2;
+}
+
+message ReadFileRequest {
+  string name = 1;
+}
+
+message DeleteFileRequest {
+  string name = 1;
+}
+
+// A draft, for checking without storing it.
+message FileDraft {
+  string text = 1;
+}
+
+// Enough of one stored graph to choose between them, without loading all of
+// them.
+//
+// **A graph that no longer parses is listed as broken rather than omitted.** A
+// paradigm that has silently vanished from the list is how somebody spends an
+// afternoon looking for it.
+message GraphSummary {
+  string name = 1;
+  bool readable = 2;
+  // Why it could not be read. Empty when it could.
+  string detail = 3;
+  int32 state_count = 4 [json_name = "state_count"];
+  string entry = 5;
+}
+
+message GraphSummaries {
+  repeated GraphSummary graphs = 1;
+}
+
+// What checking a graph found — every rule, plus **this board's** capacities.
+//
+// The capacity half is the useful half: "you have room for two more graphs" is
+// what somebody setting up a session wants to know, and it is why this needs a
+// board attached and refuses `unavailable` without one.
+message GraphValidation {
+  bool valid = 1;
+  // Why not. Empty when it is.
+  string detail = 2;
+
+  GraphPoolCounts pool_usage = 3 [json_name = "pool_usage"];
+  GraphPoolCounts pool_capacity = 4 [json_name = "pool_capacity"];
+
+  // Legal, uploads, runs — and probably narrower than its author thinks.
+  // **Reported rather than refused**: a graph whose predicate can never be
+  // true is a paradigm somebody meant, right up until it is not.
+  repeated GraphWarning warnings = 5;
+}
+
+// One thing that is legal, runs exactly as written, and is probably not what
+// somebody meant.
+//
+// **Structured and not a sentence**, because an editor puts it next to the
+// line that caused it: `state` and `transition` are where to put the marker,
+// and `detail` is what to say there. A string would have made the editor
+// parse English to find the place.
+message GraphWarning {
+  // What kind of warning, as a stable word to branch on:
+  // `any_clause_has_no_effect` is the one this daemon raises today.
+  string kind = 1;
+
+  // Where. The state's name, and the transition's position within it — the
+  // position rather than a name because a transition has no name.
+  string state = 2;
+  int32 transition = 3;
+
+  // The lines the warning is about, by name.
+  repeated string lines = 4;
+
+  // One sentence, written to be read, usually ending in a question about what
+  // the author meant.
+  string detail = 5;
+}
+
+// Enough of one stored state-machine config to choose between them.
+//
+// Summaries rather than whole configs: a config carries its graphs, so ten of
+// them is most of a megabyte nobody is looking at yet. One that will not parse
+// is listed with the reason instead of omitted — a file you cannot see is a
+// file you cannot fix.
+message StateMachineConfigSummary {
+  string name = 1;
+  bool readable = 2;
+  string detail = 3;
+  string description = 4;
+  string board = 5;
+  repeated string graph_names = 6 [json_name = "graph_names"];
+  int32 input_line_count = 7 [json_name = "input_line_count"];
+  int32 output_line_count = 8 [json_name = "output_line_count"];
+}
+
+message StateMachineConfigSummaries {
+  repeated StateMachineConfigSummary configs = 1;
+  // Which one this rig is loaded with, if any.
+  string loaded = 2;
+}

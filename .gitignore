@@ -43,3 +43,11 @@ report.html
 # vstimd puts its build output here and so does this; the release workflow
 # collects from it.
 /dist/
+
+# The panels' build step. `client/web/` is an npm project as well as a web
+# root: node_modules is somebody else's source, and gen/ is regenerated from
+# proto/ by `make web`. What is committed is the one bundle they produce,
+# client/web/elements/daemon_api_client.js.
+/client/web/node_modules/
+/client/web/gen/
+/build/web-check.js

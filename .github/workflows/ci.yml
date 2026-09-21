@@ -51,13 +51,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # uv, not the runner's system Python: the daemon is a uv project and
-      # `uv run --project python` builds its environment from python/uv.lock.
+      # `uv run --project daemon` builds its environment from daemon/uv.lock.
       - uses: astral-sh/setup-uv@v6
       - name: Cache uv
         uses: actions/cache@v4
         with:
           path: ~/.cache/uv
-          key: uv-${{ runner.os }}-${{ hashFiles('python/uv.lock') }}
+          key: uv-${{ runner.os }}-${{ hashFiles('daemon/uv.lock') }}
       # Needs the checkout rather than only the package: test_message_framing.py
       # asserts the daemon's framing against emulation/tests' copy of it, and
       # the integration and end-to-end suites drive whole sessions against the
@@ -65,19 +65,11 @@ jobs:
       - run: make test
       - run: make test-python
 
-  # The trial loop across both daemons. Its own job because it is the only one
-  # that needs another repo at all: triald drives this daemon and reads what it
-  # publishes, so the suite cannot run without it. A failure here is a failure
-  # of the handover and nothing else, which is worth being able to see alone.
-  end-to-end-with-triald:
-    name: one trial, end to end, with a real triald
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      # triald is public, so it is fetched over https and needs no credentials.
-      - run: git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
-      - run: make test-e2e
+  # There is no job here for the trial loop across both daemons. It lives in the
+  # contracts repo, in `e2e-tests/`, with the tests that are about the three daemons
+  # together -- a test needing two of them has no honest home inside either, and
+  # the one that used to be here cost this repository a lockfile pin on triald's
+  # main branch. See contracts/e2e-tests/tests/test_the_handover_to_triald.py.
 
   reproducibility:
     name: golden vectors are byte-identical across compilers

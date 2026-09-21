@@ -75,13 +75,19 @@ number the daemon reports about a trial came off the device's clock.
 `bridge/` becomes `daemon/`, `tools/bringup/` moves into it, and `packaging/`
 appears. `firmware/` and `emulation/` do not move at all.
 
-> **Since amended.** `daemon/` is `python/`, and it holds one package with three
-> tiers rather than a daemon: `model/` and `client/` are the base, `device/` is
-> the `[device]` extra, and everything this section calls the daemon is under
-> `daemon/` inside it, behind `[serve]`. The reason is that three of the five
-> subpackages are not a daemon, and a directory that says otherwise is one
-> somebody has to keep correcting. The tree below is otherwise as described;
-> read `daemon/` for `python/` and `src/statemachined/X` for the tier X sits in.
+> **Since amended, twice.** It became `python/`, holding one package with three
+> tiers rather than a daemon: `model/` and `client/` the base, `device/` the
+> `[device]` extra, and everything this section calls the daemon under `daemon/`
+> inside it, behind `[serve]`.
+>
+> It is `daemon/` again now, and the family layout is why
+> (`contracts/DAEMON_LAYOUT.md`): every repository here keeps its service in
+> `daemon/` and its clients in `client/`. So `client/python/` is the Python
+> client — a distribution of its own, generated from `proto/` — and
+> `client/web/` is the panels. What is left inside the package is the daemon
+> and the two tiers that are genuinely importable: `model/` and `device/`.
+> Read `daemon/` for `python/` below, and `src/statemachined/X` for the tier X
+> sits in.
 
 ```
 statemachined/
@@ -169,7 +175,7 @@ framing (as `tools/bringup/wire.py` does today) was acceptable for a bench tool
 run from a checkout. It is **not** acceptable for an installed package: a `.deb`
 has no `emulation/` directory.
 
-So `python/src/statemachined/device/message_framing.py` becomes a real third
+So `daemon/src/statemachined/device/message_framing.py` becomes a real third
 implementation. That is a cost, and it is the right one: the alternative is
 shipping the test suite inside the daemon package. The two are kept honest by a
 golden-vector test — a fixed set of lines with known CRCs, asserted by both.
@@ -1220,7 +1226,7 @@ emulation only has to run pip-shaped work.
 **The build is reproducible, and that is checked rather than asserted.** Four
 things had to be nailed down, and every one of them was found by building twice
 and diffing rather than by predicting it: the base image is pinned by digest and
-the tools by version; dependencies are installed from `python/uv.lock` with
+the tools by version; dependencies are installed from `daemon/uv.lock` with
 hashes instead of being resolved against PyPI at build time, or a release of
 fastapi between two builds changes the artifact; every mtime comes from the
 commit rather than the clock; and every `.pyc` is rebuilt with hash-based
@@ -1299,11 +1305,16 @@ Pi with several USB devices, which `/dev/ttyACM0` does not.
 
 ### 6.3 Firmware in the package
 
-`make image` already builds both flashable images with a `MANIFEST.txt`
-recording the commit, sizes and checksums — because _"a board in a rack cannot be
-asked which commit it is running."_ The package installs that under
-`/usr/share/braemons/statemachined/firmware/`, and `GET /api/device/firmware`
-compares the running `fw` from `hello_ack` against it and warns on a mismatch.
+`make image` builds the flashable image with a `MANIFEST.txt` recording the
+version, commit, sizes and checksums. The version is the git tag
+(`packaging/scripts/git-version.sh`), and the same string is compiled into the
+firmware (`firmware/core/protocol/firmware_version.h`) and reported as `fw` in
+`hello_ack`, so a board can say which release it runs. `make image` refuses to
+build without one; an unstamped build reports `0.0.0`. The package installs the
+image and manifest under `/usr/share/braemons/statemachined/firmware/`, and
+`GET /api/device/firmware` compares the running `fw` against it. A mismatch is
+reported and recorded on the link trace entry, not refused: whether a board on
+another build may run is the operator's call.
 
 Flashing itself is deferred. When it lands it is a separate optional package
 pulling in `bossac`/`dfu-util`, because it means dropping the port, flashing, and
@@ -1337,7 +1348,7 @@ reassembles a result with the same chunker. That is why the daemon's integration
 suite has always talked to it, and why it is the same binary and the same bridge
 here rather than a second one — `statemachined.device.native_device_on_a_socket`
 is imported by `statemachined device`, by `make bench-device`, and by
-`python/tests/integration/conftest.py`. Two bridges that drift are two different
+`daemon/tests/integration/conftest.py`. Two bridges that drift are two different
 devices.
 
 **It is not a timing test.** The scan is a `nanosleep` on a preemptible desktop

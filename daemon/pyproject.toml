@@ -1,0 +1,234 @@
+# All the Python in this repository, as one uv project: the documents, the two
+# ways to drive a board, and the daemon. Keeping them inside one project means
+# `uv run --project daemon` builds an environment for it without touching the
+# interpreter renode-test drives or the uv-tool sandboxes the Makefile installs.
+#
+# It was tools/bringup/ until M4a, then `python/`, and it is `daemon/` now
+# because that is the name every repository in the family uses for the service
+# itself (`contracts/DAEMON_LAYOUT.md` §1).
+#
+# **`client/python/` is split out now**, which is what `proto/statemachined/v1/`
+# unlocked. The argument that kept the client in here — one distribution,
+# because any cut leaves the same models described twice — stopped applying the
+# day both sides were generated from one description. `statemachined-client`
+# depends on grpcio and protobuf and on nothing in this project: talking to a
+# rig should not mean installing a daemon, or pydantic.
+#
+# `statemachined.client` is the HTTP client it replaces and is on its way out
+# with the routes.
+[project]
+name = "statemachined"
+# The sentinel. packaging/scripts/git-version.sh stamps the real version from
+# the tag at build time (docs/developer/daemon.md §6.1), so a 0.0.0 artifact in the wild
+# means the stamping was bypassed rather than that this number was forgotten.
+version = "0.0.0"
+description = "Owns one statemachined device: the wire, the graphs, and the API over both"
+requires-python = ">=3.11"
+# Split by what the code is, per file (every file carries an SPDX line): what an
+# experiment imports -- model/, device/, graph_set_compiler.py -- is LGPL, so
+# importing it does not place a lab's own code under copyleft; the daemon --
+# daemon/ and the command line that serves it -- is AGPL, because it is a
+# network service and a modified one run for others should come with its
+# source. LGPLv3 and AGPLv3 are both written as additions to the GPLv3, so all
+# three texts ship.
+#
+# The client used to be in the LGPL half of this list and is `client/python/`
+# now, a distribution of its own with its own licence file. It is still LGPL,
+# and for the same reason.
+license = "LGPL-3.0-or-later AND AGPL-3.0-or-later AND GPL-3.0-or-later"
+license-files = ["LICENSE", "LICENSE.GPL", "LICENSE.AGPL"]
+# **Three tiers, three extras, one distribution.** What you install depends on
+# which way you want to drive a board, and the import tree says the same thing:
+#
+#   statemachined            model/, graph_set_compiler.py
+#                            the documents and the translation. pydantic.
+#
+#   statemachined[device]    + device/     open the port yourself. pyserial.
+#
+#   statemachined[serve]     + daemon/     be the daemon. grpcio, uvicorn,
+#                                          zeroconf, and the web UI.
+#
+# **The client is not one of them any more.** It was the base tier — which is
+# why that tier needed httpx and websockets — and it is `client/python/` now,
+# its own distribution over grpcio and protobuf. Talking to a rig should not
+# mean installing pydantic and this daemon's document models.
+#
+# What kept them together was that any cut left the same models described
+# twice: `model/` is what a graph *is*, and a second copy of it in a client
+# library is a copy that is right until it is not. The documents cross as
+# **text** now, so there is no second copy to keep.
+dependencies = [
+    # The documents: a graph as somebody authored it, a line map, a config. This
+    # is the boundary where a file somebody edited arrives and "refuse it, naming
+    # the field" is the whole job, and the same models become the API's schema --
+    # which is why it is pydantic rather than dataclasses plus hand-written
+    # checks, and why it is in the base tier rather than behind an extra.
+    "pydantic>=2.13.5",
+    # **One**, and that is the point of the tier. httpx and websockets were
+    # here for `statemachined.client`, which is `statemachined-client` now and
+    # a distribution of its own; nothing in this package makes a network
+    # request any more. A bench script that reads a saved graph installs
+    # pydantic and nothing else.
+]
+
+[project.optional-dependencies]
+# Driving a board from your own process, with no daemon anywhere.
+device = [
+    # serial_for_url() is why this is here rather than a hand-written transport:
+    # it already speaks socket:// and rfc2217://, so the day a board is on a
+    # switch instead of a USB cable, nothing above device/serial_link.py changes.
+    "pyserial>=3.5",
+]
+
+# Being the daemon: the API, the web UI, the stores, the trace.
+serve = [
+    "statemachined[device]",
+    # The API is gRPC. `grpc.aio` serves it on the daemon's own port, and
+    # `api/web_edge.py` — the panels, and the Connect protocol a browser can
+    # speak — goes beside it.
+    "grpcio>=1.66",
+    # The generated wire types and their JSON mapping. Runtime only: protoc
+    # runs from `make proto` and the output is committed, so a checkout needs
+    # no compiler (`contracts/DAEMON_LAYOUT.md`).
+    "protobuf>=5.27",
+    # **fastapi was here and is not.** The interface is authored in
+    # `proto/statemachined/v1/` and the types are generated from it, so a web
+    # framework's schema generation had nothing left to describe but itself,
+    # and the ten routers it carried were a second spelling of the rpcs.
+    # `web_edge.py` is a plain ASGI callable — the panels and the Connect
+    # protocol, in about four hundred lines — and uvicorn is all it needs.
+    #
+    # `[standard]` for httptools and uvloop. It used to be for the WebSocket
+    # implementation, without which plain uvicorn answers an upgrade with a 404
+    # and both streams die in a shipped daemon; there are no WebSockets left,
+    # and the streams are server-streaming rpcs now.
+    "uvicorn[standard]>=0.52.4",
+    # A console discovers a rig instead of being hand-configured with URLs --
+    # docs/developer/daemon.md §5, and the same record vstimd already publishes. Imported
+    # lazily and never fatal: a daemon that cannot advertise still serves, and a
+    # rig with no mDNS on its network is a rig, not an error.
+    "zeroconf>=0.132",
+]
+
+[project.scripts]
+statemachined = "statemachined.command_line_interface:main"
+
+# pytest is a dependency of the test suites, not of the package, so it lives in
+# a group rather than in `dependencies`: `uv run --project` installs it for
+# `make test-python` and `make test-hardware` and leaves it out of anything that
+# just wants to talk to a board.
+#
+# The group installs both extras, because the suites cover all three tiers:
+# `tests/unit` needs none of it, `tests/integration` and `tests/e2e` stand a
+# real daemon up in front of a real device.
+#
+# **The client is in here too, and it is a test dependency of the daemon on
+# purpose.** `client/python/` is a distribution of its own with its own
+# dependency list, and this package does not import it — but the integration
+# suites drive this daemon's interface *through* it, over a real gRPC channel.
+# That is the strongest form of "the interface works": the same servicers, the
+# same refusals, the same streams a rig gets, and no second description of the
+# API written in the test file. It already caught a constant this daemon and
+# its client spelled differently.
+[dependency-groups]
+test = ["pytest>=8.0", "statemachined[device,serve]", "statemachined-client"]
+dev = [
+    "ruff>=0.8",
+    "ty>=0.0.1a1",
+    # protoc and the gRPC stub generator. Development only: the generated code
+    # is committed, so an install needs neither
+    # (`contracts/DAEMON_LAYOUT.md`).
+    "grpcio-tools>=1.66",
+]
+# **There is no `e2e` group, and that is deliberate.** The trial loop across
+# this daemon and triald used to be tested from here, which meant a group
+# installing triald, a `tool.uv.sources` pin on its main branch, and a CI job
+# fetching it -- to test a handover that is not this daemon's alone. It got
+# worse than untidy when triald began depending on `statemachined` for the
+# client it had stopped hand-copying: this project's editable copy of itself and
+# the git URL triald asks for are one distribution from two sources, which uv
+# refuses, so the lock could no longer be refreshed and the test ran forever
+# against whatever triald commit it had captured.
+#
+# That test lives in the contracts repo now (`rig/`), with the others that are
+# about more than one daemon. Nothing in this package imports triald or knows it
+# exists -- and now nothing in its build does either.
+#
+# See the contracts repo, INTERACTIONS.md §8.
+
+[tool.pytest.ini_options]
+# tests/unit is host-only. tests/integration needs the native device built --
+# `make test` does it -- and skips itself with instructions when it is not
+# there, so a bare `pytest` here never fails for want of a build. tests/hardware
+# needs a board and is deliberately not named: a target that fails on every
+# machine without hardware is a target people learn to ignore.
+# tests/e2e starts `statemachined serve` and `statemachined device` as
+# subprocesses, so it is slower than the rest and still needs no board; it skips
+# itself when the native device is not built, like tests/integration.
+testpaths = ["tests/unit", "tests/integration", "tests/e2e"]
+markers = [
+    "loopback: needs output-to-input jumper wires; see tests/hardware/test_lines.py",
+]
+# One device, one order. Without this, a plugin that reorders or parallelises
+# would have several hardware tests arming the same board at once.
+addopts = "-p no:randomly"
+# There were three warning filters here, all of them about Starlette's
+# `TestClient` and the deadline `statemachined.client` put on every request.
+# Both are gone: the suites reach a daemon over a real gRPC channel now
+# (`tests/grpc_harness.py`), and a filter kept past the thing it silenced is a
+# filter that will one day hide something real.
+
+[build-system]
+# 1.27+ for PEP 639 (`license` as an SPDX expression + `license-files`).
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/statemachined"]
+
+# **The panels are not listed here, and that is deliberate.**
+#
+# They are authored in `client/web/`, a sibling of this project rather than a
+# subdirectory of it, so that somebody looking for this daemon's UI finds it
+# without knowing how the Python package is laid out
+# (`contracts/DAEMON_LAYOUT.md`). hatchling can force-include a path from
+# outside the project, and it is a trap: `uv build` builds the wheel *from the
+# sdist*, an sdist cannot contain a path above its own root, and the wheel then
+# fails on a machine that never saw the repository.
+#
+# So `packaging/Makefile` copies `client/web` into the staged package before
+# building, and `web_directory()` falls back to the authored location when no
+# copy has been made — which is every editable install, and therefore every
+# developer. Build with `make wheel`, not `uv build`.
+
+[tool.uv.sources]
+# The test group installs this project's own extras, which uv resolves to the
+# workspace copy rather than to a registry.
+statemachined = { workspace = true }
+
+# The client beside this project, not a git URL and not a registry: they ship
+# from one commit, so a test suite resolving the client from anywhere but this
+# checkout would be testing a different interface from the one being edited.
+statemachined-client = { path = "../client/python", editable = true }
+
+[tool.uv.workspace]
+members = ["."]
+
+[tool.ruff]
+line-length = 96
+src = ["src", "tests"]
+# Generated by protoc and committed. A formatter with an opinion about it would
+# rewrite the file and `make check-proto` would then call it stale for ever.
+extend-exclude = ["src/statemachined/_proto"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.ty.src]
+include = ["src"]
+# The generated stubs are not hand-written and not reviewed as source; they are
+# checked by being used, and everything that touches them is `api/convert/`.
+exclude = ["src/statemachined/_proto"]

@@ -2,11 +2,13 @@ statemachined — the trial state machine
 Copyright © 2026 Joscha Schmiedt, University of Bremen.
 
 Licensed under the GNU General Public License v3.0 or later; the importable
-Python library under the GNU Lesser General Public License v3.0 or later; the
-host daemon (python/src/statemachined/daemon/ and the command line serving it)
-under the GNU Affero General Public License v3.0 or later.
-See LICENSE, python/LICENSE, python/LICENSE.AGPL, and the "License" section of
-README.md.
+Python library (daemon/src/statemachined/{model,device}/, graph_set_compiler.py
+and the client in client/python/) under the GNU Lesser General Public License
+v3.0 or later; the host daemon (daemon/src/statemachined/daemon/, the panels in
+client/web/ it serves, and the command line serving them) under the GNU Affero
+General Public License v3.0 or later.
+See LICENSE, daemon/LICENSE, daemon/LICENSE.AGPL, client/python/LICENSE, and
+the "License" section of README.md.
 
 This file records what in this repository came from somewhere else.
 

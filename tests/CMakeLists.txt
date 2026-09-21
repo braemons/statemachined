@@ -10,6 +10,7 @@ set(STATEMACHINED_TESTS
   io/reply_queue
   io/settings_store
   machine/state_machine
+  machine/global_timers
   trial/trial_runner
   protocol/framing
   protocol/graph_builder

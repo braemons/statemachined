@@ -95,6 +95,15 @@ OutputUpdate StateMachine::apply_actions(OutputActionIndex first, uint8_t count,
   LineBitmask level = driven_;
   for (uint8_t i = 0; i < count; ++i) {
     const OutputAction& a = set_->output_actions[first + i];
+    // A timer, not a line. `output_line` is a timer index for these two kinds,
+    // so it must not reach the shift below -- the two index spaces have
+    // different sizes, and treating a timer index as a line would drive a pin
+    // nobody asked for.
+    if (addresses_a_timer(a.kind)) {
+      if (timers_ != nullptr)
+        timers_->on_timer_action(a.output_line, a.kind == OutputActionKind::TimerStart, now_us);
+      continue;
+    }
     const LineBitmask bit = 1u << a.output_line;
     bool high;
     switch (a.kind) {
@@ -254,7 +263,7 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
   // predicate is already true at entry has no edge coming, and silently never
   // fired. That is exactly the case `level` exists for: "wait until held",
   // where the lever is already down and nothing is going to move. Found on
-  // hardware, by python/tests/hardware/test_line_predicates.py, because every host
+  // hardware, by daemon/tests/hardware/test_line_predicates.py, because every host
   // test for `level` entered its state at start() -- where have_last_word_ is
   // false and the first scan therefore evaluated anyway.
   const bool word_changed = !have_last_word_ || word != last_word_;

@@ -34,6 +34,14 @@
 #ifndef STATEMACHINED_MAX_OUTPUT_LINES
 #define STATEMACHINED_MAX_OUTPUT_LINES 32  // one LineBitmask of outputs; a line at or
 #endif                                     // past this cannot be represented at all
+// Global timers. Sixteen in VStim (`MaxNoTimers`), sixteen in Bpod; eight here
+// because each one costs a bit of the input word and the reference board has
+// eight real input lines, so eight timers still leaves half the word spare.
+// Raising it costs `kFirstTimerLine` -- see below, and the static_assert that
+// stops it colliding with a board's real lines.
+#ifndef STATEMACHINED_MAX_TIMERS
+#define STATEMACHINED_MAX_TIMERS 8
+#endif
 #ifndef STATEMACHINED_MAX_LINE
 #define STATEMACHINED_MAX_LINE 512  // one protocol line, newline included. The largest
 #endif                              // single message is one state's worth of graph
@@ -146,4 +154,46 @@ using Milliseconds = int32_t;   ///< signed: a negative value means "none set"
 /// Milliseconds narrowed where the graph stores one per line or per action and
 /// the width is worth the SRAM on a 32 KB board.
 using NarrowMilliseconds = uint16_t;
+
+/// How many global timers a set may declare. See STATEMACHINED_MAX_TIMERS.
+constexpr uint8_t kMaxTimers = STATEMACHINED_MAX_TIMERS;
+
+/// Where the timers' bits sit in the input word.
+///
+/// **A running timer is an input line that is high.** That is the whole design,
+/// and it is VStim's: its timers read and write the same flat space of virtual
+/// trigger lines that its intervals transition on (`Shared/Constants.h`, 68 of
+/// them -- interval markers, system events, free lines and real levers, all one
+/// kind of thing). Here it means a Transition needs no new vocabulary to wait on
+/// a timer: "timer 2 ended" is `none_high={line 26}`, "timer 2 still running and
+/// the left lever down" is a combination, and `hold_duration` and
+/// `fire_if_true_on_entry` apply to a timer exactly as they apply to a lever.
+///
+/// Bpod instead gives timers their own event codes (`GlobalTimer1_End`) and
+/// their own transition matrices beside the input one. That is the same feature
+/// bought twice, and it is why Bpod needs a Due; transition.h's predicate
+/// already subsumes it.
+///
+/// Counted down from the top so that real lines, which grow up from zero, and
+/// timer lines, which grow down from the end, meet in the middle -- and so that
+/// a graph means the same thing on a board with eight inputs and one with
+/// twenty. A base relative to a board's own line count would silently renumber
+/// every timer when the graph moved between boards.
+constexpr LineIndex kFirstTimerLine = static_cast<LineIndex>(kMaxLines - kMaxTimers);
+
+/// The line a given timer holds high while it runs.
+constexpr LineIndex timer_line(uint8_t timer) {
+  return static_cast<LineIndex>(kFirstTimerLine + timer);
+}
+
+/// Every timer bit, for masking them off when only the real world is wanted.
+constexpr LineBitmask kTimerLineMask =
+    static_cast<LineBitmask>(((1ull << kMaxTimers) - 1ull) << kFirstTimerLine);
+
+static_assert(kMaxTimers <= kMaxLines, "every timer needs a bit of the input word");
+static_assert(kMaxTimers > 0, "a zero-timer build would still pay for the pool");
+
+/// A timer that drives no real output line -- it moves its own bit and nothing
+/// else, which is the common case for one that only gates a transition.
+constexpr LineIndex kNoLine = 0xFF;
 }  // namespace statemachined
