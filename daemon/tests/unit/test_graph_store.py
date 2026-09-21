@@ -88,3 +88,46 @@ def test_the_order_names_are_asked_for_is_the_order_they_come_back(tmp_path):
     for name in ("a", "b", "c"):
         store.save(a_graph(name))
     assert [graph.name for graph in store.load_all(["c", "a"])] == ["c", "a"]
+
+
+def test_the_file_a_reader_gets_back_can_be_sent_back(tmp_path):
+    """**The download/upload round trip.** What `ReadGraphFile` answers with is
+    what an editor shows and what it sends back on save, so a file this daemon
+    hands out and will not take is a graph somebody cannot edit.
+
+    It was exactly that. The servicer dumped with `exclude_defaults=True`, and a
+    discriminator like `kind: Literal["exponential"] = "exponential"` *has* a
+    default -- so it was dropped, and re-uploading failed with
+    `union_tag_not_found` on a field nobody had touched. Nothing caught it
+    because every test wrote a graph and read the *model* back, never the file.
+    """
+    from statemachined.model.graph_definition import GraphDefinition
+
+    original = GraphDefinition.model_validate(
+        {
+            "name": "round-trip",
+            "entry": "wait",
+            "distributions": {
+                # One of each, because the fault was in the discriminator and a
+                # single kind could pass by luck.
+                "flat": {"kind": "fixed", "duration_ms": 100},
+                "jitter": {"kind": "uniform", "minimum_ms": 10, "maximum_ms": 20},
+                "foreperiod": {
+                    "kind": "exponential",
+                    "minimum_ms": 500,
+                    "maximum_ms": 2500,
+                    "mean_ms": 900,
+                },
+                "soa": {"kind": "choice", "options_ms": [50, 100, 200]},
+            },
+            "states": [
+                {"name": "wait", "timeout": {"after": "flat", "goto": "done"}},
+                {"name": "done", "outcome": "HIT"},
+            ],
+        }
+    )
+
+    served = original.model_dump_json(indent=2, exclude_none=True)
+    assert GraphDefinition.model_validate_json(served) == original, (
+        "the file this daemon serves is not one it would accept back"
+    )

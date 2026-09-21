@@ -32,7 +32,7 @@ class StateMachineConfigStoreServicer(service_pb2_grpc.StateMachineConfigStoreSe
         def body():
             config = self.service.state_machine_config_store.load(request.name)
             return convert.stored_file_to_wire(
-                config.name, config.model_dump_json(indent=2, exclude_defaults=True)
+                config.name, config.model_dump_json(indent=2, exclude_none=True)
             )
 
         return await answering(context, body)

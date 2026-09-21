@@ -57,10 +57,24 @@ class GraphStoreServicer(service_pb2_grpc.GraphStoreServicer):
         )
 
     async def ReadGraphFile(self, request, context):
+        """The graph as a file, for an editor.
+
+        **`exclude_none` and not `exclude_defaults`.** It was the latter, and
+        the file this answered with could not be sent back: a discriminator
+        like `kind: Literal["exponential"] = "exponential"` *has* a default, so
+        it was dropped, and the graph an editor downloaded no longer said what
+        kind its distributions were. Re-uploading it failed with
+        `union_tag_not_found` on a field the person had never touched.
+
+        `exclude_none` drops the optionals that were never set, which is what
+        was wanted -- a readable file -- without dropping anything the parser
+        needs.
+        """
+
         def body():
             graph = self.service.graph_store.load(request.name)
             return convert.stored_file_to_wire(
-                graph.name, graph.model_dump_json(indent=2, exclude_defaults=True)
+                graph.name, graph.model_dump_json(indent=2, exclude_none=True)
             )
 
         return await answering(context, body)
