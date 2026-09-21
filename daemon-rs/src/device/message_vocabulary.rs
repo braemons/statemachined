@@ -173,3 +173,30 @@ impl std::fmt::Display for MsgType {
         f.write_str(self.as_str())
     }
 }
+
+impl MsgType {
+    /// Types that are never a reply: they arrive when the device has something
+    /// to say, which may be between a command and its answer.
+    pub fn is_unsolicited(&self) -> bool {
+        matches!(
+            self,
+            Self::Event
+                | Self::Log
+                | Self::ResultBegin
+                | Self::ResultPath
+                | Self::ResultEnd
+                | Self::Visit
+        )
+    }
+
+    /// Types that are a *reply* when they carry `in_reply_to` and an event when
+    /// they do not.
+    ///
+    /// `started` is the only one, and it is one because a trial can begin two
+    /// ways: because the host said so, and because a start line went high on a
+    /// board arming its own trials. Routing it by type alone would make
+    /// `start_trial` unable to recognise its own reply.
+    pub fn is_unsolicited_when_unprompted(&self) -> bool {
+        matches!(self, Self::Started)
+    }
+}
