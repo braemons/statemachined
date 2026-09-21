@@ -35,6 +35,11 @@ struct Arguments {
     /// this is here so a bench can point at a copy.
     #[arg(long)]
     storage_dir: Option<std::path::PathBuf>,
+
+    /// The TOML that says what this box is. Its absence means the built-in
+    /// defaults, which is what a bench with no conffile runs on.
+    #[arg(long, default_value = statemachined::rig_configuration::DEFAULT_CONFIGURATION_PATH)]
+    config: std::path::PathBuf,
 }
 
 #[tokio::main]
@@ -42,10 +47,21 @@ async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let arguments = Arguments::parse();
 
-    let mut configuration = RigConfiguration {
-        device_target: arguments.device.clone(),
-        ..RigConfiguration::default()
+    let mut configuration = match RigConfiguration::read(&arguments.config) {
+        Ok(configuration) => configuration,
+        Err(problem) => {
+            eprintln!("statemachined: {problem}");
+            std::process::exit(1);
+        }
     };
+    // The flag wins over the file, which is what a flag is for.
+    if std::env::args().any(|argument| argument.starts_with("--device")) {
+        configuration.device_target = arguments.device.clone();
+    }
+    if let Err(problem) = configuration.validate() {
+        eprintln!("statemachined: {}: {problem}", arguments.config.display());
+        std::process::exit(1);
+    }
     if let Some(root) = &arguments.storage_dir {
         configuration.graph_store_directory = root.join("graphs");
         configuration.state_machine_config_directory = root.join("configs");

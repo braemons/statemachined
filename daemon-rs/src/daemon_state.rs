@@ -6,39 +6,12 @@
 //! service, because there is one rig: a `Session` rpc and a `Device` rpc that
 //! held separate state would disagree about whether a board is open.
 
-use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::model::graph_definition::GraphDefinition;
+pub use crate::rig_configuration::RigConfiguration;
 use crate::model::state_machine_config::StateMachineConfig;
 use crate::store::Store;
-
-/// Where a rig's documents live, and how to reach its board.
-///
-/// The Rust counterpart of `rig_configuration.py`. Ported ahead of the things
-/// that read it because every other piece needs somewhere to put its files.
-#[derive(Debug, Clone)]
-pub struct RigConfiguration {
-    pub device_target: String,
-    pub connect_on_startup: bool,
-    pub graph_store_directory: PathBuf,
-    pub state_machine_config_directory: PathBuf,
-    pub trace_directory: PathBuf,
-    pub recording_directory: PathBuf,
-}
-
-impl Default for RigConfiguration {
-    fn default() -> Self {
-        Self {
-            device_target: "loop://".into(),
-            connect_on_startup: false,
-            graph_store_directory: PathBuf::from("/var/lib/braemons/statemachined/graphs"),
-            state_machine_config_directory: PathBuf::from("/var/lib/braemons/statemachined/configs"),
-            trace_directory: PathBuf::from("/var/lib/braemons/statemachined/trace"),
-            recording_directory: PathBuf::from("/var/lib/braemons/statemachined/recordings"),
-        }
-    }
-}
 
 /// The rig, as much of it as is ported.
 pub struct DaemonState {

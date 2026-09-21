@@ -501,6 +501,48 @@ docs-build:                 ## build the static docs site to site/
 .PHONY: ci
 ci: check-core check-proto test sanitize golden format-check test-python firmware  ## everything CI runs, except emulation
 
+# -- the Rust port ---------------------------------------------------------
+#
+# `daemon/` is the Python daemon that runs on rigs; `daemon-rs/` is what
+# replaces it (RUST_REWRITE_PLAN.md). Until every rpc is ported the two are not
+# interchangeable, so these are their own targets and are not in `ci` yet.
+
+.PHONY: rust
+rust:  ## build the Rust daemon
+	cargo build --manifest-path daemon-rs/Cargo.toml
+
+.PHONY: rust-proto
+rust-proto:  ## regenerate daemon-rs/src/wire/ from proto/
+	cargo run --quiet --manifest-path tools/protogen/Cargo.toml
+
+.PHONY: rust-check-proto
+rust-check-proto:  ## fail if the committed wire types are not what proto/ produces
+	@rm -rf target/proto-check
+	@cargo run --quiet --manifest-path tools/protogen/Cargo.toml -- target/proto-check
+	@diff -r --exclude=mod.rs target/proto-check daemon-rs/src/wire || { \
+	  echo "daemon-rs/src/wire/ is not what proto/ produces: run 'make rust-proto'"; \
+	  exit 1; \
+	}
+
+.PHONY: rust-corpus
+rust-corpus:  ## regenerate the document corpus the two implementations are compared on
+	@uv run --project daemon python tools/document_corpus.py
+
+.PHONY: rust-test
+rust-test: rust-corpus  ## the Rust tests, against a freshly generated corpus
+	cargo test --manifest-path daemon-rs/Cargo.toml
+
+.PHONY: rust-check
+rust-check: rust rust-check-proto rust-test  ## everything the Rust side checks
+	cargo clippy --manifest-path daemon-rs/Cargo.toml --all-targets -- -D warnings
+
+.PHONY: ported
+ported:  ## how much of the API the Rust daemon answers
+	@total=$$(grep -c 'async fn ' daemon-rs/src/wire/service/statemachined.v1.rs); \
+	left=$$(grep -c 'unported!("' daemon-rs/src/grpc/mod.rs); \
+	echo "$$((total - left))/$$total rpcs ported, $$left to go"
+
+
 .PHONY: clean
 clean:
 	rm -rf build build-san build-O0 build-O3 .pio $(IMAGE_DIR)

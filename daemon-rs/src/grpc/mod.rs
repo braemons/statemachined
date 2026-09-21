@@ -15,6 +15,7 @@
 use std::sync::Arc;
 
 use crate::daemon_state::DaemonState;
+use crate::rig_configuration::RigConfiguration;
 use crate::model::graph_definition::{GraphDefinition, Refused};
 use crate::model::state_machine_config::StateMachineConfig;
 use crate::store::{Document, Store, StoreProblem};
@@ -124,6 +125,41 @@ fn config_summary(
             ..Default::default()
         },
     }
+}
+
+/// The rig configuration, as the wire spells it.
+///
+/// The convert seam: `rig_configuration::RigConfiguration` is what the daemon
+/// thinks in and reads from TOML, and this is the message. They are nearly the
+/// same shape and are still two types, because the day they diverge is the day
+/// a field means something different on disk than on the wire.
+fn rig_configuration_to_wire(configuration: &RigConfiguration) -> wire::RigConfiguration {
+    wire::RigConfiguration {
+        device_target: configuration.device_target.clone(),
+        device_baud: configuration.device_baud,
+        device_timeout_seconds: configuration.device_timeout_seconds,
+        expected_board: configuration.expected_board.clone(),
+        connect_on_startup: configuration.connect_on_startup,
+        session_seed: configuration.session_seed.clone(),
+        startup_state_machine_config: configuration.startup_state_machine_config.clone(),
+        graph_mode: configuration.graph_mode.as_str().to_string(),
+        trace_ring_entries: configuration.trace_ring_entries,
+        heartbeat_seconds: configuration.heartbeat_seconds,
+        trace_directory: path_to_wire(&configuration.trace_directory),
+        graph_store_directory: path_to_wire(&configuration.graph_store_directory),
+        recording_directory: path_to_wire(&configuration.recording_directory),
+        state_machine_config_directory: path_to_wire(
+            &configuration.state_machine_config_directory,
+        ),
+    }
+}
+
+/// A path as the wire carries it.
+///
+/// Lossy only for a path that is not UTF-8, which on these rigs would be a
+/// directory somebody could not have typed into a TOML file either.
+fn path_to_wire(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
 }
 
 fn config_summaries(state: &DaemonState) -> wire::StateMachineConfigSummaries {
@@ -551,7 +587,9 @@ impl service::configuration_server::Configuration for DaemonServices {
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ReadConfigurationRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::RigConfiguration>, tonic::Status> {
-        unported!("Configuration/read_configuration")
+        Ok(tonic::Response::new(rig_configuration_to_wire(
+            &self.state.configuration,
+        )))
     }
 
     async fn patch_configuration(
