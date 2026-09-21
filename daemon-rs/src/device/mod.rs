@@ -11,4 +11,5 @@
 //! implementation.
 
 pub mod message_framing;
+pub mod serial_link;
 pub mod message_vocabulary;
