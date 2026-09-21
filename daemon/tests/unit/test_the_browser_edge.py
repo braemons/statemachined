@@ -3,7 +3,7 @@
 
 `web_edge.py` is the second way into the same servicers: a browser cannot speak
 gRPC -- no access to HTTP trailers, no control over HTTP/2 framing -- so the
-panels speak the Connect protocol over plain HTTP POST, and the edge translates.
+panels speak gRPC-Web over plain HTTP POST, and the edge translates.
 
 **The failure this suite exists for.** A servicer is written against
 `grpc.aio.ServicerContext`, and the edge supplies a stand-in that implements
@@ -15,26 +15,34 @@ uses, was perfectly fine. Nothing in this repository could see it, because
 nothing drove a stream through this transport.
 
 So these are deliberately about the *seam* and not about what the rpcs answer:
-the envelope framing, the refusal shape, and above all that the same servicer
-object survives being called through both doors.
+the framing, the trailer that carries the outcome, and above all that the same
+servicer object survives being called through both doors.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
+import base64
 import struct
+from urllib.parse import unquote
 
+import grpc
 import pytest
+from google.protobuf.message_factory import GetMessageClass
+from statemachined._proto.statemachined.v1 import common_pb2, service_pb2
 from statemachined.daemon.api.rig_service import RigService
 from statemachined.daemon.api.servicers import build_servicers
+from statemachined.daemon.api.servicers.refusals import REFUSAL_METADATA_KEY
 from statemachined.daemon.api.web_edge import EdgeContext, build_edge
 from statemachined.daemon.rig_configuration import RigConfiguration
 
-#: Connect's frame header: one flag byte, then four bytes of big-endian length.
-#: `0b10` on the last frame marks it as the end-of-stream message rather than
-#: another answer.
-END_OF_STREAM = 0b10
+#: gRPC-Web's frame header: one flag byte, then four bytes of big-endian
+#: length. Bit 7 on the last frame marks it as the trailer -- the outcome of
+#: the call -- rather than another answer.
+TRAILER = 0x80
+
+#: The one content type the edge speaks.
+GRPC_WEB = "application/grpc-web+proto"
 
 
 @pytest.fixture
@@ -136,29 +144,84 @@ class _EnoughFrames(Exception):
     """Our own hang-up, not a failure. See `post`."""
 
 
-def unary(edge, path: str, body: dict | None = None, **kwargs):
-    status, answer = post(
-        edge, path, json.dumps(body or {}).encode(), "application/json", **kwargs
-    )
-    return status, json.loads(answer)
+def request_for(path: str):
+    """The request message an rpc takes, from the descriptor rather than by name."""
+    service, method = path.lstrip("/").split("/")
+    descriptor = service_pb2.DESCRIPTOR.services_by_name[service.split(".")[-1]]
+    return GetMessageClass(descriptor.methods_by_name[method].input_type)
 
 
-def enveloped(message: dict) -> bytes:
-    """A streaming rpc's request, framed the way Connect frames one."""
-    payload = json.dumps(message).encode()
-    return struct.pack(">BI", 0, len(payload)) + payload
+def answer_for(path: str):
+    """The answer message an rpc gives, likewise."""
+    service, method = path.lstrip("/").split("/")
+    descriptor = service_pb2.DESCRIPTOR.services_by_name[service.split(".")[-1]]
+    return GetMessageClass(descriptor.methods_by_name[method].output_type)
 
 
-def unframe(body: bytes) -> list[tuple[int, dict]]:
-    """Every `(flags, message)` in a Connect stream body."""
+def framed(message: bytes) -> bytes:
+    """A request, framed the way gRPC-Web frames one."""
+    return struct.pack(">BI", 0, len(message)) + message
+
+
+def request(path: str, fields: dict | None = None) -> bytes:
+    """A framed request message for `path`, built from the descriptor."""
+    message = request_for(path)()
+    for name, value in (fields or {}).items():
+        setattr(message, name, value)
+    return framed(message.SerializeToString())
+
+
+def unframe(body: bytes) -> list[tuple[int, bytes]]:
+    """Every `(flags, payload)` in a gRPC-Web body."""
     frames = []
     offset = 0
     while offset + 5 <= len(body):
         flags, length = struct.unpack(">BI", body[offset : offset + 5])
-        payload = body[offset + 5 : offset + 5 + length]
-        frames.append((flags, json.loads(payload) if payload else {}))
+        frames.append((flags, body[offset + 5 : offset + 5 + length]))
         offset += 5 + length
     return frames
+
+
+def trailer_of(body: bytes) -> dict[str, str]:
+    """The trailer frame's `key: value` lines, as a mapping.
+
+    `grpc-message` comes back decoded: it is percent-encoded on the wire so
+    that a refusal's sentence can carry any byte a person wrote.
+    """
+    for flags, payload in unframe(body):
+        if flags & TRAILER:
+            trailer = {}
+            for line in payload.decode().split("\r\n"):
+                if ":" in line:
+                    key, _, value = line.partition(":")
+                    trailer[key.strip().lower()] = value.strip()
+            if "grpc-message" in trailer:
+                trailer["grpc-message"] = unquote(trailer["grpc-message"])
+            return trailer
+    raise AssertionError("no trailer frame; the call never said how it went")
+
+
+def answers_of(path: str, body: bytes) -> list:
+    """Every answer message in a body, decoded against the rpc's output type."""
+    schema = answer_for(path)
+    messages = []
+    for flags, payload in unframe(body):
+        if not flags & TRAILER:
+            message = schema()
+            message.ParseFromString(payload)
+            messages.append(message)
+    return messages
+
+
+def request_of_nothing() -> bytes:
+    """A framed empty message, for a path with no descriptor to look up."""
+    return framed(b"")
+
+
+def unary(edge, path: str, fields: dict | None = None, **kwargs):
+    """One unary call. Returns the HTTP status, the trailer, and the answers."""
+    status, body = post(edge, path, request(path, fields), GRPC_WEB, **kwargs)
+    return status, trailer_of(body), answers_of(path, body)
 
 
 # -- the context ----------------------------------------------------------------
@@ -190,35 +253,68 @@ def test_a_caller_with_no_address_is_not_a_crash():
 # -- unary ----------------------------------------------------------------------
 
 
-def test_a_unary_rpc_answers_json(edge):
-    status, answer = unary(edge, "/statemachined.v1.Configuration/ReadHealth")
+def test_a_unary_rpc_answers_a_framed_message(edge):
+    status, trailer, answers = unary(edge, "/statemachined.v1.Configuration/ReadHealth")
     assert status == 200
-    assert answer == {"ok": True, "device_connected": False}
+    assert trailer["grpc-status"] == "0"
+    assert len(answers) == 1
+    assert answers[0].ok is True
+    assert answers[0].device_connected is False
 
 
-def test_a_refusal_carries_the_daemons_own_words(edge):
-    """The refusal shape is the whole reason this transport is hand-written:
-    Connect puts the typed `Error` in `details`, base64, because a browser
-    cannot read a gRPC trailer."""
-    status, answer = unary(
+def test_a_refusal_keeps_its_http_200_and_says_so_in_the_trailer(edge):
+    """**The shape of every outcome in this protocol.** gRPC puts the status in
+    HTTP trailers, which a browser cannot read; gRPC-Web puts it in the last
+    frame of the body, which it can. The status line is 200 either way, because
+    by the time a stream fails it is long gone."""
+    status, trailer, answers = unary(
         edge, "/statemachined.v1.GraphStore/ReadGraphFile", {"name": "not-there"}
     )
-    assert status == 404
-    assert answer["code"] == "not_found"
-    assert "not-there" in answer["message"]
-    assert answer.get("details"), "the typed refusal travels as itself"
+    assert status == 200, "the outcome is in the trailer, not the status line"
+    assert trailer["grpc-status"] == str(grpc.StatusCode.NOT_FOUND.value[0])
+    assert "not-there" in trailer["grpc-message"]
+    assert not answers, "a refusal answers nothing"
 
 
-def test_an_rpc_that_does_not_exist_is_unimplemented_and_not_a_traceback(edge):
-    status, answer = unary(edge, "/statemachined.v1.State/NoSuchRpc")
-    assert status == 404
-    assert answer["code"] == "unimplemented"
+def test_the_typed_refusal_travels_as_itself(edge):
+    """The same `statemachined.v1.Error` the gRPC transport puts in trailing
+    metadata, so a browser and a Python client read the same three fields and
+    neither has to parse a sentence.
+
+    Unpadded base64, which is gRPC's rule for a `-bin` value and not the padded
+    base64 the Connect protocol used. Decoding it here is what says the browser
+    can.
+    """
+    _status, trailer, _answers = unary(
+        edge, "/statemachined.v1.GraphStore/ReadGraphFile", {"name": "not-there"}
+    )
+    encoded = trailer[REFUSAL_METADATA_KEY]
+    assert not encoded.endswith("="), "a -bin value is unpadded"
+    refusal = common_pb2.Error()
+    refusal.ParseFromString(base64.b64decode(encoded + "=" * (-len(encoded) % 4)))
+    assert refusal.error == "no_such_graph", "the machine-readable code, not the sentence"
+    assert refusal.context == "graph_name", "and what to change, which a status code cannot say"
+    assert "not-there" in refusal.detail
+
+
+def test_an_rpc_that_does_not_exist_is_unimplemented_in_the_trailer(edge):
+    """Answered the way a refusal is, so a client needs one way to read an
+    outcome rather than two."""
+    status, body = post(edge, "/statemachined.v1.State/NoSuchRpc", request_of_nothing(), GRPC_WEB)
+    assert status == 200
+    trailer = trailer_of(body)
+    assert trailer["grpc-status"] == str(grpc.StatusCode.UNIMPLEMENTED.value[0])
+    assert "NoSuchRpc" in trailer["grpc-message"]
 
 
 def test_a_content_type_this_edge_does_not_speak_says_which_it_does(edge):
-    status, answer = post(edge, "/statemachined.v1.Configuration/ReadHealth", b"{}", "text/plain")
+    """415, not a trailer: a caller sending the wrong content type has not made
+    a gRPC request for this edge to answer."""
+    status, answer = post(
+        edge, "/statemachined.v1.Configuration/ReadHealth", request_of_nothing(), "text/plain"
+    )
     assert status == 415
-    assert "application/json" in json.loads(answer)["message"]
+    assert GRPC_WEB in answer.decode()
 
 
 # -- streaming ------------------------------------------------------------------
@@ -229,19 +325,14 @@ def test_a_stream_delivers_frames_through_this_transport(edge):
     this is the only thing in the repository that opens a stream the way the
     panels do, and it is what would have caught `EdgeContext` losing a method.
     """
-    status, body = post(
-        edge,
-        "/statemachined.v1.State/WatchState",
-        enveloped({}),
-        "application/connect+json",
-        frames=1,
-    )
+    path = "/statemachined.v1.State/WatchState"
+    status, body = post(edge, path, request(path), GRPC_WEB, frames=1)
     assert status == 200
     frames = unframe(body)
     assert frames, "the subscription delivered nothing at all"
-    flags, first = frames[0]
-    assert flags == 0, "an answer, not the end of the stream"
-    assert first["state"]["connected"] is False
+    flags, _payload = frames[0]
+    assert not flags & TRAILER, "an answer, not the trailer"
+    assert answers_of(path, body)[0].state.connected is False
 
 
 def test_a_subscriber_shows_up_in_the_observer_list_by_the_name_it_sent(edge, rig):
@@ -253,11 +344,12 @@ def test_a_subscriber_shows_up_in_the_observer_list_by_the_name_it_sent(edge, ri
     anything was ever registered, which is the way this test would pass for the
     wrong reason.
     """
+    path = "/statemachined.v1.State/WatchState"
     _status, _body, watching = post(
         edge,
-        "/statemachined.v1.State/WatchState",
-        enveloped({}),
-        "application/connect+json",
+        path,
+        request(path),
+        GRPC_WEB,
         headers=[(b"observer-name", b"the-trace-panel")],
         frames=1,
         while_open=lambda: [observer.as_dict() for observer in rig.observers.observers()],
@@ -277,12 +369,7 @@ def test_a_stream_that_is_hung_up_on_does_not_take_the_daemon_with_it(edge):
     Whatever the generator was doing is cancelled, and the next call has to
     work — which is what this asserts by making one.
     """
-    post(
-        edge,
-        "/statemachined.v1.State/WatchState",
-        enveloped({}),
-        "application/connect+json",
-        frames=1,
-    )
-    status, answer = unary(edge, "/statemachined.v1.Configuration/ReadHealth")
-    assert status == 200 and answer["ok"] is True
+    path = "/statemachined.v1.State/WatchState"
+    post(edge, path, request(path), GRPC_WEB, frames=1)
+    status, trailer, answers = unary(edge, "/statemachined.v1.Configuration/ReadHealth")
+    assert status == 200 and trailer["grpc-status"] == "0" and answers[0].ok is True

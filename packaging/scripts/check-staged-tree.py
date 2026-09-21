@@ -27,39 +27,45 @@ def main() -> int:
     print(f"  python        {sys.version.split()[0]}")
     print(f"  statemachined {statemachined.__version__}")
 
-    # Every runtime dependency, imported rather than assumed. `websockets` is
-    # here on purpose: it arrives only through the `[standard]` extra, and
-    # without it a shipped daemon answers a WebSocket upgrade with 404 while
-    # every test in the repository still passes, because Starlette's TestClient
-    # implements WebSockets in process.
-    import fastapi, httpx, pydantic, serial, uvicorn, websockets, zeroconf  # noqa: F401
+    # Every runtime dependency, imported rather than assumed.
+    import grpc, pydantic, serial, uvicorn, zeroconf  # noqa: F401
 
-    print(f"  fastapi {fastapi.__version__}, uvicorn {uvicorn.__version__}, "
+    print(f"  grpcio {grpc.__version__}, uvicorn {uvicorn.__version__}, "
           f"pydantic {pydantic.VERSION}, pyserial {serial.__version__}")
 
-    # The application, built the way the systemd unit builds it -- but pointed
-    # at a temporary directory, because this runs as whoever is packaging and
+    # The rpcs, built the way the systemd unit builds them -- but pointed at a
+    # temporary directory, because this runs as whoever is packaging and
     # /var/lib/braemons is the daemon user's.
-    from statemachined.daemon.api.application import create_application
+    from statemachined.daemon.api.rig_service import RigService
+    from statemachined.daemon.api.servicers import build_servicers
+    from statemachined.daemon.api.web_edge import rpcs_of
     from statemachined.daemon.rig_configuration import RigConfiguration
 
     with tempfile.TemporaryDirectory() as scratch:
         here = Path(scratch)
         configuration = RigConfiguration(
+            device_target="loop://",
             connect_on_startup=False,
             graph_store_directory=here / "graphs",
             state_machine_config_directory=here / "configs",
             trace_directory=here / "trace",
             recording_directory=here / "recordings",
         )
-        application = create_application(configuration)
-        # The OpenAPI schema rather than `app.routes`: routers arrive through
-        # include_router and are not flat there, and this is the same view of
-        # the API a client gets.
-        paths = set(application.openapi()["paths"])
-        for expected in ("/api/device", "/api/device/save", "/api/device/autorun", "/api/trial/result", "/api/state"):
-            assert expected in paths, f"{expected} is not a route: {sorted(paths)}"
-        print(f"  {len(paths)} API paths, including the ones the web UI calls")
+        service = RigService(configuration)
+        # The edge's own table rather than a list written here: it is built
+        # from the proto descriptor, so this asks the package the same question
+        # a browser does -- is every rpc in the interface actually implemented
+        # in this tree -- and an rpc added to the proto is covered by itself.
+        table = rpcs_of(build_servicers(service))
+        for expected in (
+            "/statemachined.v1.Device/ReadDevice",
+            "/statemachined.v1.Device/SaveSettings",
+            "/statemachined.v1.Device/WriteAutorun",
+            "/statemachined.v1.Trial/ReadResult",
+            "/statemachined.v1.State/ReadState",
+        ):
+            assert expected in table, f"{expected} is not an rpc: {sorted(table)}"
+        print(f"  {len(table)} rpcs, including the ones the web UI calls")
 
     # Package data, which has gone missing from a wheel before and is invisible
     # until a browser asks for it.
