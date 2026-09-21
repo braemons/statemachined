@@ -81,6 +81,66 @@ def cases() -> list[dict]:
     ]
 
 
+def wiring_cases() -> list[dict]:
+    """Maps that resolve, so the masks they push can be compared.
+
+    **A mask is where an off-by-one stops being visible.** `invert`, `enable`
+    and `safe` are bit positions over line numbers; a map resolved one line out
+    produces a mask that is a valid mask, pushes without complaint, and
+    conditions the wrong pin.
+    """
+
+    def case(why, inputs=(), outputs=()):
+        return {
+            "why": why,
+            "pin_map": FROM_THE_DEVICE,
+            "line_map": {"input_lines": list(inputs), "output_lines": list(outputs)},
+        }
+
+    return [
+        case("nothing configured: every mask is zero"),
+        case("one enabled input, the default",
+             inputs=[{"name": "lever", "line_index": 0}]),
+        case("an input that is not enabled",
+             inputs=[{"name": "lever", "line_index": 0, "is_enabled": False}]),
+        case("an active-low input sets a bit in invert",
+             inputs=[{"name": "lever", "line_index": 1, "reads_active_low": True}]),
+        case("debounce lands at the line's own index",
+             inputs=[{"name": "lever", "line_index": 2, "debounce_milliseconds": 20}]),
+        case("**the trailing zeros are dropped**, so a lone line 0 sends one entry",
+             inputs=[{"name": "lever", "line_index": 0, "debounce_milliseconds": 5}]),
+        case("a debounce on the last line sends the whole array",
+             inputs=[{"name": "lever", "line_index": 3, "debounce_milliseconds": 1}]),
+        case("no debounce anywhere sends an empty array",
+             inputs=[{"name": "lever", "line_index": 3}]),
+        case("a safe-high output sets a bit in safe",
+             outputs=[{"name": "valve", "line_index": 1, "safe_level_is_high": True}]),
+        case("a safe-low output sets none",
+             outputs=[{"name": "valve", "line_index": 1}]),
+        case("the input and output masks are over different numberings",
+             inputs=[{"name": "lever", "line_index": 2, "reads_active_low": True}],
+             outputs=[{"name": "valve", "line_index": 2, "safe_level_is_high": True}]),
+        case("a line resolved by pin masks at the board's index, not the config's order",
+             inputs=[{"name": "lever", "pin_label": "A1", "reads_active_low": True}]),
+        case("several lines at once",
+             inputs=[
+                 {"name": "start", "line_index": 0, "debounce_milliseconds": 20},
+                 {"name": "abort", "line_index": 1, "reads_active_low": True},
+                 {"name": "lever", "line_index": 2, "is_enabled": False},
+             ],
+             outputs=[
+                 {"name": "valve", "line_index": 0},
+                 {"name": "lamp", "line_index": 2, "safe_level_is_high": True},
+             ]),
+    ]
+
+
+def wiring_verdict(case: dict) -> dict:
+    pin_map = DevicePinMap(**case["pin_map"])
+    line_map = LineMap.model_validate(case["line_map"]).resolved_against(pin_map)
+    return {"wiring": line_map.wiring_message_fields()}
+
+
 def verdict(case: dict) -> dict:
     pin_map = DevicePinMap(**case["pin_map"])
     line_map = LineMap.model_validate(case["line_map"])
@@ -108,8 +168,13 @@ def main() -> int:
     corpus = [{**case, "answer": verdict(case)} for case in cases()]
     out.write_text(json.dumps(corpus, indent=1) + "\n")
     refused = sum(1 for case in corpus if case["answer"]["refused"])
-    print(f"{len(corpus)} cases -> {out.relative_to(HERE)}")
+    print(f"{len(corpus)} resolution cases -> {out.relative_to(HERE)}")
     print(f"  {len(corpus) - refused} resolved, {refused} refused")
+
+    out = HERE / "daemon-rs" / "tests" / "wiring_cases.json"
+    wiring = [{**case, "answer": wiring_verdict(case)} for case in wiring_cases()]
+    out.write_text(json.dumps(wiring, indent=1) + "\n")
+    print(f"{len(wiring)} wiring cases -> {out.relative_to(HERE)}")
     return 0
 
 

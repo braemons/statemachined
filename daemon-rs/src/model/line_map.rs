@@ -157,6 +157,53 @@ impl LineMap {
         Ok(())
     }
 
+    /// The body of the protocol's `wiring` command, as this rig needs it.
+    ///
+    /// **Every field, always**, rather than only what differs from the default:
+    /// the command replaces what the board holds, and a partial one would leave
+    /// a board that had been moved between rigs carrying half of each.
+    ///
+    /// Takes a **resolved** map. A map whose indices came from pin labels is
+    /// only numbered once `resolved_against` has asked the board, and masks are
+    /// the last place to discover that — so an unresolved line is refused here
+    /// rather than silently treated as line 0.
+    pub fn wiring_message_fields(&self) -> Checked<WiringFields> {
+        let mut invert_mask: u32 = 0;
+        let mut enable_mask: u32 = 0;
+        let mut debounce_milliseconds_per_line = vec![0i64; MAXIMUM_LINE_COUNT as usize];
+
+        for line in &self.input_lines {
+            let line_index = numbered(line.line_index, &line.name, &line.pin_label, "input")?;
+            if line.reads_active_low {
+                invert_mask |= 1 << line_index;
+            }
+            if line.is_enabled {
+                enable_mask |= 1 << line_index;
+            }
+            debounce_milliseconds_per_line[line_index as usize] = line.debounce_milliseconds;
+        }
+
+        let mut safe_level_mask: u32 = 0;
+        for line in &self.output_lines {
+            let line_index = numbered(line.line_index, &line.name, &line.pin_label, "output")?;
+            safe_level_mask |= u32::from(line.safe_level_is_high) << line_index;
+        }
+
+        // Trailing zeros are dropped because the device fills the rest with
+        // zeros anyway, and a 32-entry array of nothing is most of a protocol
+        // line's budget.
+        while debounce_milliseconds_per_line.last() == Some(&0) {
+            debounce_milliseconds_per_line.pop();
+        }
+
+        Ok(WiringFields {
+            invert: invert_mask,
+            enable: enable_mask,
+            safe: safe_level_mask,
+            debounce_ms: debounce_milliseconds_per_line,
+        })
+    }
+
     pub fn input_line_index_for_name(&self, name: &str) -> Checked<i64> {
         self.input_lines
             .iter()
@@ -207,6 +254,38 @@ impl std::fmt::Display for LineMapDoesNotMatchTheBoard {
 }
 
 impl std::error::Error for LineMapDoesNotMatchTheBoard {}
+
+/// The `wiring` command's body.
+///
+/// Serialised in this order, which is the order the protocol document writes
+/// them in — not that the device cares, but a line in a monitor is read by a
+/// person holding that document.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WiringFields {
+    pub invert: u32,
+    pub enable: u32,
+    pub safe: u32,
+    pub debounce_ms: Vec<i64>,
+}
+
+/// A line's index, or a refusal to guess one.
+///
+/// A line may be configured by pin alone, and until `resolved_against` has asked
+/// the board there is no index. Everything below this deals in masks, so this is
+/// the boundary where "not yet resolved" has to stop being representable.
+fn numbered(
+    line_index: Option<i64>,
+    name: &str,
+    pin_label: &str,
+    where_: &str,
+) -> Checked<i64> {
+    line_index.ok_or_else(|| {
+        Refused(format!(
+            "the {where_} line '{name}' is configured by pin ('{pin_label}') and has not been \
+             resolved against a board yet"
+        ))
+    })
+}
 
 /// One line, as the resolution sees it, whichever direction it came from.
 struct Unresolved<'a> {

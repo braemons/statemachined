@@ -154,3 +154,100 @@ fn a_disagreement_between_pin_and_index_names_both_and_says_why() {
         "the refusal should say why it is worth stopping for: {refusal}"
     );
 }
+
+// -- the masks -----------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct WiringCase {
+    why: String,
+    pin_map: DevicePinMap,
+    line_map: LineMap,
+    answer: WiringAnswer,
+}
+
+#[derive(Debug, Deserialize)]
+struct WiringAnswer {
+    wiring: WiringFields,
+}
+
+/// The shape Python's `wiring_message_fields` returns.
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+struct WiringFields {
+    invert: u32,
+    enable: u32,
+    safe: u32,
+    debounce_ms: Vec<i64>,
+}
+
+fn wiring_cases() -> Vec<WiringCase> {
+    serde_json::from_str(include_str!("wiring_cases.json"))
+        .expect("the cases tools/line_map_cases.py writes")
+}
+
+#[test]
+fn every_wiring_body_is_the_one_python_would_push() {
+    // **A mask is where an off-by-one stops being visible.** `invert`, `enable`
+    // and `safe` are bit positions over line numbers; a map resolved one line
+    // out produces a mask that is a *valid* mask, pushes without complaint, and
+    // conditions the wrong pin. Nothing after this point can tell.
+    let mut disagreed: Vec<String> = Vec::new();
+    for case in wiring_cases() {
+        let resolved = case
+            .line_map
+            .resolved_against(&case.pin_map)
+            .unwrap_or_else(|problem| panic!("{}: {problem}", case.why));
+        let ours = resolved
+            .wiring_message_fields()
+            .unwrap_or_else(|problem| panic!("{}: {problem}", case.why));
+        let mine = WiringFields {
+            invert: ours.invert,
+            enable: ours.enable,
+            safe: ours.safe,
+            debounce_ms: ours.debounce_ms.clone(),
+        };
+        if mine != case.answer.wiring {
+            disagreed.push(format!(
+                "{}: {mine:?} against {:?}",
+                case.why, case.answer.wiring
+            ));
+        }
+    }
+    assert!(disagreed.is_empty(), "{}", disagreed.join("\n  "));
+}
+
+#[test]
+fn an_unresolved_line_is_refused_rather_than_masked_at_zero() {
+    // A line configured by pin alone has no index until the board has been
+    // asked. Everything below this deals in masks, so "not yet resolved" has to
+    // stop being representable here -- treating it as line 0 would put a
+    // lever's conditioning on whatever line 0 happens to be.
+    let line_map: LineMap = serde_json::from_value(serde_json::json!({
+        "input_lines": [{"name": "lever", "pin_label": "A0"}]
+    }))
+    .expect("a line map");
+    let problem = line_map
+        .wiring_message_fields()
+        .expect_err("an unresolved line has no mask");
+    assert!(problem.to_string().contains("lever"), "{problem}");
+    assert!(problem.to_string().contains("resolved"), "{problem}");
+}
+
+#[test]
+fn a_pin_prints_as_something_a_person_can_hold_against_the_wires() {
+    use statemachined::device::board_pin_labels::{high_lines, pin_label, word_bits};
+    use statemachined::device::device_pin_map::Direction;
+
+    assert_eq!(pin_label("uno_r4_minima", Direction::In, 0), "0 (D2)");
+    assert_eq!(pin_label("uno_r4_minima", Direction::Out, 3), "3 (A0)");
+    // A board this table does not know prints bare numbers rather than a
+    // plausible lie about somebody else's pinout.
+    assert_eq!(pin_label("some_other_mcu", Direction::In, 0), "0");
+    assert_eq!(pin_label("uno_r4_minima", Direction::In, 99), "99");
+
+    // Line 0 on the left, which is the opposite of a binary literal and the
+    // same as the hardware table. Anybody comparing this against a breadboard
+    // is counting from line 0.
+    assert_eq!(word_bits(0b0000_0101, 8), "1.1.....");
+    assert_eq!(high_lines("uno_r4_minima", Direction::In, 0b0101, 8), "0 (D2), 2 (D4)");
+    assert_eq!(high_lines("uno_r4_minima", Direction::In, 0, 8), "none");
+}
