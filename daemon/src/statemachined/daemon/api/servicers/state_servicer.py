@@ -10,10 +10,12 @@ the second.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from statemachined._proto.statemachined.v1 import service_pb2_grpc, state_pb2
 from statemachined.daemon.api import convert
 from statemachined.daemon.api.rig_service import RigService
+from statemachined.graph_set_compiler import GraphNotInSet
 
 from .observer_registration import watching
 from .refusals import answering, reading
@@ -34,6 +36,17 @@ class StateServicer(service_pb2_grpc.StateServicer):
         The resolution needs the committed set and the armed graph, which is
         why it happens here rather than in the seam: the seam is handed an
         answer, not the two things it takes to work one out.
+
+        **"Where it can be" is the whole of it, and it must never refuse.**
+        `armed_graph_name` is the last graph this daemon armed, and the
+        committed set can have been replaced since — a session that uploads a
+        new set between trials leaves a name the set no longer has. Reading
+        what the rig is doing must survive that: the *name* is a convenience
+        over `state_index`, which is always there, and a `ReadState` that
+        refused because of it would take the whole panel down over a label.
+
+        Found by the three-daemon suite, which runs two trials on two different
+        sets and read a refusal off the second.
         """
         supervisor = self.service.supervisor
         report = self.service.read_device_state()
@@ -41,9 +54,10 @@ class StateServicer(service_pb2_grpc.StateServicer):
         index = report.get("current_state")
         name = None
         if committed is not None and supervisor.armed_graph_name and index is not None:
-            names = committed.graph_named(supervisor.armed_graph_name).state_names_by_index
-            if 0 <= index < len(names):
-                name = names[index]
+            with contextlib.suppress(GraphNotInSet):
+                names = committed.graph_named(supervisor.armed_graph_name).state_names_by_index
+                if 0 <= index < len(names):
+                    name = names[index]
         return convert.rig_state_to_wire(
             connected=supervisor.is_connected,
             state_report=report,

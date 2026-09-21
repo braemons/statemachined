@@ -222,6 +222,31 @@ def test_a_trial_that_never_ran_has_nothing_recorded(rig):
     assert rig.read_trial_trace(999) == []
 
 
+def test_reading_the_state_survives_a_set_that_was_replaced_under_it(rig):
+    """**A read of what the rig is doing must never refuse.**
+
+    `armed_graph_name` is the last graph this daemon armed, and a session that
+    uploads a new set between trials leaves a name the set no longer has. The
+    state *name* is a convenience over `state_index`, which is always there;
+    resolving it used to raise `GraphNotInSet` straight out of `ReadState`, so
+    a second trial on a second set took the whole panel down over a label.
+
+    Found by the three-daemon suite in `contracts/e2e-tests`, which does
+    exactly this and read the refusal off the second trial.
+    """
+    a_session_of(rig, timed_graph("first", outcome="HIT"))
+    rig.configure_trial(1, graph="first", cap_milliseconds=5000)
+    rig.start_trial(1)
+    rig.wait_for_trial(1, timeout_s=TRIAL_DEADLINE_SECONDS)
+
+    # A different set entirely: the armed name is now in nothing committed.
+    a_session_of(rig, timed_graph("second", outcome="HIT"))
+
+    state = rig.read_state()
+    assert state.connected
+    assert state.state_name is None, "no name to give, and that is not a refusal"
+
+
 def test_a_graph_that_is_not_in_the_store_is_still_a_refusal(rig):
     """The store *can* tell, so it does. The contrast with the trace is the
     point: a refusal is for a question with a definite negative answer."""
