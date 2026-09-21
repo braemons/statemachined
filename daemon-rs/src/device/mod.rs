@@ -10,6 +10,7 @@
 //! is golden against the firmware's own CRC rather than against any host
 //! implementation.
 
+pub mod device_clock_correlation;
 pub mod message_framing;
 pub mod request_response_session;
 pub mod serial_link;

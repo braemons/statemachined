@@ -1,0 +1,412 @@
+[
+ {
+  "op": "query",
+  "unwrapped": 0,
+  "why": "no ping yet, so there is no estimate to give",
+  "answer": {
+   "estimate": null,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 0,
+  "why": "the first reading of a freshly powered board",
+  "answer": {
+   "unwrapped": 0,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 1000,
+  "why": "ordinary forward motion",
+  "answer": {
+   "unwrapped": 1000,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 4294967295,
+  "why": "one microsecond before the counter wraps",
+  "answer": {
+   "unwrapped": 4294967295,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 0,
+  "why": "the wrap itself",
+  "answer": {
+   "unwrapped": 4294967296,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 1000,
+  "why": "just after it",
+  "answer": {
+   "unwrapped": 4294968296,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 4294967295,
+  "why": "and round again",
+  "answer": {
+   "unwrapped": 8589934591,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 5,
+  "why": "a second wrap",
+  "answer": {
+   "unwrapped": 8589934597,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 1073741824,
+  "why": "forward, to sit well inside the range",
+  "answer": {
+   "unwrapped": 9663676416,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 1073740824,
+  "why": "backwards by 1 ms: out-of-order, not a wrap",
+  "answer": {
+   "unwrapped": 9663675416,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 1073742824,
+  "why": "and on again",
+  "answer": {
+   "unwrapped": 9663677416,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 2147483648,
+  "why": "sit at the threshold",
+  "answer": {
+   "unwrapped": 10737418240,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 0,
+  "why": "backwards by exactly the threshold: NOT a wrap, the test is >",
+  "answer": {
+   "unwrapped": 8589934592,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 2147483649,
+  "why": "sit one past it",
+  "answer": {
+   "unwrapped": 10737418241,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 0,
+  "why": "backwards by one more than the threshold: a wrap",
+  "answer": {
+   "unwrapped": 12884901888,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "ping",
+  "before": 1700000000.0,
+  "raw": 10000,
+  "after": 1700000000.002,
+  "why": "first, 2 ms round trip",
+  "answer": {
+   "refused": false,
+   "best_round_trip_microseconds": 2000,
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 10000,
+  "why": "at the observation itself",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1699987115.099112",
+    "uncertainty_microseconds": 1000,
+    "host_time_iso8601": "2023-11-14T18:38:35.099112Z"
+   },
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 1010000,
+  "why": "one device second later",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1699987116.099112",
+    "uncertainty_microseconds": 1000,
+    "host_time_iso8601": "2023-11-14T18:38:36.099112Z"
+   },
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": -990000,
+  "why": "one device second earlier",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1699987114.099112",
+    "uncertainty_microseconds": 1000,
+    "host_time_iso8601": "2023-11-14T18:38:34.099112Z"
+   },
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "ping",
+  "before": 1700000010.0,
+  "raw": 10000000,
+  "after": 1700000010.05,
+  "why": "worse, 50 ms: ignored",
+  "answer": {
+   "refused": false,
+   "best_round_trip_microseconds": 2000,
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 10000,
+  "why": "so the answer must not have moved",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1699987115.099112",
+    "uncertainty_microseconds": 1000,
+    "host_time_iso8601": "2023-11-14T18:38:35.099112Z"
+   },
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "ping",
+  "before": 1700000020.0,
+  "raw": 20000000,
+  "after": 1700000020.0005,
+  "why": "better, 0.5 ms: kept",
+  "answer": {
+   "refused": false,
+   "best_round_trip_microseconds": 500,
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 20000000,
+  "why": "and now it has",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1699987135.098362",
+    "uncertainty_microseconds": 250,
+    "host_time_iso8601": "2023-11-14T18:38:55.098362Z"
+   },
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "ping",
+  "before": 1700000030.0,
+  "raw": 30000000,
+  "after": 1700000030.0000005,
+  "why": "0.4 us rounds to 0",
+  "answer": {
+   "refused": false,
+   "best_round_trip_microseconds": 0,
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 30000000,
+  "why": "an uncertainty of zero is legal and must be said",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1699987145.0981123",
+    "uncertainty_microseconds": 0,
+    "host_time_iso8601": "2023-11-14T18:39:05.098112Z"
+   },
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "ping",
+  "before": 1700000040.0,
+  "raw": 40000000,
+  "after": 1700000040.0000017,
+  "why": "1.6 us rounds to 2",
+  "answer": {
+   "refused": false,
+   "best_round_trip_microseconds": 0,
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "forget",
+  "why": "start clean for the halving",
+  "answer": {
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "ping",
+  "before": 1700000050.0,
+  "raw": 50000000,
+  "after": 1700000050.000007,
+  "why": "7 us: the bound floors to 3",
+  "answer": {
+   "refused": false,
+   "best_round_trip_microseconds": 7,
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 50000000,
+  "why": "half of seven, floored",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1700000050.0000033",
+    "uncertainty_microseconds": 3,
+    "host_time_iso8601": "2023-11-14T22:14:10.000003Z"
+   },
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "forget",
+  "why": "a reset device restarts its clock from zero",
+  "answer": {
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 0,
+  "why": "so there is no estimate again",
+  "answer": {
+   "estimate": null,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 0,
+  "why": "and the unwrapping starts over",
+  "answer": {
+   "unwrapped": 0,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "unwrap",
+  "raw": 4294967295,
+  "why": "a backwards jump across a forget is not a wrap of the old timeline",
+  "answer": {
+   "unwrapped": 4294967295,
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "forget",
+  "why": "clean, for the formatting",
+  "answer": {
+   "has_an_estimate": false
+  }
+ },
+ {
+  "op": "ping",
+  "before": 1700000000.0,
+  "raw": 0,
+  "after": 1700000000.000002,
+  "why": "a tight ping to anchor it",
+  "answer": {
+   "refused": false,
+   "best_round_trip_microseconds": 2,
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 0,
+  "why": "iso8601: on the second",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1700000000.000001",
+    "uncertainty_microseconds": 1,
+    "host_time_iso8601": "2023-11-14T22:13:20.000001Z"
+   },
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 1,
+  "why": "iso8601: one microsecond past it",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1700000000.000002",
+    "uncertainty_microseconds": 1,
+    "host_time_iso8601": "2023-11-14T22:13:20.000002Z"
+   },
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 500000,
+  "why": "iso8601: half a second",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1700000000.500001",
+    "uncertainty_microseconds": 1,
+    "host_time_iso8601": "2023-11-14T22:13:20.500001Z"
+   },
+   "has_an_estimate": true
+  }
+ },
+ {
+  "op": "query",
+  "unwrapped": 999999,
+  "why": "iso8601: the last whole microsecond of the second",
+  "answer": {
+   "estimate": {
+    "host_unix_seconds": "1700000001.0",
+    "uncertainty_microseconds": 1,
+    "host_time_iso8601": "2023-11-14T22:13:21.000000Z"
+   },
+   "has_an_estimate": true
+  }
+ }
+]
