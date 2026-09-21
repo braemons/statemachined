@@ -10,7 +10,7 @@
 //!
 //! Each rpc moves from `unported!()` to a real body exactly once, and the
 //! Python daemon in `daemon/` stays the one on rigs until every one of them
-//! has (`RUST_REWRITE_PLAN.md` §5.2: there is no split where both run).
+//! has (`dev/RUST_PORT.md` §5.2: there is no split where both run).
 
 use std::sync::Arc;
 

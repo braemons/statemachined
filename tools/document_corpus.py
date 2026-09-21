@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Build the corpus the two implementations are compared on.
 
-**The documents are user data** (`RUST_REWRITE_PLAN.md` §4.2). A graph file
+**The documents are user data** (`dev/RUST_PORT.md` §4.2). A graph file
 somebody wrote last year must parse identically under the Python daemon and the
 Rust one, and -- just as important -- a file that is *refused* must be refused
 by both. Refusals are half the contract and the half that is easy to forget.

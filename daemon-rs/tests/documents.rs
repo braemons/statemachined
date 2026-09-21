@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Both implementations, over the same documents.
 //!
-//! **The documents are user data** (`RUST_REWRITE_PLAN.md` §4.2). A graph file
+//! **The documents are user data** (`dev/RUST_PORT.md` §4.2). A graph file
 //! somebody wrote last year lives in `/var/lib/statemachined/graphs/` and must
 //! parse identically under the Python daemon and this one. So must a file that
 //! is *refused*: refusals are half the contract, and the half that is easy to

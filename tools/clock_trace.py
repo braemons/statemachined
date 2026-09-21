@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Run the Python clock correlation over a swept input space, and record it.
 
-**Why generated and not recorded.** `RUST_REWRITE_PLAN.md` §4.1 said to check
+**Why generated and not recorded.** `dev/RUST_PORT.md` §4.1 said to check
 this against recordings the Python daemon made. There are no recent ones, and
 on reflection generated traces are the better instrument anyway: a recording
 covers whatever happened to occur on some Tuesday, while a sweep covers the

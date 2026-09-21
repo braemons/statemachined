@@ -3,7 +3,7 @@
 //!
 //! **A port in progress.** `daemon/` holds the Python daemon that runs on rigs;
 //! this is what replaces it, and until every rpc is ported the two are not
-//! interchangeable — see `RUST_REWRITE_PLAN.md`. `grpc/mod.rs` is the
+//! interchangeable — see `dev/RUST_PORT.md`. `grpc/mod.rs` is the
 //! scoreboard: what is not ported answers `UNIMPLEMENTED` and says so.
 //!
 //! The layering is mousewheeld's, because a braemons developer who has read
