@@ -62,6 +62,7 @@ struct Upload {
     if (json_str_eq(t, "graph_state")) return builder.add_state(m, covered);
     if (json_str_eq(t, "graph_transition")) return builder.add_transition(m, covered);
     if (json_str_eq(t, "graph_action")) return builder.add_action(m, covered);
+    if (json_str_eq(t, "graph_timer")) return builder.add_timer(m, covered);
     if (json_str_eq(t, "graph_end")) return builder.end_graph(m, covered);
     if (json_str_eq(t, "set_end")) return builder.end_set(m);
     FAIL("unknown message type in test");
@@ -725,6 +726,40 @@ TEST_CASE("a second set_begin discards the first attempt") {
   CHECK(u.set.n_distributions == 0);
   CHECK(u.set.n_graphs == 0);
   CHECK(u.set.version == 2);
+}
+
+TEST_CASE("a new set forgets the last one's global timers") {
+  // set_begin clears the live set by assigning an empty one, so whatever the
+  // assignment does not copy survives it. The timers did: after any set that
+  // declared one, the next set's first timer was refused as out of order,
+  // because the count still stood at the old set's.
+  Upload u;
+  minimal(u);
+  REQUIRE(u.send(R"({"msg_type":"graph_timer","message_id":5,"i":0,"width":0)") ==
+          UploadError::None);
+  REQUIRE(u.finish(0, 0) == UploadError::None);
+  REQUIRE(u.set.n_timers == 1);
+
+  u.checksum = 0xFFFF;
+  minimal(u);
+  CHECK(u.set.n_timers == 0);
+  CHECK(u.send(R"({"msg_type":"graph_timer","message_id":5,"i":0,"width":0)") ==
+        UploadError::None);
+}
+
+TEST_CASE("a copy of a set keeps its global timers") {
+  // Committing and restoring are copies. A set whose copy dropped its timers
+  // would run with every timer_start naming nothing.
+  GraphSet a;
+  a.n_distributions = 2;
+  a.n_timers = 2;
+  a.timers[1].width = 1;
+  a.timers[1].loops = 3;
+
+  const GraphSet b = a;
+  CHECK(b.n_timers == 2);
+  CHECK(b.timers[1].width == 1);
+  CHECK(b.timers[1].loops == 3);
 }
 
 TEST_CASE("abandon throws away a partial upload") {
