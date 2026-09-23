@@ -44,6 +44,7 @@ graph set.
 | `device/board_pin_labels.rs` | `device/board_pin_labels.py` | 44 |
 | `device/statemachined_device.rs` | `device/statemachined_device.py` — **connection half only** | 848 (part) |
 | `graph_set_compiler.rs` | `graph_set_compiler.py` | 636 |
+| `device/graph_set_upload.rs` | `device/graph_set_upload.py` — **the daemon's half**; the hand-built uploaders stay with the hardware suite | 206 (part) |
 
 ### What the port is held to
 
@@ -62,6 +63,7 @@ green differential test that cannot go red is not evidence.
 | Stores | both daemons on identical stores, driven by one browser bundle | 17 calls |
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
+| Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
 
 ### Bugs this found in the Python daemon
 
@@ -78,6 +80,21 @@ regression test:
    `round()` reached 1_000_000 and six-digit formatting wrote seven:
    `2023-11-14T22:13:20.1000000Z`, on a second also wrong by one. Every trace
    line goes through it.
+
+### And in the firmware
+
+**A second set with a global timer was refused.** `GraphSet::assign` copied
+every pool but the timers, and `set_begin` clears the live set by assigning an
+empty one — so the timer count outlived it, and the next set's first
+`graph_timer` was `bad_order`. The Python daemon hit it identically; nothing
+had uploaded two timer sets to one device before. Fixed in
+`firmware/core/graph/graph_set.cpp`, with a test for the clear and one for the
+copy.
+
+**Not fixed: a saved set loses its timers.** `io/settings_store.cpp` writes no
+timers at all, so a set restored after a restart (`save`, autorun) comes back
+without them. The fix changes the flash record's layout, so it is its own
+change, with a record version.
 
 ### And in the port itself
 
@@ -106,7 +123,7 @@ what put it on the wire.
 
 | Module | Lines | Unblocks |
 |---|---|---|
-| `device/graph_set_upload.py` | 206 | `GraphStore/UploadGraph`, `Session/Open`, `Session/UploadGraphs` |
+| `upload_graph_set` in `statemachined_device.py` — the upload itself is ported | ~25 | `GraphStore/UploadGraph`, `Session/Open`, `Session/UploadGraphs` |
 | `device/trial_result_reassembly.py` | 161 | `Trial/ReadResult` |
 | `device/state_visit_trace.py` | 206 | `State/ReadTrace`, `State/WatchTrace`, `State/ReadTrialTrace` |
 | `device/device_line_monitor.py` | 112 | `Device/ReadSerialMonitor`, `Device/WatchSerialMonitor` |

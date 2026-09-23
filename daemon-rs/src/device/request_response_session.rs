@@ -116,7 +116,7 @@ impl<S: Sink> RequestResponseSession<S> {
         }
     }
 
-    fn next_message_id(&mut self) -> u16 {
+    pub(crate) fn next_message_id(&mut self) -> u16 {
         let message_id = self.message_id;
         self.message_id = self.message_id.wrapping_add(1);
         message_id

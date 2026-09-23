@@ -13,6 +13,7 @@
 pub mod board_pin_labels;
 pub mod device_clock_correlation;
 pub mod device_pin_map;
+pub mod graph_set_upload;
 pub mod message_framing;
 pub mod request_response_session;
 pub mod serial_link;

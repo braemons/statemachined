@@ -31,6 +31,7 @@ from statemachined.graph_set_compiler import (  # noqa: E402
     GraphSetCompilationError,
     compile_graph_set_for_device,
 )
+from statemachined.device.graph_set_upload import send_compiled_upload_messages  # noqa: E402
 from statemachined.model.graph_definition import GraphDefinition  # noqa: E402
 from statemachined.model.line_map import LineMap  # noqa: E402
 
@@ -318,6 +319,34 @@ def cases() -> list[dict]:
     ]
 
 
+class _RecordingSession:
+    """Stands where a `RequestResponseSession` would, and keeps every line.
+
+    What the upload puts on the wire is decided before any reply comes back --
+    the checksum is folded over what was *sent* -- so a session that acks
+    everything is enough to record the exact bytes, rolling checksum included.
+    """
+
+    def __init__(self) -> None:
+        self.message_id = 1
+        self.lines: list[str] = []
+
+    def _next_message_id(self) -> int:
+        message_id = self.message_id
+        self.message_id = (self.message_id + 1) & 0xFFFF
+        return message_id
+
+    def request_line(self, line: str, message_id: int, timeout: float, what: str) -> dict:
+        self.lines.append(line)
+        return {"msg_type": "ack", "in_reply_to": message_id}
+
+
+def framed_lines(compiled) -> list[str]:
+    session = _RecordingSession()
+    send_compiled_upload_messages(session, compiled.upload_messages)
+    return session.lines
+
+
 def verdict(case: dict) -> dict:
     graphs = [GraphDefinition.model_validate(graph) for graph in case["graphs"]]
     line_map = LineMap.model_validate(case["line_map"])
@@ -348,6 +377,7 @@ def verdict(case: dict) -> dict:
             ],
             "pool_usage": compiled.pool_usage,
             "pool_capacity": compiled.pool_capacity,
+            "framed_lines": framed_lines(compiled),
         },
         "refused": None,
     }
