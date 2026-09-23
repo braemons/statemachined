@@ -205,34 +205,29 @@ impl LineMap {
     }
 
     pub fn input_line_index_for_name(&self, name: &str) -> Checked<i64> {
-        self.input_lines
-            .iter()
-            .find(|line| line.name == name)
-            .and_then(|line| line.line_index)
-            .ok_or_else(|| {
-                let known: Vec<&str> =
-                    self.input_lines.iter().map(|l| l.name.as_str()).collect();
-                Refused(format!(
-                    "no input line is called '{name}'. This rig has: {}",
-                    if known.is_empty() { "(none)".to_string() } else { known.join(", ") }
-                ))
-            })
+        if let Some(line) = self.input_lines.iter().find(|line| line.name == name) {
+            return numbered(line.line_index, &line.name, &line.pin_label, "input");
+        }
+        Err(no_line_called(name, "input", self.input_lines.iter().map(|l| l.name.as_str())))
     }
 
     pub fn output_line_index_for_name(&self, name: &str) -> Checked<i64> {
-        self.output_lines
-            .iter()
-            .find(|line| line.name == name)
-            .and_then(|line| line.line_index)
-            .ok_or_else(|| {
-                let known: Vec<&str> =
-                    self.output_lines.iter().map(|l| l.name.as_str()).collect();
-                Refused(format!(
-                    "no output line is called '{name}'. This rig has: {}",
-                    if known.is_empty() { "(none)".to_string() } else { known.join(", ") }
-                ))
-            })
+        if let Some(line) = self.output_lines.iter().find(|line| line.name == name) {
+            return numbered(line.line_index, &line.name, &line.pin_label, "output");
+        }
+        Err(no_line_called(name, "output", self.output_lines.iter().map(|l| l.name.as_str())))
     }
+}
+
+/// "No such line", listing the ones there are, alphabetically so the sentence
+/// is the same whatever order the config was written in.
+fn no_line_called<'a>(name: &str, which: &str, known: impl Iterator<Item = &'a str>) -> Refused {
+    let mut known: Vec<&str> = known.collect();
+    known.sort_unstable();
+    Refused(format!(
+        "no {which} line is called '{name}'. This rig has: {}",
+        if known.is_empty() { "(none)".to_string() } else { known.join(", ") }
+    ))
 }
 
 /// A map this board cannot honour: a pin it has not got, or a `line_index` and
