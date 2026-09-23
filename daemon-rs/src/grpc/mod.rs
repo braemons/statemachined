@@ -18,12 +18,17 @@ use crate::daemon_state::DaemonState;
 use crate::device::device_pin_map::{Direction, PinLabelSource};
 use crate::device::statemachined_device::{DeviceProblem, StatemachinedDevice};
 use crate::rig_configuration::RigConfiguration;
-use crate::model::graph_definition::{GraphDefinition, Refused};
+use crate::device::statemachined_device::UploadProblem;
+use crate::graph_set_compiler::CompiledGraphSet;
+use crate::model::graph_definition::GraphDefinition;
 use crate::model::state_machine_config::StateMachineConfig;
 use crate::store::{Document, Store, StoreProblem};
 use crate::wire::statemachined::v1 as wire;
 
 use crate::wire::statemachined::v1::service;
+
+mod refusal;
+use refusal::{store_refusal, Category, Refusal, StoreKind};
 
 /// Not ported yet. See the module docstring.
 ///
@@ -69,14 +74,12 @@ fn poisoned<T>(_: std::sync::PoisonError<T>) -> tonic::Status {
     tonic::Status::internal("the device lock was left poisoned by a failed request")
 }
 
-fn status_for(problem: StoreProblem) -> tonic::Status {
-    match problem {
-        StoreProblem::NotStored(sentence) => tonic::Status::not_found(sentence),
-        StoreProblem::BadName(sentence) | StoreProblem::Unreadable(Refused(sentence)) => {
-            tonic::Status::invalid_argument(sentence)
-        }
-        StoreProblem::Io(sentence) => tonic::Status::internal(sentence),
-    }
+fn graph_problem(problem: StoreProblem) -> tonic::Status {
+    store_refusal(StoreKind::Graph, problem).into()
+}
+
+fn config_problem(problem: StoreProblem) -> tonic::Status {
+    store_refusal(StoreKind::StateMachineConfig, problem).into()
 }
 
 /// One line about a stored graph, for a listing.
@@ -201,7 +204,214 @@ fn device_state_to_wire(device: &StatemachinedDevice) -> wire::DeviceState {
         // the firmware. So the provenance travels with the answer.
         pin_labels_came_from: source_of(device.pin_map.source).to_string(),
         uptime_device_microseconds: number("t_us"),
+        committed_set: device.committed_graph_set.as_ref().map(committed_set_to_wire),
         ..Default::default()
+    }
+}
+
+/// What a set costs, or what a board holds. Six numbers, not one: the pools
+/// fill independently.
+fn pool_counts(counts: &indexmap::IndexMap<String, i64>) -> wire::GraphPoolCounts {
+    let count = |name: &str| counts.get(name).copied().unwrap_or(0) as i32;
+    wire::GraphPoolCounts {
+        graphs: count("graphs"),
+        states: count("states"),
+        transitions: count("transitions"),
+        output_actions: count("output_actions"),
+        distributions: count("distributions"),
+        choice_options: count("choice_options"),
+    }
+}
+
+/// The graph set on the board, by the names it was compiled from.
+fn committed_set_to_wire(committed: &CompiledGraphSet) -> wire::CommittedGraphSet {
+    wire::CommittedGraphSet {
+        set_version: committed.set_version as i32,
+        graph_names: committed
+            .graphs_by_slot
+            .iter()
+            .map(|graph| graph.name.clone())
+            .collect(),
+        pool_usage: Some(pool_counts(&committed.pool_usage)),
+        pool_capacity: Some(pool_counts(&committed.pool_capacity)),
+    }
+}
+
+/// What putting the graphs on the device cost.
+///
+/// `slots` is here although no caller needs it — everything else in this API
+/// takes a name — because it is what a person compares against the board when
+/// a trial reports the wrong graph.
+fn open_session_result(
+    compiled: &CompiledGraphSet,
+    state_machine_config: String,
+    elapsed_milliseconds: u128,
+) -> wire::OpenSessionResult {
+    wire::OpenSessionResult {
+        state_machine_config,
+        set_version: compiled.set_version as i32,
+        slots: compiled
+            .graphs_by_slot
+            .iter()
+            .map(|graph| (graph.name.clone(), graph.slot as i32))
+            .collect(),
+        pool_usage: Some(pool_counts(&compiled.pool_usage)),
+        pool_capacity: Some(pool_counts(&compiled.pool_capacity)),
+        elapsed_milliseconds: elapsed_milliseconds as i32,
+    }
+}
+
+impl From<UploadProblem> for Refusal {
+    fn from(problem: UploadProblem) -> Self {
+        match problem {
+            UploadProblem::Compile(problem) => problem.into(),
+            UploadProblem::Device(problem) => problem.into(),
+        }
+    }
+}
+
+/// Run an rpc's body off the async runtime.
+///
+/// **The device work is synchronous**: a serial port, a lock, and a reply
+/// waited for. Run on the runtime it would stall every other rpc — the state
+/// a console is watching included — for as long as a whole set took to
+/// upload. Python's `answering` runs every body in `asyncio.to_thread` for the
+/// same reason.
+async fn off_the_runtime<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, tonic::Status> + Send + 'static,
+) -> Result<T, tonic::Status> {
+    tokio::task::spawn_blocking(work)
+        .await
+        .map_err(|problem| tonic::Status::internal(format!("the request's worker failed: {problem}")))?
+}
+
+impl DaemonState {
+    /// One more than the last, wrapping inside the wire's `u16`.
+    ///
+    /// The daemon's number, not a hash of the contents: `configure` carries it
+    /// so that a set edit which did not land cannot leave the device
+    /// confidently running the old paradigms, and for that it only has to
+    /// *differ*.
+    fn next_set_version(device: &StatemachinedDevice) -> i64 {
+        let previous = device
+            .committed_graph_set
+            .as_ref()
+            .map(|committed| committed.set_version)
+            .unwrap_or(0);
+        (previous % 65535) + 1
+    }
+
+    /// Compile, check against this board's caps, upload, commit — over graphs
+    /// from the store, by name, in the order named, which becomes the slot
+    /// order.
+    ///
+    /// **A session is open afterwards**, whichever rpc asked. When triald
+    /// drives a rig it calls this, and a panel that only knew about
+    /// `Session/Open` would show "no session" beside a board running trials.
+    fn upload_session_graph_set(
+        &self,
+        graph_names: &[String],
+    ) -> Result<(CompiledGraphSet, u128), tonic::Status> {
+        let graphs = graph_names
+            .iter()
+            .map(|name| self.graphs.load(name))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(graph_problem)?;
+        self.upload_graph_set(&graphs)
+    }
+
+    /// Compile, check against this board's caps, upload, commit, and say a
+    /// session is open. Returns what it cost in milliseconds — the slowest
+    /// call in the API, and the one a panel shows a progress bar for.
+    fn upload_graph_set(
+        &self,
+        graphs: &[GraphDefinition],
+    ) -> Result<(CompiledGraphSet, u128), tonic::Status> {
+        // Timed from before the lock, as Python times it: a caller waiting on
+        // somebody else's upload is waiting on this call.
+        let started = std::time::Instant::now();
+        let compiled = {
+            let mut device = self.device.lock().map_err(poisoned)?;
+            let set_version = Self::next_set_version(&device);
+            device
+                .upload_graph_set(graphs, set_version)
+                .map_err(|problem| tonic::Status::from(Refusal::from(problem)))?
+        };
+        let elapsed_milliseconds = started.elapsed().as_millis();
+        *self.session_opened_at.lock().map_err(poisoned)? = Some(std::time::SystemTime::now());
+        Ok((compiled, elapsed_milliseconds))
+    }
+
+    /// The loaded config, or a refusal that lists what could be loaded.
+    fn require_state_machine_config(&self) -> Result<StateMachineConfig, tonic::Status> {
+        if let Some(config) = self.loaded_config.lock().map_err(poisoned)?.clone() {
+            return Ok(config);
+        }
+        let stored = self.configs.stored_names();
+        let known = if stored.is_empty() { "(none)".to_string() } else { stored.join(", ") };
+        Err(Refusal::new(
+            Category::WrongMoment,
+            "no_state_machine_config_loaded",
+            format!(
+                "this rig has no state-machine config loaded, so nothing says which pin is \
+                 which line or what it can run. Load one: {known}"
+            ),
+            "state_machine_config",
+        )
+        .into())
+    }
+
+    /// Make this config the rig's, and push the wiring it implies.
+    ///
+    /// Resolved against the board **before** anything is kept, so a config
+    /// naming a pin this board does not have is refused with the rig still
+    /// running on the one it had. The graphs are *not* uploaded here: loading
+    /// says what this rig is and can run, and `Open` is what puts it on the
+    /// device — which is what lets somebody load a config to look at it
+    /// without disturbing a board mid-experiment.
+    fn apply_state_machine_config(&self, config: StateMachineConfig) -> Result<(), tonic::Status> {
+        {
+            let mut device = self.device.lock().map_err(poisoned)?;
+            if device.is_connected() {
+                let resolved = config
+                    .line_map
+                    .resolved_against(&device.pin_map)
+                    .map_err(|problem| {
+                        tonic::Status::from(Refusal::from(DeviceProblem::LineMap(problem.to_string())))
+                    })?;
+                device.line_map = config.line_map.clone();
+                device.resolved_line_map = resolved;
+                device.push_wiring().map_err(status_for_device)?;
+            } else {
+                device.line_map = config.line_map.clone();
+                device.resolved_line_map = config.line_map.clone();
+            }
+        }
+        *self.loaded_config.lock().map_err(poisoned)? = Some(config);
+        Ok(())
+    }
+
+    /// Whether the board is armed or running a trial, by its own report.
+    ///
+    /// With no board there is nothing to be busy, so the answer is no rather
+    /// than a refusal.
+    fn a_trial_is_armed_or_running(&self) -> Result<bool, tonic::Status> {
+        let mut device = self.device.lock().map_err(poisoned)?;
+        if !device.is_connected() {
+            return Ok(false);
+        }
+        let report = device.read_state_report().map_err(status_for_device)?;
+        Ok(report.get("running").and_then(serde_json::Value::as_bool) == Some(true)
+            || report.get("link_state").and_then(serde_json::Value::as_i64) == Some(2))
+    }
+
+    /// No board, said before anything is loaded or compiled.
+    fn require_a_board(&self) -> Result<(), tonic::Status> {
+        if self.device_connected() {
+            Ok(())
+        } else {
+            Err(Refusal::no_board_attached("no board is connected").into())
+        }
     }
 }
 
@@ -289,16 +499,7 @@ fn source_of(source: PinLabelSource) -> &'static str {
 
 /// A device failure, as the status a client sees.
 fn status_for_device(problem: DeviceProblem) -> tonic::Status {
-    match problem {
-        // **`unavailable` means no board**, which is the one thing a panel may
-        // retry. Everything else is a request to change something.
-        DeviceProblem::NotConnected(sentence) => tonic::Status::unavailable(sentence),
-        DeviceProblem::Link(problem) => tonic::Status::unavailable(problem.to_string()),
-        DeviceProblem::WrongBoard(sentence) | DeviceProblem::LineMap(sentence) => {
-            tonic::Status::failed_precondition(sentence)
-        }
-        DeviceProblem::Request(problem) => tonic::Status::unavailable(problem.to_string()),
-    }
+    Refusal::from(problem).into()
 }
 
 fn config_summaries(state: &DaemonState) -> wire::StateMachineConfigSummaries {
@@ -501,7 +702,7 @@ impl service::graph_store_server::GraphStore for DaemonServices {
         // download/upload round trip a property of one parser rather than of
         // whatever formatting the file happened to have.
         let name = request.into_inner().name;
-        let graph = self.state.graphs.load(&name).map_err(status_for)?;
+        let graph = self.state.graphs.load(&name).map_err(graph_problem)?;
         Ok(tonic::Response::new(wire::StoredFile {
             name: graph.name.clone(),
             text: graph.to_json(),
@@ -520,7 +721,7 @@ impl service::graph_store_server::GraphStore for DaemonServices {
             .state
             .graphs
             .write_text(&file.text, &file.name)
-            .map_err(status_for)?;
+            .map_err(graph_problem)?;
         Ok(tonic::Response::new(graph_summary(&self.state.graphs, &graph.name)))
     }
 
@@ -529,7 +730,7 @@ impl service::graph_store_server::GraphStore for DaemonServices {
         request: tonic::Request<crate::wire::statemachined::v1::DeleteFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::GraphSummaries>, tonic::Status> {
         let name = request.into_inner().name;
-        self.state.graphs.delete(&name).map_err(status_for)?;
+        self.state.graphs.delete(&name).map_err(graph_problem)?;
         Ok(tonic::Response::new(graph_summaries(&self.state.graphs)))
     }
 
@@ -549,9 +750,40 @@ impl service::graph_store_server::GraphStore for DaemonServices {
 
     async fn upload_graph(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::CommittedGraphSet>, tonic::Status> {
-        unported!("GraphStore/upload_graph")
+        // One graph on the board on its own — a bench convenience. **Refused
+        // while a session's set is committed**, because the board holds one
+        // set and this replaces it: losing a session's paradigms because
+        // somebody previewed a graph is not a recoverable mistake. A set of one
+        // is not a session, so that case is allowed through.
+        let state = self.state.clone();
+        let name = request.into_inner().name;
+        off_the_runtime(move || {
+            state.require_a_board()?;
+            let committed_graphs = state
+                .device
+                .lock()
+                .map_err(poisoned)?
+                .committed_graph_set
+                .as_ref()
+                .map(|committed| committed.graphs_by_slot.len());
+            if let Some(count) = committed_graphs.filter(|count| *count > 1) {
+                return Err(Refusal::new(
+                    Category::WrongMoment,
+                    "session_set_committed",
+                    format!(
+                        "a session's set of {count} graphs is committed; uploading one graph \
+                         would replace it"
+                    ),
+                    "name",
+                )
+                .into());
+            }
+            let (compiled, _elapsed) = state.upload_session_graph_set(&[name])?;
+            Ok(tonic::Response::new(committed_set_to_wire(&compiled)))
+        })
+        .await
     }
 
 }
@@ -571,7 +803,7 @@ impl service::state_machine_config_store_server::StateMachineConfigStore for Dae
         request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::StoredFile>, tonic::Status> {
         let name = request.into_inner().name;
-        let config = self.state.configs.load(&name).map_err(status_for)?;
+        let config = self.state.configs.load(&name).map_err(config_problem)?;
         Ok(tonic::Response::new(wire::StoredFile {
             name: config.name.clone(),
             text: config.to_json(),
@@ -590,7 +822,7 @@ impl service::state_machine_config_store_server::StateMachineConfigStore for Dae
         self.state
             .configs
             .write_text(&file.text, &file.name)
-            .map_err(status_for)?;
+            .map_err(config_problem)?;
         Ok(tonic::Response::new(config_summaries(&self.state)))
     }
 
@@ -599,15 +831,47 @@ impl service::state_machine_config_store_server::StateMachineConfigStore for Dae
         request: tonic::Request<crate::wire::statemachined::v1::DeleteFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::StateMachineConfigSummaries>, tonic::Status> {
         let name = request.into_inner().name;
-        self.state.configs.delete(&name).map_err(status_for)?;
+        self.state.configs.delete(&name).map_err(config_problem)?;
         Ok(tonic::Response::new(config_summaries(&self.state)))
     }
 
     async fn load_config(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::LoadedConfigResult>, tonic::Status> {
-        unported!("StateMachineConfigStore/load_config")
+        // Apply its line map and push the wiring; the graphs go up at `Open`.
+        // Refused while a trial is armed or running, like every other change
+        // to the wiring: a line map is what a trial's record *means*, and
+        // moving it mid-trial makes that record a fiction.
+        let state = self.state.clone();
+        let name = request.into_inner().name;
+        off_the_runtime(move || {
+            if state.a_trial_is_armed_or_running()? {
+                return Err(Refusal::new(
+                    Category::WrongMoment,
+                    "busy",
+                    "a trial is armed or running",
+                    "config_name",
+                )
+                .into());
+            }
+            let config = state.configs.load(&name).map_err(config_problem)?;
+            let graph_names = config.graphs.iter().map(|graph| graph.name.clone()).collect();
+            let loaded = config.name.clone();
+            state.apply_state_machine_config(config)?;
+            let device = state.device.lock().map_err(poisoned)?;
+            // `wiring_pushed` is a real distinction: a config loads with nothing
+            // attached, and reaches the board the moment one greets. A caller
+            // that assumed the wiring was live would be assuming a lamp it
+            // cannot see.
+            Ok(tonic::Response::new(wire::LoadedConfigResult {
+                loaded,
+                wiring_pushed: device.is_connected(),
+                line_map: Some(line_map_view(&device)),
+                graph_names,
+            }))
+        })
+        .await
     }
 
 }
@@ -626,14 +890,40 @@ impl service::session_server::Session for DaemonServices {
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::OpenSessionRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::OpenSessionResult>, tonic::Status> {
-        unported!("Session/open")
+        // Put the loaded config's graphs on the device. What triald does at the
+        // top of a session and what the panel's button does on a bench — the
+        // same call, because a bench that exercised a different path would be
+        // a bench that proves nothing about the rig.
+        let state = self.state.clone();
+        off_the_runtime(move || {
+            state.require_a_board()?;
+            let config = state.require_state_machine_config()?;
+            let (compiled, elapsed) = state.upload_graph_set(&config.graphs)?;
+            Ok(tonic::Response::new(open_session_result(&compiled, config.name, elapsed)))
+        })
+        .await
     }
 
     async fn upload_graphs(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::UploadGraphsRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::UploadGraphsRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::OpenSessionResult>, tonic::Status> {
-        unported!("Session/upload_graphs")
+        // The same upload `Open` does, composed by hand rather than from a
+        // config. **The slowest call in this API by a wide margin, and the one
+        // where a session is allowed to fail**: a graph that does not fit this
+        // board fails here, with an animal not yet in the booth.
+        let state = self.state.clone();
+        let graph_names = request.into_inner().graph_names;
+        off_the_runtime(move || {
+            state.require_a_board()?;
+            let (compiled, elapsed) = state.upload_session_graph_set(&graph_names)?;
+            Ok(tonic::Response::new(open_session_result(
+                &compiled,
+                state.loaded_config_name(),
+                elapsed,
+            )))
+        })
+        .await
     }
 
     async fn close(

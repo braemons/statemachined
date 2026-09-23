@@ -15,8 +15,8 @@ still calls `unported!`, so it cannot drift from the proto.
 
 ## Done
 
-**13 of 50 rpcs.** Everything that needs neither the trial loop nor an uploaded
-graph set.
+**17 of 50 rpcs.** Everything that needs neither the trial loop nor the trace,
+and the graph-set upload.
 
 | | |
 |---|---|
@@ -24,6 +24,7 @@ graph set.
 | `GraphStore` | `ListGraphs`, `ReadGraphFile`, `WriteGraphFile`, `DeleteGraph` |
 | `StateMachineConfigStore` | `ListConfigs`, `ReadConfigFile`, `WriteConfigFile`, `DeleteConfig` |
 | `Device` | `ReadDevice`, `OpenLink`, `ReadLines` |
+| Upload | `GraphStore/UploadGraph`, `StateMachineConfigStore/LoadConfig`, `Session/Open`, `Session/UploadGraphs` |
 
 ### Modules
 
@@ -63,6 +64,7 @@ green differential test that cannot go red is not evidence.
 | Stores | both daemons on identical stores, driven by one browser bundle | 17 calls |
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
+| The upload rpcs | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included | 17 calls |
 | Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
 
 ### Bugs this found in the Python daemon
@@ -98,6 +100,24 @@ change, with a record version.
 
 ### And in the port itself
 
+**Refusals had no trailer.** Python sends every refusal's
+`statemachined.v1.Error` in `statemachined-error-bin`, and the Python client
+tells "the daemon has no board" from "nothing answered" by whether it is
+there. The Rust daemon sent the status alone, so a client read every Rust
+`unavailable` as the daemon being down. `grpc/refusal.rs` ports
+`refusals.py`, and the rpcs ported before it now use it too. It also moved a
+device's own refusal from `unavailable` — "retry unchanged" — to Python's
+`failed_precondition` carrying the device's code.
+
+**The codes are Python's, including two that are arguable:** a board that
+does not answer in time, and a board that is not the one the rig config names,
+are `internal` in Python because its table has no rule for either. Ported as
+they are; worth changing in both daemons afterwards.
+
+The trace entries Python writes around these calls (`config_loaded`,
+`session_opened`, `graph_set_uploaded`) are not written yet: the trace is not
+ported. They arrive with it.
+
 The compiler's cases reach `LineMap`'s lookups, which the line-map cases did
 not, and found `line_map.rs` answering two refusals differently from Python:
 
@@ -123,7 +143,7 @@ what put it on the wire.
 
 | Module | Lines | Unblocks |
 |---|---|---|
-| `upload_graph_set` in `statemachined_device.py` — the upload itself is ported | ~25 | `GraphStore/UploadGraph`, `Session/Open`, `Session/UploadGraphs` |
+| `Session/ReadSession`, `Close`, the active graph — small, over state that now exists | ~60 | 4 rpcs |
 | `device/trial_result_reassembly.py` | 161 | `Trial/ReadResult` |
 | `device/state_visit_trace.py` | 206 | `State/ReadTrace`, `State/WatchTrace`, `State/ReadTrialTrace` |
 | `device/device_line_monitor.py` | 112 | `Device/ReadSerialMonitor`, `Device/WatchSerialMonitor` |

@@ -3,9 +3,9 @@
 //!
 //! **A port in progress.** What is here is the connection lifecycle — opening a
 //! link, greeting the board, checking it is the board this rig is wired for,
-//! resolving the line map against its pins, and pushing the wiring. The trial
-//! loop, the graph upload and the result reassembly are not ported yet and the
-//! rpcs that need them still answer `UNIMPLEMENTED`.
+//! resolving the line map against its pins, and pushing the wiring — and the
+//! graph-set upload. The trial loop and the result reassembly are not ported
+//! yet and the rpcs that need them still answer `UNIMPLEMENTED`.
 //!
 //! The ordering in `connect_and_greet` is the part to keep: **the greeting is
 //! what takes the rig** from a board that was arming its own trials, and the
@@ -17,6 +17,7 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::board_pin_labels;
+use super::graph_set_upload::send_compiled_upload_messages;
 use super::device_clock_correlation::DeviceClockCorrelation;
 use super::device_pin_map::{Direction, DevicePinMap, PinLabelSource};
 use super::message_vocabulary::MsgType;
@@ -24,6 +25,10 @@ use super::request_response_session::{
     random_seed, Discard, RequestProblem, RequestResponseSession,
 };
 use super::serial_link::SerialLink;
+use crate::graph_set_compiler::{
+    compile_graph_set_for_device, CompileError, CompiledGraphSet, DeviceCapabilities,
+};
+use crate::model::graph_definition::GraphDefinition;
 use crate::model::line_map::LineMap;
 
 /// What a caller did that needs a board, without one.
@@ -54,6 +59,29 @@ impl From<RequestProblem> for DeviceProblem {
     }
 }
 
+/// Why a set did not reach the board: it would not compile against this
+/// board, or the board (or the link to it) said no.
+#[derive(Debug)]
+pub enum UploadProblem {
+    Compile(CompileError),
+    Device(DeviceProblem),
+}
+
+impl std::fmt::Display for UploadProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Compile(problem) => write!(f, "{problem}"),
+            Self::Device(problem) => write!(f, "{problem}"),
+        }
+    }
+}
+
+impl<T: Into<DeviceProblem>> From<T> for UploadProblem {
+    fn from(problem: T) -> Self {
+        Self::Device(problem.into())
+    }
+}
+
 impl From<std::io::Error> for DeviceProblem {
     fn from(problem: std::io::Error) -> Self {
         Self::Link(problem)
@@ -76,6 +104,8 @@ pub struct StatemachinedDevice {
 
     session: Option<RequestResponseSession<Discard>>,
     pub hello_ack: Option<Value>,
+    /// What this board can hold, from its greeting. `None` until one greets.
+    pub capabilities: Option<DeviceCapabilities>,
     pub session_seed: Option<String>,
     /// What the board says its pins are called, or what this daemon assumed
     /// when the board could not say. Read once per connection, because it
@@ -89,6 +119,16 @@ pub struct StatemachinedDevice {
     /// whoever is debugging the rig rather than inferred from trials that did
     /// not happen.
     pub connection_count: u64,
+    /// The set the board said `set_ok` to, and what was compiled into it.
+    ///
+    /// **Believed only after `set_ok`.** From `set_begin` until then the board
+    /// holds no graph at all (PROTOCOL.md 3.2), so this is cleared before an
+    /// upload and set after one — never left naming a set the board would
+    /// contradict.
+    pub committed_graph_set: Option<CompiledGraphSet>,
+    /// The documents behind it, kept so a board that comes back from a reset
+    /// without its set can be given the same one again.
+    graphs_of_the_committed_set: Vec<GraphDefinition>,
 }
 
 impl StatemachinedDevice {
@@ -103,10 +143,13 @@ impl StatemachinedDevice {
             configured_session_seed: None,
             session: None,
             hello_ack: None,
+            capabilities: None,
             session_seed: None,
             pin_map: DevicePinMap::default(),
             clock: DeviceClockCorrelation::new(),
             connection_count: 0,
+            committed_graph_set: None,
+            graphs_of_the_committed_set: Vec::new(),
         }
     }
 
@@ -158,6 +201,7 @@ impl StatemachinedDevice {
         self.session = Some(session);
         self.session_seed = Some(seed);
         self.hello_ack = Some(hello_ack.clone());
+        self.capabilities = Some(DeviceCapabilities::from_hello_ack(&hello_ack));
         // A reset device restarts its clock from zero, so an offset measured
         // before the reconnect would be wrong by however long the board was
         // away -- and wrong plausibly, which is the worst kind.
@@ -225,6 +269,59 @@ impl StatemachinedDevice {
 
     pub fn disconnect(&mut self) {
         self.session = None;
+    }
+
+    /// Come back after a link loss, and put the device back as it was.
+    ///
+    /// The committed set survives a reconnect — that is what `hello_ack`'s
+    /// `has_set` and `set_version` are for, and why a bridge restarting does
+    /// not cost a re-upload. So this re-uploads only when the board came back
+    /// without the set this supervisor believes in.
+    pub fn reconnect_and_restore(&mut self) -> Result<Value, UploadProblem> {
+        let hello_ack = self.connect_and_greet()?;
+        let Some(committed) = &self.committed_graph_set else {
+            return Ok(hello_ack);
+        };
+        let holds_it = hello_ack.get("has_set").and_then(Value::as_bool) == Some(true)
+            && hello_ack.get("set_version").and_then(Value::as_i64) == Some(committed.set_version);
+        if !holds_it {
+            let set_version = committed.set_version;
+            let graphs = self.graphs_of_the_committed_set.clone();
+            self.upload_graph_set(&graphs, set_version)?;
+        }
+        Ok(hello_ack)
+    }
+
+    /// Compile the session's graphs and put the whole set on the device.
+    ///
+    /// The slow call, and the one where a session is allowed to fail: a graph
+    /// too big for this board is refused here, minutes before an animal is in
+    /// the booth, rather than at trial 40.
+    pub fn upload_graph_set(
+        &mut self,
+        graphs: &[GraphDefinition],
+        set_version: i64,
+    ) -> Result<CompiledGraphSet, UploadProblem> {
+        self.require_session()?;
+        let Some(capabilities) = &self.capabilities else {
+            return Err(DeviceProblem::NotConnected(
+                "the device has not been greeted, so its caps are unknown".into(),
+            )
+            .into());
+        };
+        let compiled =
+            compile_graph_set_for_device(graphs, &self.resolved_line_map, capabilities, set_version)
+                .map_err(UploadProblem::Compile)?;
+        // Not committed on this side until the device says set_ok. From
+        // set_begin until then the board holds no graph at all, so believing
+        // otherwise here would be believing something the board would
+        // contradict.
+        self.committed_graph_set = None;
+        let timeout = self.timeout;
+        send_compiled_upload_messages(self.require_session()?, &compiled.upload_messages, timeout)?;
+        self.committed_graph_set = Some(compiled.clone());
+        self.graphs_of_the_committed_set = graphs.to_vec();
+        Ok(compiled)
     }
 
     /// Ask the board what its pins are called. **Never fatal.**

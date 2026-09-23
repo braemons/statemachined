@@ -27,11 +27,21 @@ pub struct DaemonState {
     pub configuration: RigConfiguration,
     pub graphs: Store<GraphDefinition>,
     pub configs: Store<StateMachineConfig>,
-    /// Which state-machine config this rig is loaded with, if any.
+    /// What this rig is wired like and what it can run, or `None` before
+    /// anybody has said.
     ///
-    /// A `Mutex` rather than an atomic because it is a name: `LoadConfig` sets
-    /// it and every listing reports it, and both are far away from any hot path.
-    pub loaded_config: Mutex<Option<String>>,
+    /// **The document, not its name.** A session opens over the graphs that
+    /// were loaded, and re-reading the store at `Open` would open over whatever
+    /// somebody saved since — a line map from Tuesday and graphs from Thursday.
+    /// `None` is a real state: a rig on a bench in the morning, board plugged
+    /// in, experiment not yet chosen.
+    pub loaded_config: Mutex<Option<StateMachineConfig>>,
+    /// When the graphs went up, as the session's own record of itself.
+    ///
+    /// `None` means no session is open — the board may still hold a committed
+    /// set from before, which `ReadSession` says plainly rather than pretending
+    /// either way.
+    pub session_opened_at: Mutex<Option<std::time::SystemTime>>,
 }
 
 impl DaemonState {
@@ -53,6 +63,7 @@ impl DaemonState {
             graphs: Store::new(configuration.graph_store_directory.clone()),
             configs: Store::new(configuration.state_machine_config_directory.clone()),
             loaded_config: Mutex::new(None),
+            session_opened_at: Mutex::new(None),
             configuration,
         }
     }
@@ -63,7 +74,8 @@ impl DaemonState {
         self.loaded_config
             .lock()
             .expect("the loaded-config name is never held across a panic")
-            .clone()
+            .as_ref()
+            .map(|config| config.name.clone())
             .unwrap_or_default()
     }
 
