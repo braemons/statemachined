@@ -428,4 +428,10 @@ def _a_new_segment() -> dict[str, Any]:
 def _iso8601_utc(unix_seconds: float) -> str:
     seconds = int(unix_seconds)
     microseconds = round((unix_seconds - seconds) * 1_000_000)
+    # Carried, or a fraction within half a microsecond of a second is written
+    # with seven digits on a second that is wrong by one. See
+    # device_clock_correlation.host_time_iso8601.
+    if microseconds >= 1_000_000:
+        seconds += 1
+        microseconds -= 1_000_000
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(seconds)) + f".{microseconds:06d}Z"
