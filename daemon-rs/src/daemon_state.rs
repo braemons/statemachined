@@ -8,7 +8,9 @@
 
 use std::sync::Mutex;
 
+use crate::device::state_visit_trace::StateVisitTrace;
 use crate::device::statemachined_device::StatemachinedDevice;
+use crate::observer_registry::ObserverRegistry;
 use crate::model::graph_definition::GraphDefinition;
 use crate::model::line_map::LineMap;
 pub use crate::rig_configuration::RigConfiguration;
@@ -49,6 +51,16 @@ pub struct DaemonState {
     /// know this exists — is unaffected by whatever somebody selected in a
     /// browser tab.
     pub active_graph: Mutex<Option<String>>,
+    /// Everything that happened, in order: the ring the API reads, and the
+    /// day's file it never reads back.
+    pub trace: StateVisitTrace,
+    /// Who is watching, while they are watching. Never read by this daemon.
+    pub observers: ObserverRegistry,
+    /// The last thing that went wrong with the board where nobody was waiting
+    /// for an answer — a startup connect, a startup config. Reported, never
+    /// fatal: a daemon that refused to start without a board would take the
+    /// API down exactly when somebody needs it to find out why.
+    pub last_error_from_the_device: Mutex<Option<String>>,
 }
 
 impl DaemonState {
@@ -72,6 +84,12 @@ impl DaemonState {
             loaded_config: Mutex::new(None),
             session_opened_at: Mutex::new(None),
             active_graph: Mutex::new(None),
+            trace: StateVisitTrace::new(
+                configuration.trace_ring_entries.max(0) as usize,
+                Some(configuration.trace_directory.clone()),
+            ),
+            observers: ObserverRegistry::new(),
+            last_error_from_the_device: Mutex::new(None),
             configuration,
         }
     }

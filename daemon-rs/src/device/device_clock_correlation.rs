@@ -51,23 +51,26 @@ pub struct HostTimeEstimate {
 impl HostTimeEstimate {
     /// UTC, to the microsecond, the way a trace line carries it.
     pub fn host_time_iso8601(&self) -> String {
-        let mut seconds = self.host_unix_seconds.trunc() as i64;
-        let mut microseconds =
-            ((self.host_unix_seconds - seconds as f64) * 1_000_000.0).round() as i64;
-        // A fraction just under a whole second rounds up to 1_000_000, which
-        // would print as `.1000000Z` -- seven digits, and not a time. Carry it
-        // instead. The Python implementation has this hole; see
-        // `tests/clock.rs`.
-        if microseconds >= 1_000_000 {
-            seconds += 1;
-            microseconds -= 1_000_000;
-        }
-        if microseconds < 0 {
-            seconds -= 1;
-            microseconds += 1_000_000;
-        }
-        format!("{}.{microseconds:06}Z", utc_of(seconds))
+        iso8601_utc(self.host_unix_seconds)
     }
+}
+
+/// A Unix time as UTC, to the microsecond: every timestamp a trace line carries.
+pub fn iso8601_utc(unix_seconds: f64) -> String {
+    let mut seconds = unix_seconds.trunc() as i64;
+    let mut microseconds = ((unix_seconds - seconds as f64) * 1_000_000.0).round() as i64;
+    // A fraction just under a whole second rounds up to 1_000_000, which would
+    // print as `.1000000Z` -- seven digits, and not a time. Carry it instead.
+    // Every Python copy of this had the hole; see `tests/clock.rs`.
+    if microseconds >= 1_000_000 {
+        seconds += 1;
+        microseconds -= 1_000_000;
+    }
+    if microseconds < 0 {
+        seconds -= 1;
+        microseconds += 1_000_000;
+    }
+    format!("{}.{microseconds:06}Z", utc_of(seconds))
 }
 
 /// `%Y-%m-%dT%H:%M:%S` for a Unix second, in UTC.
@@ -75,7 +78,7 @@ impl HostTimeEstimate {
 /// Written out rather than taken from a date crate: this is one format, it is
 /// the one a trace line carries, and the civil-time arithmetic below is the
 /// whole of what a dependency would provide.
-fn utc_of(unix_seconds: i64) -> String {
+pub(crate) fn utc_of(unix_seconds: i64) -> String {
     let days = unix_seconds.div_euclid(86_400);
     let second_of_day = unix_seconds.rem_euclid(86_400);
     let (year, month, day) = civil_from_days(days);

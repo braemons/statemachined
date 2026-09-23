@@ -119,6 +119,20 @@ impl From<Refusal> for tonic::Status {
     }
 }
 
+/// A refusal's sentence, without the `(context)` the status message adds.
+///
+/// Read back out of the trailer, where the refusal travels as itself; a
+/// status that carries none is its message.
+pub fn detail_of(status: &tonic::Status) -> String {
+    status
+        .metadata()
+        .get_bin(REFUSAL_METADATA_KEY)
+        .and_then(|value| value.to_bytes().ok())
+        .and_then(|bytes| wire::Error::decode(bytes.as_ref()).ok())
+        .map(|body| body.detail)
+        .unwrap_or_else(|| status.message().to_string())
+}
+
 /// The board's own refusal, in the board's own words.
 ///
 /// `error` is the device's code rather than this daemon's paraphrase: those

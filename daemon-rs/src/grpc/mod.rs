@@ -15,11 +15,16 @@
 use std::sync::Arc;
 
 use crate::daemon_state::DaemonState;
-use crate::device::device_pin_map::{Direction, PinLabelSource};
+use crate::device::device_pin_map::PinLabelSource;
 use crate::device::statemachined_device::{DeviceProblem, StatemachinedDevice};
 use crate::rig_configuration::RigConfiguration;
+use crate::device::state_visit_trace::{
+    fields as trace_fields, KIND_ACTIVE_GRAPH_SELECTED, KIND_CONFIG_LOADED,
+    KIND_GRAPH_SET_UPLOADED, KIND_LINK_CONNECTED, KIND_SESSION_CLOSED, KIND_SESSION_OPENED,
+};
 use crate::device::statemachined_device::UploadProblem;
-use crate::graph_set_compiler::CompiledGraphSet;
+use crate::firmware_manifest::{compare_firmware, installed_firmware_version, INSTALLED_MANIFEST};
+use crate::graph_set_compiler::{CompiledGraphSet, DeviceCapabilities};
 use crate::model::graph_definition::GraphDefinition;
 use crate::model::state_machine_config::StateMachineConfig;
 use crate::store::{Document, Store, StoreProblem};
@@ -28,6 +33,7 @@ use crate::wire::statemachined::v1 as wire;
 use crate::wire::statemachined::v1::service;
 
 mod refusal;
+mod trace;
 use refusal::{store_refusal, Category, Refusal, StoreKind};
 
 /// Not ported yet. See the module docstring.
@@ -176,36 +182,67 @@ fn path_to_wire(path: &std::path::Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// The board, as the wire describes it.
+/// Everything about the attachment, in one message.
 ///
-/// **Answered from what the daemon already knows**, never by asking the board:
-/// a status call that opened a link or waited on a serial port would be a
-/// status call that can hang, and this is the one a supervisor polls.
-fn device_state_to_wire(device: &StatemachinedDevice) -> wire::DeviceState {
+/// Assembled from three sources because that is what it is: the greeting says
+/// what the board *is*, the state report says what it is *doing*, and this
+/// daemon holds the rest. A caller should not have to make three calls and
+/// join them.
+fn device_state_to_wire(
+    device: &StatemachinedDevice,
+    target: &str,
+    state_report: &serde_json::Value,
+    last_error: String,
+) -> wire::DeviceState {
     let ack = device.hello_ack.clone().unwrap_or(serde_json::Value::Null);
-    let text = |key: &str| {
-        ack.get(key)
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or_default()
-            .to_string()
+    // Python's `_text` and `_int`: absent is empty or zero, and a number that
+    // arrived as a float still counts.
+    let text = |source: &serde_json::Value, key: &str| match source.get(key) {
+        None | Some(serde_json::Value::Null) => String::new(),
+        Some(serde_json::Value::String(text)) => text.clone(),
+        Some(other) => other.to_string(),
     };
-    let number = |key: &str| ack.get(key).and_then(serde_json::Value::as_i64).unwrap_or(0);
+    let number = |source: &serde_json::Value, key: &str| {
+        source
+            .get(key)
+            .and_then(|value| value.as_i64().or_else(|| value.as_f64().map(|f| f as i64)))
+            .unwrap_or(0)
+    };
+    let scan = state_report.get("scan").cloned().unwrap_or(serde_json::Value::Null);
+    // Three answers, not two: the board said it has a wiring table, said it
+    // has none, or nothing has said. The report is newer than the greeting.
+    let has_wiring = state_report
+        .get("has_wiring")
+        .or_else(|| ack.get("has_wiring"))
+        .filter(|value| !value.is_null())
+        .map(|value| value.as_bool().unwrap_or(true));
     wire::DeviceState {
         connected: device.is_connected(),
-        target: device.target.clone(),
-        board: text("board"),
-        firmware_version: text("fw"),
-        protocol_version: number("proto") as i32,
-        measured_scan_hz: number("scan_hz") as i32,
-        capacities: capacities_of(&ack),
-        has_wiring: ack.get("has_wiring").and_then(serde_json::Value::as_bool),
+        target: target.to_string(),
+        board: text(&ack, "board"),
+        firmware_version: text(&ack, "fw"),
+        protocol_version: number(&ack, "proto") as i32,
+        measured_scan_hz: number(&ack, "scan_hz") as i32,
         // The whole reason the `pins` command exists: before it there was no
         // third answer to "which pin is line 4" beyond a table copied out of
         // the firmware. So the provenance travels with the answer.
         pin_labels_came_from: source_of(device.pin_map.source).to_string(),
-        uptime_device_microseconds: number("t_us"),
+        link: Some(wire::LinkHealth {
+            connection_count: device.connection_count as i32,
+            dropped_lines: number(state_report, "dropped_lines"),
+            bad_lines: number(state_report, "bad_lines"),
+            last_error,
+        }),
+        scan: Some(wire::ScanHealth {
+            hz: number(&scan, "hz") as i32,
+            overruns: number(&scan, "overruns"),
+            worst_gap: number(&scan, "worst_gap") as i32,
+            tx_stalls: number(&scan, "tx_stalls"),
+        }),
+        uptime_device_microseconds: number(state_report, "up_us"),
+        capacities: device.capabilities.as_ref().map(capacities_to_wire),
         committed_set: device.committed_graph_set.as_ref().map(committed_set_to_wire),
-        ..Default::default()
+        has_wiring,
     }
 }
 
@@ -270,6 +307,55 @@ impl From<UploadProblem> for Refusal {
     }
 }
 
+/// How often a watcher looks for something new. Coarse on purpose: this is a
+/// console refreshing, not a control loop.
+const WATCH_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// One stream, registered as an observer for exactly as long as it runs.
+///
+/// Unregistered on drop, which is the whole point: a stream ends by a
+/// cancelled call, a client that went away, or a daemon shutting down, and
+/// every one of those has to unregister. An observer list that only lost
+/// entries on a clean close would fill with ghosts.
+struct Watching {
+    state: Arc<DaemonState>,
+    observer_id: u64,
+}
+
+impl Watching {
+    fn register<T>(state: &Arc<DaemonState>, request: &tonic::Request<T>, stream: &str) -> Self {
+        // A header rather than a field on every request, because it says
+        // nothing about what is being asked for.
+        let name = request
+            .metadata()
+            .get("observer-name")
+            .and_then(|value| value.to_str().ok());
+        // grpcio's spelling of a peer, so a panel shows the same thing from
+        // either daemon.
+        // From axum's connect info, since axum and not tonic owns the socket;
+        // tonic's own, where a test serves it directly.
+        let peer = request
+            .extensions()
+            .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+            .map(|info| info.0)
+            .or_else(|| request.remote_addr());
+        let address = peer.map(|address| match address {
+            std::net::SocketAddr::V4(_) => format!("ipv4:{address}"),
+            std::net::SocketAddr::V6(_) => format!("ipv6:{address}"),
+        });
+        Self {
+            observer_id: state.observers.register(name, stream, address),
+            state: state.clone(),
+        }
+    }
+}
+
+impl Drop for Watching {
+    fn drop(&mut self) {
+        self.state.observers.unregister(self.observer_id);
+    }
+}
+
 /// Run an rpc's body off the async runtime.
 ///
 /// **The device work is synchronous**: a serial port, a lock, and a reply
@@ -317,12 +403,42 @@ impl DaemonState {
             .map(|name| self.graphs.load(name))
             .collect::<Result<Vec<_>, _>>()
             .map_err(graph_problem)?;
-        self.upload_graph_set(&graphs)
+        let (compiled, elapsed) = self.upload_graph_set(&graphs)?;
+        self.note_the_session_opened(&compiled, "graph_names")?;
+        Ok((compiled, elapsed))
     }
 
-    /// Compile, check against this board's caps, upload, commit, and say a
-    /// session is open. Returns what it cost in milliseconds — the slowest
-    /// call in the API, and the one a panel shows a progress bar for.
+    /// Put the loaded config's graphs on the device.
+    fn open_session(&self) -> Result<(StateMachineConfig, CompiledGraphSet, u128), tonic::Status> {
+        let config = self.require_state_machine_config()?;
+        let (compiled, elapsed) = self.upload_graph_set(&config.graphs)?;
+        self.note_the_session_opened(&compiled, "state_machine_config")?;
+        Ok((config, compiled, elapsed))
+    }
+
+    /// A session is open, by whichever of the two ways, and the trace says so.
+    fn note_the_session_opened(
+        &self,
+        compiled: &CompiledGraphSet,
+        opened_by: &str,
+    ) -> Result<(), tonic::Status> {
+        *self.session_opened_at.lock().map_err(poisoned)? = Some(std::time::SystemTime::now());
+        let loaded = self.loaded_config.lock().map_err(poisoned)?.as_ref().map(|c| c.name.clone());
+        self.trace.append(
+            KIND_SESSION_OPENED,
+            trace_fields(serde_json::json!({
+                "state_machine_config": loaded,
+                "set_version": compiled.set_version,
+                "graph_names": graph_names_of(compiled),
+                "opened_by": opened_by,
+            })),
+        );
+        Ok(())
+    }
+
+    /// Compile, check against this board's caps, upload, commit. Returns what
+    /// it cost in milliseconds — the slowest call in the API, and the one a
+    /// panel shows a progress bar for.
     fn upload_graph_set(
         &self,
         graphs: &[GraphDefinition],
@@ -338,7 +454,14 @@ impl DaemonState {
                 .map_err(|problem| tonic::Status::from(Refusal::from(problem)))?
         };
         let elapsed_milliseconds = started.elapsed().as_millis();
-        *self.session_opened_at.lock().map_err(poisoned)? = Some(std::time::SystemTime::now());
+        self.trace.append(
+            KIND_GRAPH_SET_UPLOADED,
+            trace_fields(serde_json::json!({
+                "set_version": compiled.set_version,
+                "graph_names": graph_names_of(&compiled),
+                "elapsed_milliseconds": elapsed_milliseconds as u64,
+            })),
+        );
         Ok((compiled, elapsed_milliseconds))
     }
 
@@ -387,6 +510,16 @@ impl DaemonState {
                 device.resolved_line_map = config.line_map.clone();
             }
         }
+        let wiring_pushed = self.device_connected();
+        self.trace.append(
+            KIND_CONFIG_LOADED,
+            trace_fields(serde_json::json!({
+                "state_machine_config": config.name,
+                "board": if config.board.is_empty() { None } else { Some(&config.board) },
+                "graph_names": config.graphs.iter().map(|graph| &graph.name).collect::<Vec<_>>(),
+                "wiring_pushed": wiring_pushed,
+            })),
+        );
         *self.loaded_config.lock().map_err(poisoned)? = Some(config);
         Ok(())
     }
@@ -465,6 +598,10 @@ impl DaemonState {
     fn select_active_graph(&self, graph_name: Option<String>) -> Result<Option<String>, tonic::Status> {
         let Some(graph_name) = graph_name else {
             *self.active_graph.lock().map_err(poisoned)? = None;
+            self.trace.append(
+                KIND_ACTIVE_GRAPH_SELECTED,
+                trace_fields(serde_json::json!({ "graph": null })),
+            );
             return Ok(None);
         };
         let config = self.require_state_machine_config()?;
@@ -493,7 +630,104 @@ impl DaemonState {
             }
         }
         *self.active_graph.lock().map_err(poisoned)? = Some(graph_name.clone());
+        self.trace.append(
+            KIND_ACTIVE_GRAPH_SELECTED,
+            trace_fields(serde_json::json!({ "graph": graph_name })),
+        );
         Ok(Some(graph_name))
+    }
+
+    /// Greet the board, and write down what answered.
+    ///
+    /// The firmware is recorded, not refused: a board running another build
+    /// still runs, and whether that is acceptable is the operator's call. What
+    /// must not happen is nobody being able to find out afterwards.
+    pub fn connect(&self) -> Result<serde_json::Value, tonic::Status> {
+        let (hello_ack, connection_count) = {
+            let mut device = self.device.lock().map_err(poisoned)?;
+            let hello_ack = device.connect_and_greet().map_err(status_for_device)?;
+            (hello_ack, device.connection_count)
+        };
+        let running = hello_ack.get("fw").and_then(serde_json::Value::as_str);
+        let installed = installed_firmware_version(std::path::Path::new(INSTALLED_MANIFEST));
+        let firmware = compare_firmware(running, installed.as_deref());
+        self.trace.append(
+            KIND_LINK_CONNECTED,
+            trace_fields(serde_json::json!({
+                "target": self.configuration.device_target,
+                "board": hello_ack.get("board"),
+                "firmware_version": hello_ack.get("fw"),
+                "installed_firmware_version": firmware.installed,
+                "firmware_matches_package":
+                    if firmware.comparable { Some(firmware.matches) } else { None },
+                "connection_count": connection_count,
+            })),
+        );
+        Ok(hello_ack)
+    }
+
+    /// Load the configured config, and connect if told to.
+    ///
+    /// The config first, so the line map exists before the greeting: the
+    /// wiring is pushed as part of connecting, and a board greeted with no map
+    /// is a board holding every line at a default `safe` nobody chose.
+    ///
+    /// **Neither is fatal.** A daemon that refused to start because a config
+    /// was deleted, or a board was unplugged, would take the API down with it
+    /// — and the API is how somebody finds out.
+    pub fn start(&self) {
+        let config_name = self.configuration.startup_state_machine_config.clone();
+        if !config_name.is_empty() {
+            let loaded = self
+                .configs
+                .load(&config_name)
+                .map_err(config_problem)
+                .and_then(|config| self.apply_state_machine_config(config));
+            if let Err(problem) = loaded {
+                self.note_an_error(format!(
+                    "the startup state-machine config '{config_name}' did not load: {}",
+                    refusal::detail_of(&problem)
+                ));
+            }
+        }
+        if self.configuration.connect_on_startup {
+            if let Err(problem) = self.connect() {
+                self.note_an_error(refusal::detail_of(&problem));
+            }
+        }
+    }
+
+    fn note_an_error(&self, sentence: String) {
+        log::warn!("{sentence}");
+        if let Ok(mut last) = self.last_error_from_the_device.lock() {
+            *last = Some(sentence);
+        }
+    }
+
+    /// One `state_report`, or nothing if there is no board to ask.
+    fn read_device_state(&self) -> Result<serde_json::Value, tonic::Status> {
+        let mut device = self.device.lock().map_err(poisoned)?;
+        if !device.is_connected() {
+            return Ok(serde_json::Value::Object(Default::default()));
+        }
+        device.read_state_report().map_err(status_for_device)
+    }
+
+    fn device_state(&self) -> Result<wire::DeviceState, tonic::Status> {
+        let state_report = self.read_device_state()?;
+        let last_error = self
+            .last_error_from_the_device
+            .lock()
+            .map_err(poisoned)?
+            .clone()
+            .unwrap_or_default();
+        let device = self.device.lock().map_err(poisoned)?;
+        Ok(device_state_to_wire(
+            &device,
+            &self.configuration.device_target,
+            &state_report,
+            last_error,
+        ))
     }
 
     /// No board, said before anything is loaded or compiled.
@@ -513,21 +747,27 @@ fn graph_not_available(detail: String) -> tonic::Status {
     Refusal::new(Category::WrongMoment, "graph_not_available", detail, "graph").into()
 }
 
-fn capacities_of(ack: &serde_json::Value) -> Option<wire::DeviceCapacities> {
-    let caps = ack.get("caps")?;
-    let number = |key: &str| caps.get(key).and_then(serde_json::Value::as_i64).unwrap_or(0) as i32;
-    Some(wire::DeviceCapacities {
-        max_line: number("max_line"),
-        max_states: number("max_states"),
-        max_transitions: number("max_transitions"),
-        max_output_actions: number("max_output_actions"),
-        max_distributions: number("max_distributions"),
-        max_choice_options: number("max_choice_options"),
-        max_path: number("max_path"),
-        max_graphs: number("max_graphs"),
-        max_timers: number("max_timers"),
-        ..Default::default()
-    })
+fn graph_names_of(compiled: &CompiledGraphSet) -> Vec<&str> {
+    compiled.graphs_by_slot.iter().map(|graph| graph.name.as_str()).collect()
+}
+
+/// What this board can hold, or nothing when none has said: a board with
+/// `max_states = 0` and a board that has not greeted are different situations.
+fn capacities_to_wire(capabilities: &DeviceCapabilities) -> wire::DeviceCapacities {
+    wire::DeviceCapacities {
+        max_line: capabilities.max_line as i32,
+        max_states: capabilities.max_states as i32,
+        max_transitions: capabilities.max_transitions as i32,
+        max_output_actions: capabilities.max_output_actions as i32,
+        max_distributions: capabilities.max_distributions as i32,
+        max_choice_options: capabilities.max_choice_options as i32,
+        max_path: capabilities.max_path as i32,
+        max_graphs: capabilities.max_graphs as i32,
+        max_timers: capabilities.max_timers as i32,
+        first_timer_line: capabilities.first_timer_line as i32,
+        input_line_count: capabilities.input_line_count as i32,
+        output_line_count: capabilities.output_line_count as i32,
+    }
 }
 
 /// The rig's lines, as somebody looking at the wiring sees them.
@@ -536,9 +776,23 @@ fn capacities_of(ack: &serde_json::Value) -> Option<wire::DeviceCapacities> {
 /// reports the index it will actually be uploaded with. Before a board has been
 /// attached the two are the same and the index is absent, which is a different
 /// thing from being zero.
-fn line_map_view(device: &StatemachinedDevice) -> wire::LineMapView {
-    let map = &device.resolved_line_map;
+///
+/// `is_high_now` is absent rather than false when there is no word to read it
+/// from: there is no read-back path from a pin, so the words are the device's
+/// own account — and "low" and "nobody asked the board" are the difference
+/// between a wiring fault and a disconnected cable.
+fn line_map_view(
+    device: &StatemachinedDevice,
+    input_word: Option<i64>,
+    output_word: Option<i64>,
+) -> wire::LineMapView {
+    // The resolved map where there is a board to resolve against.
+    let map = if device.is_connected() { &device.resolved_line_map } else { &device.line_map };
     let pin_map = &device.pin_map;
+    let high = |word: Option<i64>, index: Option<i64>| match (word, index) {
+        (Some(word), Some(index)) => Some((word >> index) & 1 == 1),
+        _ => None,
+    };
     wire::LineMapView {
         input_lines: map
             .input_lines
@@ -546,22 +800,13 @@ fn line_map_view(device: &StatemachinedDevice) -> wire::LineMapView {
             .map(|line| wire::InputLine {
                 name: line.name.clone(),
                 line_index: line.line_index.map(|index| index as i32),
-                // The board's own name where it answered, and what the config
-                // said otherwise -- never a blank where a person could have
-                // been told something.
-                pin_label: match line.line_index {
-                    Some(index) if !pin_map.label_for(Direction::In, index).is_empty() => {
-                        pin_map.label_for(Direction::In, index).to_string()
-                    }
-                    _ => line.pin_label.clone(),
-                },
+                // As the config wrote it. The board's own names for its pins
+                // travel beside the lines, in `board_input_pins`.
+                pin_label: line.pin_label.clone(),
                 reads_active_low: line.reads_active_low,
                 is_enabled: line.is_enabled,
                 debounce_milliseconds: line.debounce_milliseconds as i32,
-                // Absent rather than false: the level is read from the device's
-                // own `io` word, and nothing has read one yet. Absent is not
-                // the same as low.
-                is_high_now: None,
+                is_high_now: high(input_word, line.line_index),
             })
             .collect(),
         output_lines: map
@@ -570,14 +815,9 @@ fn line_map_view(device: &StatemachinedDevice) -> wire::LineMapView {
             .map(|line| wire::OutputLine {
                 name: line.name.clone(),
                 line_index: line.line_index.map(|index| index as i32),
-                pin_label: match line.line_index {
-                    Some(index) if !pin_map.label_for(Direction::Out, index).is_empty() => {
-                        pin_map.label_for(Direction::Out, index).to_string()
-                    }
-                    _ => line.pin_label.clone(),
-                },
+                pin_label: line.pin_label.clone(),
                 safe_level_is_high: line.safe_level_is_high,
-                is_high_now: None,
+                is_high_now: high(output_word, line.line_index),
             })
             .collect(),
         pin_labels_came_from: source_of(pin_map.source).to_string(),
@@ -635,30 +875,91 @@ impl service::state_server::State for DaemonServices {
 
     async fn read_trace(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadTraceRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ReadTraceRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::TraceWindow>, tonic::Status> {
-        unported!("State/read_trace")
+        let request = request.into_inner();
+        let trace = &self.state.trace;
+        let oldest = trace.oldest_entry_number_still_held();
+        let limit = if request.limit > 0 { request.limit as usize } else { 500 };
+        Ok(tonic::Response::new(trace::trace_window_to_wire(
+            &trace.entries_since(request.since_entry_number, limit),
+            trace.newest_entry_number(),
+            oldest,
+            trace.ring_capacity(),
+            trace
+                .has_fallen_out_of_the_ring(request.since_entry_number)
+                .then_some(oldest),
+        )))
     }
 
     async fn watch_trace(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::WatchTraceRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::WatchTraceRequest>,
     ) -> Result<tonic::Response<Self::WatchTraceStream>, tonic::Status> {
-        unported!("State/watch_trace")
+        // Everything from `since_entry_number` onwards, and then as it
+        // happens. **This is what triald subscribes to.** The backlog goes
+        // first so a subscriber that reconnects picks up where it left off
+        // rather than losing whatever happened while it was away.
+        let watcher = Watching::register(&self.state, &request, "trace");
+        let mut next_entry_number = request.into_inner().since_entry_number;
+        let (sender, receiver) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            let state = watcher.state.clone();
+            let trace = &state.trace;
+            loop {
+                if trace.has_fallen_out_of_the_ring(next_entry_number) {
+                    // Behind the ring, and entries are gone. Noted rather than
+                    // refused: the stream carries on from whatever is left, and
+                    // the client sees the gap in the entry numbers.
+                    state.observers.note_fell_behind(watcher.observer_id);
+                    next_entry_number = trace.oldest_entry_number_still_held();
+                }
+                let entries = trace.entries_since(next_entry_number, 500);
+                for entry in &entries {
+                    if sender.send(Ok(trace::trace_entry_to_wire(entry))).await.is_err() {
+                        return; // the client went away; `watcher` unregisters
+                    }
+                    next_entry_number =
+                        entry.get("entry_number").and_then(serde_json::Value::as_i64).unwrap_or(0) + 1;
+                }
+                state.observers.note_delivery(watcher.observer_id, entries.len() as i64);
+                if entries.is_empty() {
+                    tokio::select! {
+                        _ = sender.closed() => return,
+                        _ = tokio::time::sleep(WATCH_PERIOD) => {}
+                    }
+                }
+            }
+        });
+        Ok(tonic::Response::new(Box::pin(
+            tokio_stream::wrappers::ReceiverStream::new(receiver),
+        )))
     }
 
     async fn read_trial_trace(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadTrialTraceRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ReadTrialTraceRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::TrialTrace>, tonic::Status> {
-        unported!("State/read_trial_trace")
+        let trial_id = request.into_inner().trial_id;
+        Ok(tonic::Response::new(wire::TrialTrace {
+            trial_id,
+            entries: self
+                .state
+                .trace
+                .entries_for_trial(trial_id)
+                .iter()
+                .map(trace::trace_entry_to_wire)
+                .collect(),
+        }))
     }
 
     async fn read_observers(
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ReadObserversRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::Observers>, tonic::Status> {
-        unported!("State/read_observers")
+        Ok(tonic::Response::new(trace::observers_to_wire(
+            &self.state.observers.observers(),
+        )))
     }
 
 }
@@ -705,8 +1006,8 @@ impl service::device_server::Device for DaemonServices {
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ReadDeviceRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::DeviceState>, tonic::Status> {
-        let device = self.state.device.lock().map_err(poisoned)?;
-        Ok(tonic::Response::new(device_state_to_wire(&device)))
+        let state = self.state.clone();
+        off_the_runtime(move || Ok(tonic::Response::new(state.device_state()?))).await
     }
 
     async fn open_link(
@@ -717,17 +1018,28 @@ impl service::device_server::Device for DaemonServices {
         // its own trials. Opening the port does not do that; the greeting does,
         // and it is the whole point of the handover that a serial monitor
         // cannot trigger it.
-        let mut device = self.state.device.lock().map_err(poisoned)?;
-        device.connect_and_greet().map_err(status_for_device)?;
-        Ok(tonic::Response::new(device_state_to_wire(&device)))
+        let state = self.state.clone();
+        off_the_runtime(move || {
+            state.connect()?;
+            Ok(tonic::Response::new(state.device_state()?))
+        })
+        .await
     }
 
     async fn read_lines(
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ReadLinesRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::LineMapView>, tonic::Status> {
-        let device = self.state.device.lock().map_err(poisoned)?;
-        Ok(tonic::Response::new(line_map_view(&device)))
+        let state = self.state.clone();
+        off_the_runtime(move || {
+            let report = state.read_device_state()?;
+            let word = |key: &str| {
+                report.get("io").and_then(|io| io.get(key)).and_then(serde_json::Value::as_i64)
+            };
+            let device = state.device.lock().map_err(poisoned)?;
+            Ok(tonic::Response::new(line_map_view(&device, word("in"), word("out"))))
+        })
+        .await
     }
 
     async fn write_line_map_file(
@@ -755,7 +1067,32 @@ impl service::device_server::Device for DaemonServices {
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ReadFirmwareRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::FirmwareVersions>, tonic::Status> {
-        unported!("Device/read_firmware")
+        // **The comparison is what matters**: a board in a rack cannot be
+        // asked which commit it is running. Flashing is deliberately not here.
+        let running = self
+            .state
+            .device
+            .lock()
+            .map_err(poisoned)?
+            .hello_ack
+            .as_ref()
+            .and_then(|ack| ack.get("fw"))
+            .map(|fw| fw.as_str().map(str::to_string).unwrap_or_else(|| fw.to_string()));
+        let Some(running) = running else {
+            return Err(Refusal::no_board_attached(
+                "no board is connected, so nothing is running",
+            )
+            .into());
+        };
+        let installed = installed_firmware_version(std::path::Path::new(INSTALLED_MANIFEST));
+        let comparison = compare_firmware(Some(&running), installed.as_deref());
+        Ok(tonic::Response::new(wire::FirmwareVersions {
+            running: comparison.running.unwrap_or_default(),
+            installed: comparison.installed.unwrap_or_default(),
+            running_is_stamped: comparison.running_is_stamped,
+            comparable: comparison.comparable,
+            matches: comparison.matches,
+        }))
     }
 
     async fn read_autorun(
@@ -965,7 +1302,7 @@ impl service::state_machine_config_store_server::StateMachineConfigStore for Dae
             Ok(tonic::Response::new(wire::LoadedConfigResult {
                 loaded,
                 wiring_pushed: device.is_connected(),
-                line_map: Some(line_map_view(&device)),
+                line_map: Some(line_map_view(&device, None, None)),
                 graph_names,
             }))
         })
@@ -995,8 +1332,7 @@ impl service::session_server::Session for DaemonServices {
         let state = self.state.clone();
         off_the_runtime(move || {
             state.require_a_board()?;
-            let config = state.require_state_machine_config()?;
-            let (compiled, elapsed) = state.upload_graph_set(&config.graphs)?;
+            let (config, compiled, elapsed) = state.open_session()?;
             Ok(tonic::Response::new(open_session_result(&compiled, config.name, elapsed)))
         })
         .await
@@ -1045,6 +1381,15 @@ impl service::session_server::Session for DaemonServices {
             .map_err(poisoned)?
             .take()
             .is_some();
+        let loaded = self.state.loaded_config.lock().map_err(poisoned)?.as_ref().map(|c| c.name.clone());
+        self.state.trace.append(
+            KIND_SESSION_CLOSED,
+            trace_fields(serde_json::json!({
+                "state_machine_config": loaded,
+                "cancelled_trial_id": null,
+                "was_open": was_open,
+            })),
+        );
         Ok(tonic::Response::new(wire::CloseSessionResult {
             was_open,
             cancelled_trial_id: None,

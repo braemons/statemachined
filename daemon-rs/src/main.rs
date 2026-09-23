@@ -69,6 +69,15 @@ async fn main() {
         configuration.recording_directory = root.join("recordings");
     }
     let state = Arc::new(DaemonState::new(configuration));
+    // Before the server, so no call is answered out of a half-started daemon:
+    // the startup config is loaded and the board greeted (if the rig config
+    // says so) first. Blocking — a greeting waits on a serial port.
+    {
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || state.start())
+            .await
+            .expect("startup does not panic");
+    }
     let services = DaemonServices::new(state);
 
     let address = format!("{}:{}", arguments.bind, arguments.port);
@@ -131,6 +140,9 @@ async fn main() {
         .merge(routes.routes().into_axum_router().layer(tonic_web::GrpcWebLayer::new()))
         .layer(cors);
 
+    // With the peer's address, which tonic's own server would provide and
+    // axum only does when asked: `ReadObservers` names who is watching by it.
+    let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
     if let Err(problem) = axum::serve(listener, app)
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;

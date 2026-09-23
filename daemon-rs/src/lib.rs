@@ -17,9 +17,11 @@
 
 pub mod daemon_state;
 pub mod device;
+pub mod firmware_manifest;
 pub mod graph_set_compiler;
 pub mod grpc;
 pub mod model;
+pub mod observer_registry;
 pub mod rig_configuration;
 pub mod store;
 pub mod web;

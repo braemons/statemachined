@@ -17,5 +17,6 @@ pub mod graph_set_upload;
 pub mod message_framing;
 pub mod request_response_session;
 pub mod serial_link;
+pub mod state_visit_trace;
 pub mod statemachined_device;
 pub mod message_vocabulary;

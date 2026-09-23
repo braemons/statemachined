@@ -32,6 +32,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent.parent
@@ -49,7 +50,15 @@ RUST_DAEMON = HERE / "target" / "debug" / "statemachined"
 
 #: Fields that measure this run rather than describe the answer. Compared for
 #: whether they are there, not for what they say.
-DIFFERS_BY_RUN = {"elapsed_milliseconds", "opened_at_unix_seconds", "open_seconds"}
+DIFFERS_BY_RUN = {
+    "elapsed_milliseconds",
+    "opened_at_unix_seconds",
+    "open_seconds",
+    "recorded_host_time",
+    "connected_at_unix_seconds",
+    "connected_seconds",
+    "uptime_device_microseconds",
+}
 
 
 def a_free_port() -> int:
@@ -76,17 +85,27 @@ def stores_in(root: Path) -> None:
         shutil.copy(graph, root / "graphs")
     (root / "graphs" / "too-big.json").write_text(json.dumps(a_graph_too_big_for_the_board()))
     shutil.copy(HERE / "configs" / "native-device.config.json", root / "configs")
+    # The same rig written by index rather than by pin: what a line reports as
+    # its label when the config never named one is a separate answer.
+    by_index = json.loads((HERE / "configs" / "native-device.config.json").read_text())
+    by_index["name"] = "by-index"
+    for direction in ("input_lines", "output_lines"):
+        for line in by_index["line_map"][direction]:
+            line["line_index"] = int(line.pop("pin_label").removeprefix("sim"))
+    (root / "configs" / "by-index.config.json").write_text(json.dumps(by_index))
 
 
-def rig_config(root: Path, target: str) -> Path:
-    """Neither daemon connects or loads anything on its own: the script does
-    both, so the two start from the same nothing."""
+def rig_config(root: Path, target: str, startup: dict) -> Path:
+    """By default neither daemon connects or loads anything on its own: the
+    script does both, so the two start from the same nothing. `startup` says
+    otherwise, for the runs about starting."""
     path = root / "rig-config.toml"
+    connect = "true" if startup.get("connect") else "false"
     path.write_text(
         f'device_target = "{target}"\n'
-        "connect_on_startup = false\n"
+        f"connect_on_startup = {connect}\n"
         'expected_board = ""\n'
-        'startup_state_machine_config = ""\n'
+        f'startup_state_machine_config = "{startup.get("config", "")}"\n'
         f'graph_store_directory = "{root / "graphs"}"\n'
         f'state_machine_config_directory = "{root / "configs"}"\n'
         f'trace_directory = "{root / "trace"}"\n'
@@ -98,12 +117,12 @@ def rig_config(root: Path, target: str) -> Path:
 class Daemon:
     """One daemon process, its own device, and a client on it."""
 
-    def __init__(self, which: str, root: Path) -> None:
+    def __init__(self, which: str, root: Path, startup: dict) -> None:
         self.which = which
         stores_in(root)
         self.device = NativeDeviceOnASocket(store_path=str(root / "device-store.bin"))
         self.device.start()
-        config = rig_config(root, self.device.target_url)
+        config = rig_config(root, self.device.target_url, startup)
         port = a_free_port()
         log = open(root / "daemon.log", "w")
         if which == "rust":
@@ -137,12 +156,33 @@ def plain(value):
     if dataclasses.is_dataclass(value):
         value = dataclasses.asdict(value)
     if isinstance(value, dict):
+        if isinstance(value.get("address"), str):
+            # The peer's port is the client's ephemeral one; the host is the
+            # part both daemons can be asked to agree on.
+            value = {**value, "address": value["address"].rsplit(":", 1)[0]}
+        if isinstance(value.get("target"), str):
+            # Each daemon's own device socket.
+            value = {**value, "target": value["target"].rsplit(":", 1)[0]}
         return {
             k: (v is not None) if k in DIFFERS_BY_RUN else plain(v) for k, v in value.items()
         }
     if isinstance(value, (list, tuple)):
         return [plain(v) for v in value]
     return value
+
+
+def first_differences(python, rust, where="", limit=5):
+    """The first few places two answers part, so a long one can be read."""
+    found = []
+    if isinstance(python, dict) and isinstance(rust, dict):
+        for key in list(python) + [k for k in rust if k not in python]:
+            found += first_differences(python.get(key), rust.get(key), f"{where}.{key}", limit)
+    elif isinstance(python, list) and isinstance(rust, list) and len(python) == len(rust):
+        for index, (theirs, ours) in enumerate(zip(python, rust)):
+            found += first_differences(theirs, ours, f"{where}[{index}]", limit)
+    elif python != rust:
+        found.append((where or "the answer", (python, rust)))
+    return found[:limit]
 
 
 def answer(call):
@@ -159,6 +199,29 @@ def answer(call):
         }
 
 
+def watching_the_whole_trace(client):
+    """Open WatchTrace from 0, take the backlog, and ask who is watching while
+    the stream is still open."""
+    backlog = client.read_trace().newest_entry_number + 1
+    # A deadline, so a stream that never sends the backlog is a disagreement
+    # to report rather than a comparison that hangs.
+    with client.watch_trace(0, observer="compare-daemons", timeout_s=5.0) as subscription:
+        received = []
+        for entry in subscription:
+            received.append(entry)
+            if len(received) == backlog:
+                break
+        observers = client.read_observers()
+    return {"entries": received, "observers": observers}
+
+
+def the_observers_once_it_closed(client):
+    # Unregistering happens when the server notices the cancel, which is not
+    # the instant the client sends it.
+    time.sleep(0.5)
+    return client.read_observers()
+
+
 #: The script, in order: each step is a name and what to ask. A step that
 #: reads a larger message narrows it to the part that is ported, since the
 #: rest belongs to rpcs that are not.
@@ -167,10 +230,12 @@ SCRIPT = [
     ("closing nothing", lambda c: c.close_session()),
     ("an active graph with no config", lambda c: c.set_active_graph("go-nogo")),
     ("clearing an active graph nobody set", lambda c: c.clear_active_graph()),
+    ("the firmware with no board", lambda c: c.read_firmware()),
     ("uploading with no board", lambda c: c.upload_graph_set(["go-nogo"])),
     ("opening with no board", lambda c: c.open_session()),
     ("one graph with no board", lambda c: c.upload_graph("go-nogo")),
     ("the link", lambda c: c.open_link().connected),
+    ("the firmware", lambda c: c.read_firmware()),
     ("opening with no config loaded", lambda c: c.open_session()),
     ("loading a config nobody stored", lambda c: c.load_config("nope")),
     ("loading the native device's config", lambda c: c.load_config("native-device")),
@@ -196,8 +261,35 @@ SCRIPT = [
     ("clearing the active graph", lambda c: c.clear_active_graph()),
     ("the session, closed with a set on the board", lambda c: c.read_session()),
     ("deleting the loaded config", lambda c: c.delete_config("native-device")),
+    ("deleting the other one", lambda c: c.delete_config("by-index")),
     ("the session, its config no longer stored", lambda c: c.read_session()),
+    ("the observers, nobody watching", lambda c: c.read_observers()),
+    ("the trace, all of it", lambda c: c.read_trace()),
+    ("the trace from entry 3, two of it", lambda c: c.read_trace(3, 2)),
+    ("one trial's trace, with no trials", lambda c: c.read_trial_trace(1)),
+    ("watching the trace, and who is watching", watching_the_whole_trace),
+    ("the observers once it closed", the_observers_once_it_closed),
+    ("the device, whole", lambda c: c.read_device()),
     ("an empty set", lambda c: c.upload_graph_set([])),
+]
+
+#: What a daemon is after starting, told to load a config and connect.
+AFTER_A_STARTUP = [
+    ("the session, as started", lambda c: c.read_session()),
+    ("the trace, as started", lambda c: c.read_trace()),
+    ("the device, as started", lambda c: c.read_device()),
+    ("the lines, as started", lambda c: c.read_lines()),
+    ("loading a config written by index", lambda c: c.load_config("by-index")),
+    ("the lines, by index", lambda c: c.read_lines()),
+]
+
+#: Each run: how the daemons start, and what to ask them.
+RUNS = [
+    ("started with nothing", {}, SCRIPT),
+    ("started with a config, connecting",
+     {"config": "native-device", "connect": True}, AFTER_A_STARTUP),
+    ("started with a config nobody stored, connecting",
+     {"config": "nope", "connect": True}, AFTER_A_STARTUP),
 ]
 
 
@@ -209,29 +301,33 @@ def main() -> int:
         print("the Rust daemon is not built: make rust")
         return 2
 
-    with tempfile.TemporaryDirectory() as scratch:
-        daemons = {}
-        try:
-            for which in ("python", "rust"):
-                daemons[which] = Daemon(which, Path(scratch) / which)
-            disagreed = 0
-            for why, call in SCRIPT:
-                python = answer(lambda: call(daemons["python"].client))
-                rust = answer(lambda: call(daemons["rust"].client))
-                if python == rust:
-                    kind = "refused" if "refused" in python else "answered"
-                    print(f"  same   {why}  ({kind})")
-                    if "--show" in sys.argv:
-                        print(f"           {json.dumps(python, sort_keys=True)}")
-                    continue
-                disagreed += 1
-                print(f"  DIFFER {why}")
-                print(f"           python: {json.dumps(python, sort_keys=True)}")
-                print(f"           rust:   {json.dumps(rust, sort_keys=True)}")
-        finally:
-            for daemon in daemons.values():
-                daemon.stop()
-    print(f"{len(SCRIPT) - disagreed}/{len(SCRIPT)} calls agree")
+    disagreed = 0
+    asked = 0
+    for run, startup, script in RUNS:
+        print(run)
+        with tempfile.TemporaryDirectory() as scratch:
+            daemons = {}
+            try:
+                for which in ("python", "rust"):
+                    daemons[which] = Daemon(which, Path(scratch) / which, startup)
+                for why, call in script:
+                    asked += 1
+                    python = answer(lambda: call(daemons["python"].client))
+                    rust = answer(lambda: call(daemons["rust"].client))
+                    if python == rust:
+                        kind = "refused" if "refused" in python else "answered"
+                        print(f"  same   {why}  ({kind})")
+                        if "--show" in sys.argv:
+                            print(f"           {json.dumps(python, sort_keys=True)}")
+                        continue
+                    disagreed += 1
+                    print(f"  DIFFER {why}")
+                    for where, (theirs, ours) in first_differences(python, rust):
+                        print(f"           at {where}: python {theirs!r}, rust {ours!r}")
+            finally:
+                for daemon in daemons.values():
+                    daemon.stop()
+    print(f"{asked - disagreed}/{asked} calls agree")
     return 1 if disagreed else 0
 
 

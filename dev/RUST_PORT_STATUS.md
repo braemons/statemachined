@@ -15,15 +15,17 @@ still calls `unported!`, so it cannot drift from the proto.
 
 ## Done
 
-**21 of 50 rpcs.** Everything that needs neither the trial loop nor the trace,
-the graph-set upload, and the session around it.
+**26 of 50 rpcs.** Everything that does not need the trial loop or a
+recording: the stores, the graph-set upload, the session around it, and the
+trace.
 
 | | |
 |---|---|
 | `Configuration` | `ReadHealth`, `ReadConfiguration` |
 | `GraphStore` | `ListGraphs`, `ReadGraphFile`, `WriteGraphFile`, `DeleteGraph` |
 | `StateMachineConfigStore` | `ListConfigs`, `ReadConfigFile`, `WriteConfigFile`, `DeleteConfig` |
-| `Device` | `ReadDevice`, `OpenLink`, `ReadLines` |
+| `Device` | `ReadDevice`, `OpenLink`, `ReadLines`, `ReadFirmware` |
+| `State` | `ReadTrace`, `WatchTrace`, `ReadTrialTrace`, `ReadObservers` |
 | Upload | `GraphStore/UploadGraph`, `StateMachineConfigStore/LoadConfig` |
 | `Session` | all six: `ReadSession`, `Open`, `UploadGraphs`, `Close`, `SetActiveGraph`, `ClearActiveGraph` |
 
@@ -46,6 +48,9 @@ the graph-set upload, and the session around it.
 | `device/board_pin_labels.rs` | `device/board_pin_labels.py` | 44 |
 | `device/statemachined_device.rs` | `device/statemachined_device.py` — **connection half only** | 848 (part) |
 | `graph_set_compiler.rs` | `graph_set_compiler.py` | 636 |
+| `device/state_visit_trace.rs` | `device/state_visit_trace.py` | 206 |
+| `observer_registry.rs` | `daemon/observer_registry.py` | 163 |
+| `firmware_manifest.rs` | `daemon/firmware_manifest.py` | 55 |
 | `device/graph_set_upload.rs` | `device/graph_set_upload.py` — **the daemon's half**; the hand-built uploaders stay with the hardware suite | 206 (part) |
 
 ### What the port is held to
@@ -65,13 +70,14 @@ green differential test that cannot go red is not evidence.
 | Stores | both daemons on identical stores, driven by one browser bundle | 17 calls |
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
-| The upload and session rpcs | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included | 34 calls |
+| Trace | `test_state_visit_trace.py`, ported one test for one, and the day's file line against Python's `json.dumps` | 11 tests |
+| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored | 56 calls |
 | Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
 
 ### Bugs this found in the Python daemon
 
 A port is a second implementation, and a second implementation is what finds
-these. Both are fixed in `daemon/`, each in its own commit, each with a
+these. All four are fixed in `daemon/`, each in its own commit, each with a
 regression test:
 
 1. **`ReadGraphFile` served a file it would not take back.** `exclude_defaults`
@@ -83,6 +89,16 @@ regression test:
    `round()` reached 1_000_000 and six-digit formatting wrote seven:
    `2023-11-14T22:13:20.1000000Z`, on a second also wrong by one. Every trace
    line goes through it.
+
+### And two more in the Python daemon
+
+3. **The same timestamp bug, three more times.** `state_visit_trace`,
+   `event_recording` and `device_line_monitor` each carried their own copy of
+   the formatter fixed in (2), unfixed. Every `recorded_host_time` in the
+   trace went through one.
+4. **A startup config that did not load said why in a repr**: the reason
+   arrived in `ReadDevice` wrapped in double quotes, because the store's
+   "not stored" is a `KeyError`.
 
 ### And in the firmware
 
@@ -100,6 +116,23 @@ without them. The fix changes the flash record's layout, so it is its own
 change, with a record version.
 
 ### And in the port itself
+
+**Found by starting both daemons the ways a rig starts them**, which the
+comparison did not do until the trace needed it:
+
+* `startup_state_machine_config` and `connect_on_startup` were read and
+  ignored: the Rust daemon started with nothing loaded and no board. Now
+  `DaemonState::start` does what `RigService.start` does, before the server
+  answers.
+* `ReadDevice` answered from the greeting alone, on the argument that a
+  status call should not touch the board. Python reads a state report, and
+  the result was `has_wiring: false` after the wiring was pushed, no link or
+  scan health, and three capacity fields at zero. Ported as Python has it;
+  whether a status call should touch the board is a question for both.
+* `ReadLines` never set `is_high_now`, and put the board's pin names in
+  `pin_label` where Python keeps the config's. Both ported as Python has them.
+* An observer's address was empty: axum owns the socket, and hands tonic the
+  peer only when served `with_connect_info`.
 
 **Refusals had no trailer.** Python sends every refusal's
 `statemachined.v1.Error` in `statemachined-error-bin`, and the Python client
@@ -143,12 +176,16 @@ the recordings built from both.
 | Module | Lines | Unblocks |
 |---|---|---|
 | `device/trial_result_reassembly.py` | 161 | `Trial/ReadResult` |
-| `device/state_visit_trace.py` | 206 | `State/ReadTrace`, `State/WatchTrace`, `State/ReadTrialTrace` |
 | `device/device_line_monitor.py` | 112 | `Device/ReadSerialMonitor`, `Device/WatchSerialMonitor` |
-| `statemachined_device.py` — the trial half | ~450 | `Trial/*`, the rest of `Device/*` |
-| `daemon/observer_registry.py` | 163 | `State/ReadObservers`, and the `observer-name` header on every stream |
+| `statemachined_device.py` — the trial half, and `RigService`'s link thread | ~450 | `Trial/*`, `State/ReadState`, `State/WatchState`, the rest of `Device/*` |
 | `daemon/event_recording.py` | 431 | `Recording/*` (9 rpcs) |
 | `model/trial_record.py` | 138 | with the above |
+
+**Nothing reads the link between requests yet.** Python's `RigService` runs a
+thread that pumps unsolicited lines — visits, results, events — into the trace
+and sends the heartbeat `ping` that arms the device's link-loss watchdog. It
+belongs with the trial half, which is what those lines are about; until then
+this daemon writes no `visit` or `link_lost` entries, and sends no heartbeat.
 
 **`Session/Close` does not cancel an armed trial yet**, because this daemon
 cannot arm one. Python's `close_session` cancels it; the trial port adds that
