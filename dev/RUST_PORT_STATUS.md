@@ -43,6 +43,7 @@ graph set.
 | `device/device_pin_map.rs` | `device/device_pin_map.py` | 71 |
 | `device/board_pin_labels.rs` | `device/board_pin_labels.py` | 44 |
 | `device/statemachined_device.rs` | `device/statemachined_device.py` — **connection half only** | 848 (part) |
+| `graph_set_compiler.rs` | `graph_set_compiler.py` | 636 |
 
 ### What the port is held to
 
@@ -60,6 +61,7 @@ green differential test that cannot go red is not evidence.
 | Line map + wiring | Python's answers, `tools/line_map_cases.py` | 31 cases |
 | Stores | both daemons on identical stores, driven by one browser bundle | 17 calls |
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
+| Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
 
 ### Bugs this found in the Python daemon
 
@@ -77,21 +79,30 @@ regression test:
    `2023-11-14T22:13:20.1000000Z`, on a second also wrong by one. Every trace
    line goes through it.
 
+### And in the port itself
+
+The compiler's cases reach `LineMap`'s lookups, which the line-map cases did
+not, and found `line_map.rs` answering two refusals differently from Python:
+
+1. **An unresolved line was reported as a missing one.** A line configured by
+   `pin_label` alone, before the board was asked, said "no input line is called
+   'abort'" — which sends somebody renaming a line that exists — where Python
+   says it has not been resolved against a board yet.
+2. **"This rig has:" listed lines in config order**, where Python sorts them.
+
 ---
 
 ## Left
 
 **37 rpcs**, and they are mostly one dependency away from each other.
 
-### The blocking module
+### The blocking module — ported, not yet wired
 
-`graph_set_compiler.py` (~500 lines, outside `device/`) produces the
-`CompiledGraphSet` that `Session`, `Trial` and most of `Device` need. It is
-where a graph stops being a document and becomes indices against one board's
-capacities, so it is also where "this set does not fit this board" is decided
-and named.
+`graph_set_compiler.rs` produces the `CompiledGraphSet` that `Session`, `Trial`
+and most of `Device` need. It answers no rpc on its own; the modules below are
+what put it on the wire.
 
-### Then, in the order they unblock
+### In the order they unblock
 
 | Module | Lines | Unblocks |
 |---|---|---|

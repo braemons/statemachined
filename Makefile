@@ -527,6 +527,7 @@ rust-check-proto:  ## fail if the committed wire types are not what proto/ produ
 .PHONY: rust-corpus
 rust-corpus:  ## regenerate the document corpus the two implementations are compared on
 	@uv run --project daemon python tools/document_corpus.py
+	@uv run --project daemon python tools/graph_set_cases.py
 
 .PHONY: rust-test
 rust-test: rust-corpus  ## the Rust tests, against a freshly generated corpus
