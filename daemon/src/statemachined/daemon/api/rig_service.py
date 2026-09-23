@@ -195,8 +195,12 @@ class RigService:
         try:
             self.load_state_machine_config(config_name)
         except Exception as exc:  # noqa: BLE001 -- reported, not fatal
+            # The store's "not stored" is a `KeyError`, and `str()` of one
+            # wraps its sentence in a repr's quotes. The argument is the
+            # sentence; `refusals._sentence` does the same for the rpcs.
+            reason = exc.args[0] if isinstance(exc, KeyError) and len(exc.args) == 1 else exc
             self.last_error_from_the_device = (
-                f"the startup state-machine config {config_name!r} did not load: {exc}"
+                f"the startup state-machine config {config_name!r} did not load: {reason}"
             )
 
     def stop(self) -> None:
