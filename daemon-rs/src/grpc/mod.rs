@@ -405,6 +405,97 @@ impl DaemonState {
             || report.get("link_state").and_then(serde_json::Value::as_i64) == Some(2))
     }
 
+    /// The session as a panel shows it: three facts, reported separately
+    /// rather than collapsed into one `ready`, because the useful question at
+    /// two in the morning is *which* of them is missing. A config may be loaded
+    /// with no session open, and a set may be committed on the board from a
+    /// session that ended — which is normal, and is what makes a reconnect
+    /// cheap.
+    fn session_state(&self) -> Result<wire::SessionState, tonic::Status> {
+        let stored_config_names = self.configs.stored_names();
+        let opened_at = *self.session_opened_at.lock().map_err(poisoned)?;
+        let opened_at_unix_seconds = opened_at.map(|at| {
+            at.duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_secs_f64())
+                .unwrap_or(0.0)
+        });
+        // `still_in_the_store` is a real question: a loaded config can be
+        // deleted while it is loaded, and the rig keeps running it.
+        let state_machine_config = self.loaded_config.lock().map_err(poisoned)?.as_ref().map(
+            |config| wire::LoadedStateMachineConfig {
+                name: config.name.clone(),
+                description: config.description.clone(),
+                board: config.board.clone(),
+                graph_names: config.graphs.iter().map(|graph| graph.name.clone()).collect(),
+                still_in_the_store: stored_config_names.contains(&config.name),
+            },
+        );
+        let committed_set = self
+            .device
+            .lock()
+            .map_err(poisoned)?
+            .committed_graph_set
+            .as_ref()
+            .map(committed_set_to_wire);
+        Ok(wire::SessionState {
+            state_machine_config,
+            committed_set,
+            session_open: opened_at.is_some(),
+            opened_at_unix_seconds,
+            // Worked out on this side, against this daemon's own clock. A
+            // browser subtracting a rig's timestamp from its own goes negative
+            // on a box whose NTP has not settled.
+            open_seconds: opened_at.map(|at| {
+                std::time::SystemTime::now()
+                    .duration_since(at)
+                    .map(|open| open.as_secs_f64())
+                    .unwrap_or(0.0)
+            }),
+            active_graph: self.active_graph.lock().map_err(poisoned)?.clone().unwrap_or_default(),
+            stored_config_names,
+        })
+    }
+
+    /// Say which graph a trial gets when it does not name one, or that none
+    /// does.
+    ///
+    /// Checked against the loaded config, and against the committed set if
+    /// there is one, because the alternative is a selection that looks fine in
+    /// the panel and refuses at the moment somebody presses "run a trial".
+    fn select_active_graph(&self, graph_name: Option<String>) -> Result<Option<String>, tonic::Status> {
+        let Some(graph_name) = graph_name else {
+            *self.active_graph.lock().map_err(poisoned)? = None;
+            return Ok(None);
+        };
+        let config = self.require_state_machine_config()?;
+        let known: Vec<&str> = config.graphs.iter().map(|graph| graph.name.as_str()).collect();
+        if !known.contains(&graph_name.as_str()) {
+            return Err(graph_not_available(format!(
+                "the loaded config '{}' has no graph called '{graph_name}'. Has: {}",
+                config.name,
+                if known.is_empty() { "(none)".to_string() } else { known.join(", ") }
+            )));
+        }
+        let on_the_board: Option<Vec<String>> = self
+            .device
+            .lock()
+            .map_err(poisoned)?
+            .committed_graph_set
+            .as_ref()
+            .map(|committed| committed.graphs_by_slot.iter().map(|graph| graph.name.clone()).collect());
+        if let Some(on_the_board) = on_the_board {
+            if !on_the_board.contains(&graph_name) {
+                return Err(graph_not_available(format!(
+                    "'{graph_name}' is in the config but not in the set the board is holding \
+                     ({}). Open a session to put it there.",
+                    on_the_board.join(", ")
+                )));
+            }
+        }
+        *self.active_graph.lock().map_err(poisoned)? = Some(graph_name.clone());
+        Ok(Some(graph_name))
+    }
+
     /// No board, said before anything is loaded or compiled.
     fn require_a_board(&self) -> Result<(), tonic::Status> {
         if self.device_connected() {
@@ -413,6 +504,13 @@ impl DaemonState {
             Err(Refusal::no_board_attached("no board is connected").into())
         }
     }
+}
+
+/// A selection the loaded config, or the board, cannot honour. Caught at
+/// selection rather than at the moment somebody presses run, which is the
+/// difference between a refusal and a rig that looks armed.
+fn graph_not_available(detail: String) -> tonic::Status {
+    Refusal::new(Category::WrongMoment, "graph_not_available", detail, "graph").into()
 }
 
 fn capacities_of(ack: &serde_json::Value) -> Option<wire::DeviceCapacities> {
@@ -883,7 +981,7 @@ impl service::session_server::Session for DaemonServices {
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ReadSessionRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::SessionState>, tonic::Status> {
-        unported!("Session/read_session")
+        Ok(tonic::Response::new(self.state.session_state()?))
     }
 
     async fn open(
@@ -930,21 +1028,46 @@ impl service::session_server::Session for DaemonServices {
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::CloseSessionRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::CloseSessionResult>, tonic::Status> {
-        unported!("Session/close")
+        // Say the session is over, and leave the device holding its set.
+        // **What this does not do is unload the board**: the committed set
+        // surviving is what makes a reconnect cheap and lets a session resume
+        // after a daemon restart.
+        //
+        // Python also cancels a trial still armed, because an armed trial with
+        // nobody driving it will run at whatever time somebody next touches a
+        // lever. This daemon cannot arm one yet — `Trial/*` is not ported — so
+        // there is nothing to cancel and `cancelled_trial_id` is always absent.
+        // **The trial port must add the cancel here.**
+        let was_open = self
+            .state
+            .session_opened_at
+            .lock()
+            .map_err(poisoned)?
+            .take()
+            .is_some();
+        Ok(tonic::Response::new(wire::CloseSessionResult {
+            was_open,
+            cancelled_trial_id: None,
+            session: Some(self.state.session_state()?),
+        }))
     }
 
     async fn set_active_graph(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::SetActiveGraphRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::SetActiveGraphRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::ActiveGraph>, tonic::Status> {
-        unported!("Session/set_active_graph")
+        let selected = self.state.select_active_graph(Some(request.into_inner().graph))?;
+        Ok(tonic::Response::new(wire::ActiveGraph {
+            active_graph: selected.unwrap_or_default(),
+        }))
     }
 
     async fn clear_active_graph(
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ClearActiveGraphRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::ActiveGraph>, tonic::Status> {
-        unported!("Session/clear_active_graph")
+        self.state.select_active_graph(None)?;
+        Ok(tonic::Response::new(wire::ActiveGraph::default()))
     }
 
 }

@@ -47,8 +47,9 @@ from statemachined_client.daemon_refusals import DaemonRefusedTheRequest  # noqa
 
 RUST_DAEMON = HERE / "target" / "debug" / "statemachined"
 
-#: Fields that measure this run rather than describe the answer.
-DIFFERS_BY_RUN = {"elapsed_milliseconds"}
+#: Fields that measure this run rather than describe the answer. Compared for
+#: whether they are there, not for what they say.
+DIFFERS_BY_RUN = {"elapsed_milliseconds", "opened_at_unix_seconds", "open_seconds"}
 
 
 def a_free_port() -> int:
@@ -136,7 +137,9 @@ def plain(value):
     if dataclasses.is_dataclass(value):
         value = dataclasses.asdict(value)
     if isinstance(value, dict):
-        return {k: plain(v) for k, v in value.items() if k not in DIFFERS_BY_RUN}
+        return {
+            k: (v is not None) if k in DIFFERS_BY_RUN else plain(v) for k, v in value.items()
+        }
     if isinstance(value, (list, tuple)):
         return [plain(v) for v in value]
     return value
@@ -160,6 +163,10 @@ def answer(call):
 #: reads a larger message narrows it to the part that is ported, since the
 #: rest belongs to rpcs that are not.
 SCRIPT = [
+    ("the session, before anything", lambda c: c.read_session()),
+    ("closing nothing", lambda c: c.close_session()),
+    ("an active graph with no config", lambda c: c.set_active_graph("go-nogo")),
+    ("clearing an active graph nobody set", lambda c: c.clear_active_graph()),
     ("uploading with no board", lambda c: c.upload_graph_set(["go-nogo"])),
     ("opening with no board", lambda c: c.open_session()),
     ("one graph with no board", lambda c: c.upload_graph("go-nogo")),
@@ -167,6 +174,10 @@ SCRIPT = [
     ("opening with no config loaded", lambda c: c.open_session()),
     ("loading a config nobody stored", lambda c: c.load_config("nope")),
     ("loading the native device's config", lambda c: c.load_config("native-device")),
+    ("the session, loaded and not open", lambda c: c.read_session()),
+    ("an active graph, nothing on the board", lambda c: c.set_active_graph("go-nogo")),
+    ("an active graph the config has not got", lambda c: c.set_active_graph("nope")),
+    ("an empty active graph", lambda c: c.set_active_graph("")),
     ("one graph nobody stored", lambda c: c.upload_graph("nope")),
     ("a set that does not fit", lambda c: c.upload_graph_set(["go-nogo", "too-big"])),
     ("a set naming a graph nobody stored", lambda c: c.upload_graph_set(["go-nogo", "nope"])),
@@ -176,6 +187,16 @@ SCRIPT = [
     ("one graph over a session's set", lambda c: c.upload_graph("state-walk")),
     ("a set by name", lambda c: c.upload_graph_set(["state-walk", "go-nogo"])),
     ("the committed set, again", lambda c: c.read_device().committed_set),
+    ("an active graph the board is not holding",
+     lambda c: c.set_active_graph("two-alternative-forced-choice")),
+    ("an active graph the board is holding", lambda c: c.set_active_graph("state-walk")),
+    ("the session, open", lambda c: c.read_session()),
+    ("closing it", lambda c: c.close_session()),
+    ("closing it again", lambda c: c.close_session()),
+    ("clearing the active graph", lambda c: c.clear_active_graph()),
+    ("the session, closed with a set on the board", lambda c: c.read_session()),
+    ("deleting the loaded config", lambda c: c.delete_config("native-device")),
+    ("the session, its config no longer stored", lambda c: c.read_session()),
     ("an empty set", lambda c: c.upload_graph_set([])),
 ]
 

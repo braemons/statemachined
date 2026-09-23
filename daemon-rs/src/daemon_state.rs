@@ -42,6 +42,13 @@ pub struct DaemonState {
     /// set from before, which `ReadSession` says plainly rather than pretending
     /// either way.
     pub session_opened_at: Mutex<Option<std::time::SystemTime>>,
+    /// Which graph a trial gets when it does not name one.
+    ///
+    /// A **default, not a mode**: an explicit graph on `Configure` always
+    /// wins, so triald — which names a graph per trial and has no reason to
+    /// know this exists — is unaffected by whatever somebody selected in a
+    /// browser tab.
+    pub active_graph: Mutex<Option<String>>,
 }
 
 impl DaemonState {
@@ -64,6 +71,7 @@ impl DaemonState {
             configs: Store::new(configuration.state_machine_config_directory.clone()),
             loaded_config: Mutex::new(None),
             session_opened_at: Mutex::new(None),
+            active_graph: Mutex::new(None),
             configuration,
         }
     }

@@ -15,8 +15,8 @@ still calls `unported!`, so it cannot drift from the proto.
 
 ## Done
 
-**17 of 50 rpcs.** Everything that needs neither the trial loop nor the trace,
-and the graph-set upload.
+**21 of 50 rpcs.** Everything that needs neither the trial loop nor the trace,
+the graph-set upload, and the session around it.
 
 | | |
 |---|---|
@@ -24,7 +24,8 @@ and the graph-set upload.
 | `GraphStore` | `ListGraphs`, `ReadGraphFile`, `WriteGraphFile`, `DeleteGraph` |
 | `StateMachineConfigStore` | `ListConfigs`, `ReadConfigFile`, `WriteConfigFile`, `DeleteConfig` |
 | `Device` | `ReadDevice`, `OpenLink`, `ReadLines` |
-| Upload | `GraphStore/UploadGraph`, `StateMachineConfigStore/LoadConfig`, `Session/Open`, `Session/UploadGraphs` |
+| Upload | `GraphStore/UploadGraph`, `StateMachineConfigStore/LoadConfig` |
+| `Session` | all six: `ReadSession`, `Open`, `UploadGraphs`, `Close`, `SetActiveGraph`, `ClearActiveGraph` |
 
 ### Modules
 
@@ -64,7 +65,7 @@ green differential test that cannot go red is not evidence.
 | Stores | both daemons on identical stores, driven by one browser bundle | 17 calls |
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
-| The upload rpcs | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included | 17 calls |
+| The upload and session rpcs | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included | 34 calls |
 | Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
 
 ### Bugs this found in the Python daemon
@@ -133,17 +134,14 @@ not, and found `line_map.rs` answering two refusals differently from Python:
 
 **37 rpcs**, and they are mostly one dependency away from each other.
 
-### The blocking module — ported, not yet wired
-
-`graph_set_compiler.rs` produces the `CompiledGraphSet` that `Session`, `Trial`
-and most of `Device` need. It answers no rpc on its own; the modules below are
-what put it on the wire.
+The graph set is on the board and the session around it answers; what is
+left is mostly what happens *during* a session — the trace, the trial loop, and
+the recordings built from both.
 
 ### In the order they unblock
 
 | Module | Lines | Unblocks |
 |---|---|---|
-| `Session/ReadSession`, `Close`, the active graph — small, over state that now exists | ~60 | 4 rpcs |
 | `device/trial_result_reassembly.py` | 161 | `Trial/ReadResult` |
 | `device/state_visit_trace.py` | 206 | `State/ReadTrace`, `State/WatchTrace`, `State/ReadTrialTrace` |
 | `device/device_line_monitor.py` | 112 | `Device/ReadSerialMonitor`, `Device/WatchSerialMonitor` |
@@ -151,6 +149,10 @@ what put it on the wire.
 | `daemon/observer_registry.py` | 163 | `State/ReadObservers`, and the `observer-name` header on every stream |
 | `daemon/event_recording.py` | 431 | `Recording/*` (9 rpcs) |
 | `model/trial_record.py` | 138 | with the above |
+
+**`Session/Close` does not cancel an armed trial yet**, because this daemon
+cannot arm one. Python's `close_session` cancels it; the trial port adds that
+to `close` in `grpc/mod.rs`, where a comment says so.
 
 ### Not started
 
