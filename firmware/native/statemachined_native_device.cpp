@@ -58,7 +58,8 @@ void drain_reply_queue() {
 
 class QueueingReplySink : public ReplySink {
  public:
-  void send_line(const char* bytes, size_t length) override {
+  void send_frame(const uint8_t* frame, size_t length) override {
+    const char* bytes = reinterpret_cast<const char*>(frame);
     // A burst bigger than the queue is the result that ends a trial. On a board
     // that costs the scan its periods and is counted; here there is no timer to
     // be late for, so waiting for the pipe is simply what happens.
@@ -190,7 +191,7 @@ int main() {
     char inbound[128];
     const size_t received = hal::link_read(inbound, sizeof(inbound));
     if (received > 0) {
-      session.receive(inbound, received, now_us);
+      session.receive(reinterpret_cast<const uint8_t*>(inbound), received, now_us);
       if (session.wiring_revision() != applied_wiring_revision) {
         applied_wiring_revision = session.wiring_revision();
         input_conditioner.configure(session.wiring().inputs);

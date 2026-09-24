@@ -1,28 +1,21 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// A JSON reader and writer for exactly the shapes docs/reference/protocol.md defines, and
-// nothing else. No allocation, no floating point, one pass, and recursion
-// bounded to kJsonMaxDepth -- four frames, which the protocol never exceeds and
-// the parser refuses beyond.
+// The NDJSON wire's JSON, kept for the tests and nowhere else.
 //
-// Why not ArduinoJson, which platformio.ini expected to arrive with this
-// milestone: version 7 removed StaticJsonDocument and moved string storage to
-// the heap, so the current library cannot satisfy this project's no-dynamic-
-// allocation rule, and version 6 is no longer maintained. The protocol's
-// messages are flat, ASCII, integer-only and at most four deep -- a scanner
-// written to that shape is smaller than the dependency and its limits are
-// visible here rather than in a changelog.
+// The board spoke this until the link moved to protobuf, and the session's
+// tests are written in it: a command reads as the object it always was, and a
+// reply is checked against the line the board would have written. That keeps
+// ninety tests about the *behaviour* of the session rather than rewriting each
+// one in nanopb's structs, and link_json.h is what turns one into the other.
 //
-// The reader validates structure once, at construction, and indexes the
-// top-level members. Every accessor afterwards is a lookup over that index, so
-// a malformed document cannot be half-read: it is either valid or refused
-// whole, which is the same promise the line layer below makes.
+// It is the reader and writer the firmware carried, unchanged but for two
+// things: it lives in namespace statemachined::test, and a finished line has no
+// CRC -- the frame carries that now.
 #pragma once
 #include <cstddef>
 #include <cstdint>
 
-#include "config.h"
 
-namespace statemachined {
+namespace statemachined::test {
 
 /// A view into the message buffer. Nothing here copies: the reader borrows the
 /// line for as long as the caller holds it, which on the device is until the
@@ -180,8 +173,8 @@ class JsonWriter {
   bool overflowed() const { return overflow_; }
   size_t len() const { return len_; }
 
-  /// Close the object, append the crc and the newline. 0 if anything
-  /// overflowed on the way here.
+  /// Close the object and append the newline. 0 if anything overflowed on the
+  /// way here.
   size_t finish(bool newline = true);
 
  private:
@@ -199,4 +192,4 @@ class JsonWriter {
   bool fresh_ = true;  ///< nothing written at this nesting level yet
 };
 
-}  // namespace statemachined
+}  // namespace statemachined::test

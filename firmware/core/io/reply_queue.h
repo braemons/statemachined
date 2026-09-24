@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Lines waiting for a link that is not ready to take them yet.
+// Frames waiting for a link that is not ready to take them yet.
 //
 // This exists because of a measurement. The scan runs in loop() and the timer
 // only counts ticks (firmware/src/main.cpp says why), so anything that blocks
@@ -15,8 +15,8 @@
 // over the following passes, 100 us apart, while the trial keeps being scanned
 // on time.
 //
-// What the queue does NOT do is reorder or split a line. A line is pushed whole
-// or not at all, and they leave in the order they arrived: half a `graph_state`
+// What the queue does NOT do is reorder or split a frame. A frame is pushed
+// whole or not at all, and they leave in the order they arrived: half a `graph_state`
 // on the wire is exactly the failure the framing rules exist to prevent, and a
 // result chunk overtaking its `result_begin` would break the rolling checksum
 // that catches a dropped one.
@@ -51,7 +51,7 @@
 
 namespace statemachined {
 
-/// Room for a couple of the longest lines the protocol allows.
+/// Room for a couple of the longest frames the protocol allows.
 ///
 /// Sized for request/response, which is what the link does in a trial's
 /// critical path: one command in flight, one reply. It is deliberately *not*
@@ -59,16 +59,16 @@ namespace statemachined {
 /// result_end can run to several KB -- because that burst happens when the
 /// trial is already over and jitter costs nothing, and carrying KB of buffer
 /// for it would take the RAM out of the graph pools that need it.
-constexpr uint16_t kReplyQueueBytes = 2 * kMaxLine;
+constexpr uint16_t kReplyQueueBytes = 2 * kMaxFrame;
 
 class ReplyQueue {
  public:
-  /// Queue one complete line, or refuse it and change nothing. Producer side.
+  /// Queue one complete frame, or refuse it and change nothing. Producer side.
   ///
   /// All-or-nothing on purpose: a caller told "no" can drain and try again,
   /// whereas a caller told "I took 300 of your 400 bytes" has already put a
-  /// truncated line on the wire.
-  bool push(const char* line, size_t n);
+  /// truncated frame on the wire.
+  bool push(const char* frame, size_t n);
 
   /// The next run of bytes to hand the link, which is at most up to the end of
   /// the buffer -- a wrapped queue needs two calls, and that is the caller's

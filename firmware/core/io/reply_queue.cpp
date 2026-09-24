@@ -12,13 +12,13 @@ size_t ReplyQueue::pending() const {
   return (tail >= head) ? tail - head : kReplyQueueBytes - head + tail;
 }
 
-bool ReplyQueue::push(const char* line, size_t n) {
+bool ReplyQueue::push(const char* frame, size_t n) {
   if (n == 0) return true;
   if (n > free_bytes()) return false;
 
   size_t at = tail_;
   for (size_t i = 0; i < n; ++i) {
-    buf_[at] = line[i];
+    buf_[at] = frame[i];
     if (++at == kReplyQueueBytes) at = 0;
   }
   // Published only now, and in one store: until this line runs the consumer

@@ -16,14 +16,19 @@ set(STATEMACHINED_TESTS
   protocol/framing
   protocol/graph_builder
   protocol/host_link_session
-  protocol/json
 )
+
+# The tests' own half of the link: commands written as the JSON the NDJSON
+# wire carried, and replies rendered back into it. See support/link_json.h.
+add_library(link_test_support STATIC support/link_json.cpp support/wire_json.cpp)
+target_link_libraries(link_test_support PUBLIC statemachined_core)
+target_include_directories(link_test_support PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/support)
 
 foreach(path IN LISTS STATEMACHINED_TESTS)
   get_filename_component(t ${path} NAME)
   get_filename_component(dir ${path} DIRECTORY)
   add_executable(test_${t} core/${dir}/test_${t}.cpp)
-  target_link_libraries(test_${t} PRIVATE statemachined_core doctest_main)
+  target_link_libraries(test_${t} PRIVATE statemachined_core link_test_support doctest_main)
   target_include_directories(test_${t} PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party
     ${CMAKE_CURRENT_SOURCE_DIR}/core)  # helpers.h, shared across the groups

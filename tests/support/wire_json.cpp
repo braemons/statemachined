@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "protocol/json.h"
+#include "wire_json.h"
 
-#include "protocol/crc16.h"
-#include "protocol/framing.h"
-#include "protocol/msg_type.h"
 
-namespace statemachined {
+namespace statemachined::test {
+
+namespace {
+constexpr const char* kMsgTypeKey = "msg_type";
+constexpr const char* kMessageIdKey = "message_id";
+constexpr const char* kInReplyToKey = "in_reply_to";
+}  // namespace
+
 namespace {
 
 bool is_ws(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n'; }
@@ -670,8 +674,10 @@ void JsonWriter::begin_elem_array() {
 }
 
 size_t JsonWriter::finish(bool newline) {
+  put('}');
+  if (newline) put('\n');
   if (overflow_) return 0;
-  return finish_frame(buf_, len_, cap_, newline);
+  return len_;
 }
 
-}  // namespace statemachined
+}  // namespace statemachined::test

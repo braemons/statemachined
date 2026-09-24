@@ -139,11 +139,11 @@ TEST_CASE("consume never runs past what is queued") {
   CHECK(q.free_bytes() == kReplyQueueBytes - 1);
 }
 
-TEST_CASE("the longest line the protocol allows fits") {
-  // Not arithmetic for its own sake: if kMaxLine ever grows past the queue, a
+TEST_CASE("the longest frame the protocol allows fits") {
+  // Not arithmetic for its own sake: if kMaxFrame ever grows past the queue, a
   // reply would be refused forever and the stall path would spin.
   ReplyQueue q;
-  const std::string longest = line_of('m', kMaxLine);
+  const std::string longest = line_of('m', kMaxFrame);
   CHECK(q.push(longest.data(), longest.size()));
 }
 

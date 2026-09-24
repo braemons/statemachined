@@ -116,10 +116,11 @@ void drain_tx() {
 
 class SerialReplySink : public ReplySink {
  public:
-  void send_line(const char* bytes, size_t n) override {
+  void send_frame(const uint8_t* frame, size_t n) override {
+    const char* bytes = reinterpret_cast<const char*>(frame);
     if (g_tx.push(bytes, n)) return;
 
-    // The queue is full and this line has nowhere to go. That means a burst
+    // The queue is full and this frame has nowhere to go. That means a burst
     // bigger than the queue -- in practice the result chunks that end a trial,
     // which is when the trial is already over and jitter costs nothing. Waiting
     // here is still the only remaining way the link can stall the scan, so it
@@ -387,7 +388,7 @@ void service_link() {
     // nothing else. Reading those bytes off USB, above, cost twice as long and
     // needed no hold at all.
     const EngineHold hold;
-    g_session->receive(buf, n, now);
+    g_session->receive(reinterpret_cast<const uint8_t*>(buf), n, now);
     apply_wiring();
   }
 }
@@ -498,7 +499,7 @@ void loop() {
   // single-producer, single-consumer, and this is the only consumer.
   // One per pass, not the whole ring: drain_tx() below is what actually moves
   // bytes, and handing it a burst bigger than the queue is what makes
-  // send_line() spin. loop() turns far faster than a graph changes state, so
+  // send_frame() spin. loop() turns far faster than a graph changes state, so
   // one at a time still empties it immediately.
   g_session->drain_outbound(1);
   // Last, so a reply produced by the command just serviced starts moving in

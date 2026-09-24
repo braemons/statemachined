@@ -3,10 +3,10 @@
 // a graph that is accepted is one the rig will run for the next three hundred
 // trials -- so these tests are mostly about refusal, and about refusing with a
 // message that names what to change.
-#include <deque>
 #include <string>
 
 #include "doctest.h"
+#include "link_json.h"
 #include "machine/state_machine.h"
 #include "protocol/crc16.h"
 #include "protocol/framing.h"
@@ -14,21 +14,22 @@
 #include "trial/trial.h"
 
 using namespace statemachined;
+using namespace statemachined::test;
 
 namespace {
 
-/// Drives the builder the way the session will: frame the line, verify it,
-/// parse it, dispatch on `t`. Going through the real framing and JSON layers
-/// rather than calling the builder directly is the point -- the checksum is
-/// over the CRC-covered bytes, and a test that made those up would not be
-/// testing the thing the host has to reproduce.
+/// Drives the builder the way the session will: the message as the struct the
+/// board decodes, and the protobuf bytes it arrived as. Going through the real
+/// encoding rather than calling the builder with made-up bytes is the point --
+/// the checksum is over the bytes on the wire, and a test that made those up
+/// would not be testing the thing the host has to reproduce.
 struct Upload {
   GraphSet set;
   GraphBuilder builder{set};
-  std::deque<std::string> keep;  ///< spans borrow; the text must outlive them
-  uint16_t checksum = 0xFFFF;    ///< what the host would have accumulated
+  uint16_t checksum = 0xFFFF;  ///< what the host would have accumulated
 
-  /// `body` is the object without its closing brace, as the writer produces it.
+  /// `body` is the object without its closing brace, as the NDJSON writer
+  /// produced it. See support/link_json.h.
   UploadError send(const std::string& body, bool fold = true) {
     // These tests are about the graph layer, so a graph_begin with no set open
     // opens one first rather than every case carrying the same two lines. The
@@ -38,41 +39,43 @@ struct Upload {
               UploadError::None);
     }
 
-    char buf[kMaxLine];
-    REQUIRE(body.size() < sizeof(buf));
-    for (size_t i = 0; i < body.size(); ++i) buf[i] = body[i];
-    const size_t n = finish_frame(buf, body.size(), sizeof(buf), false);
-    REQUIRE(n > 0);
+    link::HostMessage m;
+    std::string why;
+    REQUIRE_MESSAGE(host_message_from_json(body + "}", &m, &why), why);
+    const Bytes payload = encode_host_message(m);
+    REQUIRE_FALSE(payload.empty());
+    const link::PayloadSpan span{payload.data(), payload.size()};
+    if (fold) checksum = crc16_ccitt(payload.data(), payload.size(), checksum);
 
-    keep.emplace_back(buf, n);
-    const std::string& line = keep.back();
-    Frame f;
-    REQUIRE(verify_frame(line.data(), line.size(), &f) == FrameError::None);
-    const JsonSpan covered{f.covered, f.covered_len};
-    if (fold) checksum = crc16_ccitt(covered.p, covered.n, checksum);
-
-    JsonObject m(line.data(), line.size());
-    REQUIRE(m.valid());
-    JsonSpan t;
-    REQUIRE(m.str("msg_type", &t));
-
-    if (json_str_eq(t, "set_begin")) return builder.begin_set(m, covered);
-    if (json_str_eq(t, "graph_begin")) return builder.begin_graph(m, covered);
-    if (json_str_eq(t, "graph_dist")) return builder.add_distribution(m, covered);
-    if (json_str_eq(t, "graph_state")) return builder.add_state(m, covered);
-    if (json_str_eq(t, "graph_transition")) return builder.add_transition(m, covered);
-    if (json_str_eq(t, "graph_action")) return builder.add_action(m, covered);
-    if (json_str_eq(t, "graph_timer")) return builder.add_timer(m, covered);
-    if (json_str_eq(t, "graph_end")) return builder.end_graph(m, covered);
-    if (json_str_eq(t, "set_end")) return builder.end_set(m);
-    FAIL("unknown message type in test");
-    return UploadError::BadField;
+    switch (m.which_body) {
+      case statemachined_link_v1_HostMessage_set_begin_tag:
+        return builder.begin_set(m.body.set_begin, span);
+      case statemachined_link_v1_HostMessage_graph_begin_tag:
+        return builder.begin_graph(m.body.graph_begin, span);
+      case statemachined_link_v1_HostMessage_graph_dist_tag:
+        return builder.add_distribution(m.body.graph_dist, span);
+      case statemachined_link_v1_HostMessage_graph_state_tag:
+        return builder.add_state(m.body.graph_state, span);
+      case statemachined_link_v1_HostMessage_graph_transition_tag:
+        return builder.add_transition(m.body.graph_transition, span);
+      case statemachined_link_v1_HostMessage_graph_action_tag:
+        return builder.add_action(m.body.graph_action, span);
+      case statemachined_link_v1_HostMessage_graph_timer_tag:
+        return builder.add_timer(m.body.graph_timer, span);
+      case statemachined_link_v1_HostMessage_graph_end_tag:
+        return builder.end_graph(m.body.graph_end, span);
+      case statemachined_link_v1_HostMessage_set_end_tag:
+        return builder.end_set(m.body.set_end);
+      default:
+        FAIL("unknown message type in test");
+        return UploadError::BadField;
+    }
   }
 
   std::string checksum_hex() const {
-    char h[4];
-    crc16_to_hex(checksum, h);
-    return std::string(h, 4);
+    static const char kHex[] = "0123456789ABCDEF";
+    return {kHex[(checksum >> 12) & 0xF], kHex[(checksum >> 8) & 0xF], kHex[(checksum >> 4) & 0xF],
+            kHex[checksum & 0xF]};
   }
 
   /// Close the current graph. Its own totals, not the set's.
@@ -610,12 +613,13 @@ TEST_CASE("a malformed or missing member is refused by name") {
   REQUIRE(u.send(R"({"msg_type":"graph_dist","message_id":2,"i":0,"kind":"fixed","a":100)") ==
           UploadError::None);
 
-  SUBCASE("terminal is not optional -- absent is different from null") {
-    // A graph_state that forgot to say is a bug in the sender, and is different
-    // from one that said "not terminal".
-    CHECK(u.send(R"({"msg_type":"graph_state","message_id":3,"i":0,"timeout":null)") ==
-          UploadError::BadField);
-    CHECK(std::string(u.builder.context()) == "terminal");
+  SUBCASE("an absent terminal is a state that is not terminal") {
+    // On the NDJSON wire `terminal` had to be present, as a code or as null,
+    // so that a sender that forgot it was refused. protobuf has no null: an
+    // `optional` field that is not sent is the "not terminal" answer, and the
+    // encoder the daemon uses is generated, so it cannot forget one.
+    CHECK(u.send(R"({"msg_type":"graph_state","message_id":3,"i":0)") == UploadError::None);
+    CHECK_FALSE(u.set.states[0].terminal());
   }
   SUBCASE("an unknown distribution kind") {
     Upload v;
@@ -745,6 +749,22 @@ TEST_CASE("a new set forgets the last one's global timers") {
   CHECK(u.set.n_timers == 0);
   CHECK(u.send(R"({"msg_type":"graph_timer","message_id":5,"i":0,"width":0)") ==
         UploadError::None);
+}
+
+TEST_CASE("a timer's loops: absent is one, and zero is forever") {
+  // The one timer field whose zero and whose absence mean different things,
+  // which is why it is `optional` in link.proto while its neighbours are not.
+  Upload u;
+  minimal(u);
+  REQUIRE(u.send(R"({"msg_type":"graph_timer","message_id":5,"i":0,"width":0)") ==
+          UploadError::None);
+  REQUIRE(u.send(R"({"msg_type":"graph_timer","message_id":6,"i":1,"width":0,"loops":0)") ==
+          UploadError::None);
+  REQUIRE(u.send(R"({"msg_type":"graph_timer","message_id":7,"i":2,"width":0,"loops":4)") ==
+          UploadError::None);
+  CHECK(u.set.timers[0].loops == 1);
+  CHECK(u.set.timers[1].loops == 0);
+  CHECK(u.set.timers[2].loops == 4);
 }
 
 TEST_CASE("a copy of a set keeps its global timers") {

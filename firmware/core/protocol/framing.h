@@ -1,84 +1,77 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The protocol's line layer: bytes in, verified lines out, and the CRC put back
-// on the way out. Everything here is below JSON -- it knows a line has a `crc`
-// member last and nothing else about what a message means.
+// The frame layer: a protobuf message, sealed with a CRC, stuffed with COBS and
+// ended with a zero. Both directions, identically:
 //
-// See docs/reference/protocol.md, section 1.
+//     COBS( protobuf message ‖ CRC-16, big-endian ) ‖ 0x00
+//
+// A frame is checked whole before a byte of it is decoded. One that is too
+// long, is not COBS, or whose CRC does not match is refused and never acted on,
+// not even partially: a truncated graph_state is exactly what this exists to
+// catch. See docs/reference/protocol.md section 1.
 #pragma once
 #include <cstddef>
 #include <cstdint>
 
 #include "config.h"
+#include "protocol/cobs.h"
 
 namespace statemachined {
 
+/// The longest protobuf message a frame of kMaxFrame bytes can carry: the
+/// delimiter, the CRC and COBS's worst-case overhead come off the top.
+constexpr size_t kMaxPayload = kMaxFrame - 1 - 2 - (kMaxFrame / 254 + 1);
+static_assert(cobs_max_encoded(kMaxPayload + 2) + 1 <= kMaxFrame, "kMaxPayload fits a frame");
+
 enum class FrameError : uint8_t {
   None = 0,
-  TooLong,    ///< exceeded kMaxLine; discarded through the next newline
-  NonAscii,   ///< a byte >= 0x80. Non-ASCII text belongs in log, \uXXXX-escaped
-  NotObject,  ///< does not open with '{' and close with '}'
-  NoCrc,      ///< no trailing ,"crc":"XXXX"
-  BadCrc,     ///< the field is well-formed and does not match the payload
+  TooLong,  ///< more than kMaxFrame bytes before a delimiter
+  BadCobs,  ///< not valid COBS, or too short to hold a CRC
+  BadCrc,   ///< the CRC does not match the bytes it covers
 };
 
+/// The person's half of a refusal, for `error`'s `message`.
 const char* frame_error_str(FrameError e);
+/// The machine's half, for `error`'s `code`: `too_long`, `bad_cobs`, `bad_crc`.
+const char* frame_error_code(FrameError e);
 
-/// The CRC-covered prefix of a verified line: everything before `,"crc":`.
-/// Kept because graph_end's and result_end's checksums accumulate over exactly
-/// these bytes, message after message, without buffering any of them.
-struct Frame {
-  const char* covered = nullptr;
-  size_t covered_len = 0;
-};
+/// Seal `len` bytes of protobuf into a frame in `out`, which holds kMaxFrame.
+/// Returns the frame's length, delimiter included, or 0 if the payload is
+/// longer than kMaxPayload -- which the static_asserts on the generated sizes
+/// make a firmware bug rather than a wire condition.
+size_t encode_frame(const uint8_t* payload, size_t len, uint8_t* out);
 
-/// Check one assembled line, newline already stripped. The whole line -- `crc`
-/// member included -- is what gets handed to the JSON parser afterwards; an
-/// unknown member is ignored by rule, so the parser needs no special case for
-/// it.
-FrameError verify_frame(const char* line, size_t len, Frame* out);
-
-/// Close an outgoing message. `buf[0..len)` holds the object *without* its
-/// closing brace -- `{"msg_type":"pong","message_id":16` -- and this appends
-/// `,"crc":"XXXX"}` and, if `newline`, the terminator. Returns 0 if the result
-/// would not fit in `cap`, which is a caller bug rather than a wire condition:
-/// every message the firmware emits is sized to fit kMaxLine by construction.
-size_t finish_frame(char* buf, size_t len, size_t cap, bool newline = true);
-
-/// Assembles incoming bytes into lines.
-///
-/// Byte at a time on purpose: on the device this runs from whatever the USB CDC
-/// hands over, in chunks nobody chooses, and a reader that needs a whole line in
-/// one call would need a second buffer to make that true.
-class LineReader {
+/// Bytes in, checked payloads out. Resynchronises on the next delimiter after
+/// anything it refuses, which is all a reader that lost bytes needs to do.
+class FrameReader {
  public:
-  LineReader(char* buf, size_t cap) : buf_(buf), cap_(cap) {}
+  /// Returns true when a delimiter ended a frame. status() then says whether it
+  /// arrived intact; on anything but None there is no payload. A refused frame
+  /// is still reported -- silently swallowing it would leave the host waiting
+  /// for an answer that never comes.
+  bool feed(uint8_t byte);
 
-  /// Returns true when a line is complete. `status()` then says whether it
-  /// arrived intact; on anything but None the line is not parsable and `len()`
-  /// is 0. A line that overflowed or carried a non-ASCII byte is still reported
-  /// -- silently swallowing it would leave the host waiting for an answer that
-  /// never comes.
-  bool feed(char c);
-
-  const char* line() const { return buf_; }
+  /// The protobuf bytes, CRC removed. Valid after feed() returned true with
+  /// status() None, until the next feed().
+  const uint8_t* payload() const { return buffer_; }
   size_t len() const { return len_; }
   FrameError status() const { return status_; }
 
-  /// Bytes dropped since construction, for state_report. A link that is
-  /// dropping lines should be visible to whoever is debugging the rig rather
+  /// Frames refused since construction, for state_report. A link that is
+  /// dropping frames should be visible to whoever is debugging the rig rather
   /// than inferred from trials that did not happen.
   uint32_t dropped() const { return dropped_; }
 
+  /// Forget a frame in progress. What a new session does: bytes from before a
+  /// reconnect belong to a host that is gone.
   void reset();
 
  private:
-  char* buf_;
-  size_t cap_;
+  uint8_t buffer_[kMaxFrame];
+  size_t fill_ = 0;
   size_t len_ = 0;
+  bool overflowed_ = false;
   uint32_t dropped_ = 0;
   FrameError status_ = FrameError::None;
-  bool discarding_ = false;
-  bool complete_ = false;
 };
 
 }  // namespace statemachined

@@ -6,7 +6,7 @@
 # firmware rather than a parallel implementation of it. Board builds go through
 # PlatformIO; this file never sees a HAL.
 cmake_minimum_required(VERSION 3.16)
-project(statemachined_core LANGUAGES CXX)
+project(statemachined_core LANGUAGES C CXX)
 
 # Always, not only when a VS Code extension happens to pass it. clangd reads
 # this file to learn the include paths, and since the core's headers are
@@ -26,7 +26,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 #
 # Splitting them means the dependency cannot silently reverse. tests/ links one
 # binary against statemachined_engine alone (see tests/CMakeLists.txt), so if the state
-# machine ever grows a dependency on JSON or framing, that link fails -- which
+# machine ever grows a dependency on protobuf or framing, that link fails -- which
 # is a better answer than a comment asking people not to.
 add_library(statemachined_engine
   firmware/core/graph/graph_set.cpp
@@ -40,6 +40,20 @@ add_library(statemachined_engine
 target_include_directories(statemachined_engine PUBLIC firmware/core)
 target_compile_options(statemachined_engine PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
+# The link's structs, generated from proto/statemachined/link/v1/link.proto by
+# `make firmware-proto`, and the nanopb runtime they are generated for,
+# vendored at the same version. C, and compiled without -Werror: nobody here
+# writes it, and a warning in it is nanopb's to fix.
+add_library(statemachined_link
+  firmware/third_party/nanopb/pb_common.c
+  firmware/third_party/nanopb/pb_decode.c
+  firmware/third_party/nanopb/pb_encode.c
+  firmware/core/proto/statemachined/link/v1/link.pb.c
+)
+set_target_properties(statemachined_link PROPERTIES LINKER_LANGUAGE CXX)
+target_include_directories(statemachined_link PUBLIC
+  firmware/third_party/nanopb firmware/core/proto)
+
 add_library(statemachined_core
   firmware/core/io/reply_queue.cpp
   firmware/core/io/settings_store.cpp
@@ -48,10 +62,8 @@ add_library(statemachined_core
   firmware/core/protocol/framing.cpp
   firmware/core/protocol/graph_builder.cpp
   firmware/core/protocol/host_link_session.cpp
-  firmware/core/protocol/json.cpp
-  firmware/core/protocol/msg_type.cpp
 )
-target_link_libraries(statemachined_core PUBLIC statemachined_engine)
+target_link_libraries(statemachined_core PUBLIC statemachined_engine statemachined_link)
 target_compile_options(statemachined_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 option(STATEMACHINED_SANITIZE "Build tests with ASan and UBSan" OFF)

@@ -26,20 +26,19 @@
 #include "machine/global_timers.h"
 #include "protocol/framing.h"
 #include "protocol/graph_builder.h"
-#include "protocol/json.h"
-#include "protocol/msg_type.h"
+#include "protocol/link_messages.h"
 #include "trial/autorun.h"
 #include "trial/trial_runner.h"
 
 namespace statemachined {
 
 /// Where a reply goes. Abstract because the session must not know whether the
-/// far end is a USB CDC endpoint or a std::string in a test.
+/// far end is a USB CDC endpoint or a byte vector in a test.
 class ReplySink {
  public:
   virtual ~ReplySink() = default;
-  /// One complete line, newline included. Never called with a partial line.
-  virtual void send_line(const char* bytes, size_t n) = 0;
+  /// One complete frame, delimiter included. Never called with a partial one.
+  virtual void send_frame(const uint8_t* bytes, size_t n) = 0;
 };
 
 /// What the device says about itself in `hello_ack`, so the bridge can check a
@@ -100,19 +99,19 @@ struct ScanHealth {
 ///
 /// One command deep, not a window: this is strict request/response with one
 /// command in flight, and remembering more would mean storing that many
-/// complete replies at kMaxLine bytes each.
+/// complete replies at kMaxFrame bytes each.
 class DuplicateCommandGuard {
  public:
   bool is_repeat(uint16_t message_id) const { return have_ && message_id == last_message_id_; }
 
-  const char* reply() const { return reply_; }
+  const uint8_t* reply() const { return reply_; }
   size_t reply_len() const { return reply_len_; }
 
-  void remember(uint16_t message_id, const char* line, size_t n);
+  void remember(uint16_t message_id, const uint8_t* frame, size_t n);
   void forget() { have_ = false; }
 
  private:
-  char reply_[kMaxLine];
+  uint8_t reply_[kMaxFrame];
   size_t reply_len_ = 0;
   uint16_t last_message_id_ = 0;
   bool have_ = false;
@@ -148,11 +147,11 @@ class HostLinkSession {
  public:
   HostLinkSession(ReplySink& out, const DeviceIdentity& identity);
 
-  /// Feed bytes from the host, in whatever chunks arrived. Complete lines are
+  /// Feed bytes from the host, in whatever chunks arrived. Complete frames are
   /// handled as they complete, and replies go out through the sink before this
   /// returns.
-  void receive(const char* bytes, size_t n, Microseconds now_us);
-  void receive_byte(char c, Microseconds now_us);
+  void receive(const uint8_t* bytes, size_t n, Microseconds now_us);
+  void receive_byte(uint8_t c, Microseconds now_us);
 
   /// One tick of the trial loop, driven by the timer rather than by the link.
   /// Emits the chunked result when the trial ends, so the host learns of an
@@ -164,14 +163,14 @@ class HostLinkSession {
   ///
   /// This used to happen inside advance_trial() itself, which on a board means
   /// inside the scan ISR -- and building a ~130 byte JSON line with a CRC on it
-  /// costs about 120 us there. That does not merely add jitter: the scan
+  /// cost about 120 us there, on the NDJSON wire this link used to be. That does not merely add jitter: the scan
   /// overruns its own tick, so the *next* scan lands late, and the state
   /// machine's response to a line went from one scan period to 220 us. Measured
   /// both ways on an Uno R4 Minima: 222 us with the stream on the ISR, exactly
   /// 100 us with it off, and insensitive to how much else the entry action did.
   /// See docs/operations/hardware.md, "Response latency and duration accuracy".
   ///
-  /// It also put ReplySink::send_line() -- which spins when the transmit queue
+  /// It also put ReplySink::send_frame() -- which spins when the transmit queue
   /// is full -- on the interrupt, which is the one context its own contract
   /// says it must not be on. Both go away by moving the formatting here: the
   /// ISR copies sixteen bytes into a ring and returns.
@@ -179,8 +178,8 @@ class HostLinkSession {
   /// the visits, then the result of a run that has ended. **The one call the
   /// foreground owes the device every pass.**
   ///
-  /// Everything that formats a line lives behind this, and that is the point.
-  /// `advance_trial()` is the timer interrupt on a board; ReplySink::send_line()
+  /// Everything that encodes a frame lives behind this, and that is the point.
+  /// `advance_trial()` is the timer interrupt on a board; ReplySink::send_frame()
   /// spins when the transmit queue is full; and a spin inside an interrupt,
   /// waiting on the foreground that drains that queue, does not end. Keeping
   /// both the visit stream and the result out here is what makes that
@@ -193,7 +192,7 @@ class HostLinkSession {
 
   /// `max_lines` of 0 means "everything waiting". Pass a small number from a
   /// loop that also pushes bytes at the link: emptying a full ring in one pass
-  /// hands the transmit queue more lines than it holds, and ReplySink::send_line
+  /// hands the transmit queue more frames than it holds, and ReplySink::send_frame
   /// then spins waiting for the wire -- 21 such stalls on the reference board,
   /// where the budget for them is zero. One per pass, interleaved with the
   /// drain, moves the same lines with none.
@@ -310,35 +309,34 @@ class HostLinkSession {
   LineBitmask input_word() const { return last_word_; }
   LineBitmask output_word() const { return runner_.driven_levels(); }
 
-  /// Lines the link layer threw away, for state_report. A link dropping lines
+  /// Frames the link layer threw away, for state_report. A link dropping frames
   /// should be visible to whoever is debugging the rig rather than inferred
   /// from trials that did not happen.
   uint32_t dropped_lines() const { return reader_.dropped(); }
 
  private:
-  void handle_line(const char* line, size_t n, Microseconds now_us);
-  void dispatch(const JsonObject& m, JsonSpan covered, uint16_t message_id,
-                Microseconds now_us);
+  void handle_frame(link::PayloadSpan payload, Microseconds now_us);
+  void dispatch(const link::HostMessage& m, link::PayloadSpan payload, Microseconds now_us);
 
   // One handler per host command. Each is responsible for sending exactly one
   // reply, which is what makes a retry decidable for the bridge.
-  void on_hello(const JsonObject& m, uint16_t message_id, Microseconds now_us);
-  void on_upload_message(const JsonObject& m, JsonSpan covered, uint16_t message_id,
-                         Microseconds now_us, MsgType type);
-  void on_configure(const JsonObject& m, uint16_t message_id, Microseconds now_us);
-  void on_start(const JsonObject& m, uint16_t message_id, Microseconds now_us);
-  void on_cancel(const JsonObject& m, uint16_t message_id, Microseconds now_us);
+  void on_hello(const link::Hello& m, uint16_t message_id, Microseconds now_us);
+  void on_upload_message(const link::HostMessage& m, link::PayloadSpan payload,
+                         Microseconds now_us);
+  void on_configure(const link::Configure& m, uint16_t message_id, Microseconds now_us);
+  void on_start(const link::Start& m, uint16_t message_id, Microseconds now_us);
+  void on_cancel(const link::Cancel& m, uint16_t message_id, Microseconds now_us);
   void on_ping(uint16_t message_id, Microseconds now_us);
-  void on_wiring(const JsonObject& m, uint16_t message_id);
-  void on_pins_request(const JsonObject& m, uint16_t message_id);
-  void on_autorun(const JsonObject& m, uint16_t message_id, Microseconds now_us);
+  void on_wiring(const link::Wiring& m, uint16_t message_id);
+  void on_pins_request(const link::Pins& m, uint16_t message_id);
+  void on_autorun(const link::Autorun& m, uint16_t message_id, Microseconds now_us);
   void on_save(uint16_t message_id);
 
   /// Apply `configure`'s `patch`, remembering what to put back. False and a
   /// refusal already sent if any entry is unusable -- and nothing is applied in
   /// that case, so a malformed patch cannot leave a trial running with half of
   /// one.
-  bool apply_distribution_patches(const JsonObject& m, uint16_t message_id);
+  bool apply_distribution_patches(const link::Configure& m, uint16_t message_id);
 
   /// Put every patched distribution back. Called when a trial ends, when
   /// another `configure` replaces the patches, and whenever a session resets --
@@ -353,10 +351,10 @@ class HostLinkSession {
   void send_error(uint16_t message_id, const char* code, const char* message,
                   const char* context);
 
-  /// A refusal of a line that never yielded a `message_id` -- too long, bad
-  /// crc, unparsable, or simply missing the member. It carries no
+  /// A refusal of a frame that never yielded a `message_id` -- too long, not
+  /// COBS, a bad crc, or protobuf that would not decode. It carries no
   /// `in_reply_to` because there is genuinely nothing to name, and it is not
-  /// remembered, because a line that did not identify itself cannot be
+  /// remembered, because a frame that did not identify itself cannot be
   /// recognised on a retry.
   ///
   /// Kept separate from send_error rather than signalled by passing 0: 0 is an
@@ -443,19 +441,42 @@ class HostLinkSession {
   void revert_timer_patch(Microseconds now_us);
 
   /// `timers`: which global timers may run. See GlobalTimerBank::set_enabled.
-  void on_timers(const JsonObject& m, uint16_t message_id, Microseconds now_us);
+  void on_timers(const link::Timers& m, uint16_t message_id, Microseconds now_us);
 
-  /// Finish, frame and send whatever is in the transmit buffer, remembering it
-  /// as the answer to `message_id` so a retry can be answered from the cache.
-  void send(JsonWriter& w, uint16_t message_id);
-  void send_unsolicited(JsonWriter& w);
+  /// Begin the next message this device sends: `tx_` cleared, its body set to
+  /// `which` -- one of the DeviceMessage `_tag` constants -- and returned for
+  /// the caller to fill.
+  link::DeviceMessage& compose(pb_size_t which);
+
+  /// Encode `tx_` into `payload_`, stamped with this device's next
+  /// `message_id`. Returns its length, or 0 if it did not encode -- which the
+  /// static_asserts on the generated sizes make a firmware bug rather than a
+  /// wire condition.
+  size_t encode_composed();
+
+  /// Frame `payload_len` bytes of `payload_` and hand them to the sink.
+  /// Returns the frame's length, which is in `frame_` until the next call.
+  size_t frame_and_send(size_t payload_len);
+
+  /// Send what compose() began, as the reply to `message_id`, remembering it so
+  /// a retry of that command is answered from the cache.
+  void send(uint16_t message_id);
+  /// Send what compose() began, answering nothing.
+  void send_unsolicited();
 
   ReplySink& out_;
   DeviceIdentity identity_;
 
-  char rx_[kMaxLine];
-  LineReader reader_;
-  char tx_[kMaxLine];
+  FrameReader reader_;
+  /// The command being handled, decoded. A member rather than a local because
+  /// it is the largest thing on this device's stack otherwise -- a graph_dist
+  /// carries two arrays of options -- and the handlers that read it run from
+  /// the foreground, which has the stack a board can least spare.
+  link::HostMessage rx_;
+  /// The message being built, for the same reason.
+  link::DeviceMessage tx_;
+  uint8_t payload_[kMaxPayload];
+  uint8_t frame_[kMaxFrame];
 
   /// One set, built in place by the builder. Two do not fit on a 32 KB board:
   /// see the note at the top of graph_builder.h for what that costs.
@@ -510,7 +531,7 @@ class HostLinkSession {
   /// the only way it learns the trial is in flight is an unsolicited `started`.
   /// Flagged rather than sent for the reason every other line on this device is
   /// flagged rather than sent: the edge is detected in the trial loop, which on
-  /// a board is the timer ISR, and send_line() spins there forever. Sent by
+  /// a board is the timer ISR, and send_frame() spins there forever. Sent by
   /// drain_outbound(), from the foreground.
   bool line_start_pending_ = false;
 
