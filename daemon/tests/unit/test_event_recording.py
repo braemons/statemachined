@@ -164,6 +164,13 @@ def test_a_name_that_is_not_a_file_name_is_refused(recorder) -> None:
             recorder.start(bad)
 
 
+def test_a_name_ending_in_a_newline_is_not_a_file_name(recorder) -> None:
+    """`re.match` with `$` also matches before a trailing newline, so this one
+    was taken -- and became a file name with a newline in it."""
+    with pytest.raises(BadRecordingName):
+        recorder.start("trailing\n")
+
+
 def test_reading_a_recording_nobody_made(recorder) -> None:
     with pytest.raises(RecordingNotInStore):
         recorder.manifest_of("never-happened")

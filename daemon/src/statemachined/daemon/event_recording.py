@@ -407,7 +407,9 @@ class EventRecorder:
 
     @staticmethod
     def _refuse_a_name_that_is_not_one(name: str) -> None:
-        if not NAME_PATTERN.match(name or ""):
+        # `fullmatch`, not `match`: with `$`, `match` also accepts a name that
+        # ends in a newline, and that would be in the file name.
+        if not NAME_PATTERN.fullmatch(name or ""):
             raise BadRecordingName(
                 f"{name!r} is not a usable recording name. It becomes a file name, so it must "
                 f"start with a letter or digit and hold only letters, digits, dot, dash and "
