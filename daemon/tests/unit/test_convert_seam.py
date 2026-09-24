@@ -514,6 +514,22 @@ def test_an_empty_string_is_a_setting_a_patch_can_make() -> None:
     )
 
 
+def test_a_graph_mode_the_daemon_does_not_have_is_refused_by_field() -> None:
+    """`graph_mode` is `set` or `per_trial`. The model's `Literal` is not
+    checked on assignment, so without this a patch of "banana" was kept and
+    reported back as the rig's mode."""
+    from statemachined._proto.statemachined.v1 import rig_configuration_pb2
+
+    with pytest.raises(Refused) as refused:
+        convert.rig_configuration_patch_from_wire(
+            rig_configuration_pb2.RigConfigurationPatch(graph_mode="banana")
+        )
+    assert refused.value.context == "graph_mode"
+    assert convert.rig_configuration_patch_from_wire(
+        rig_configuration_pb2.RigConfigurationPatch(graph_mode="per_trial")
+    ) == {"graph_mode": "per_trial"}
+
+
 def test_a_patch_can_only_reach_the_fields_that_may_change_while_running() -> None:
     """Everything else decides something that has already happened — where the
     trace ring lives, which port is bound."""

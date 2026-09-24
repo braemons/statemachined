@@ -19,6 +19,11 @@ from typing import Any
 
 from statemachined._proto.statemachined.v1 import rig_configuration_pb2
 
+from .trial import Refused
+
+#: What `RigConfiguration.graph_mode` may be.
+GRAPH_MODES = ("set", "per_trial")
+
 #: The fields a caller may change while the daemon runs. Everything else in the
 #: configuration decides something that has already happened — where the trace
 #: ring lives, which port is bound — and changing it would leave a daemon whose
@@ -71,7 +76,16 @@ def rig_configuration_patch_from_wire(
     question protobuf can only answer for a field that tracks presence — and
     `expected_board=""` is a real setting meaning "accept whatever answers".
     """
-    return {name: getattr(patch, name) for name in PATCHABLE if patch.HasField(name)}
+    changes = {name: getattr(patch, name) for name in PATCHABLE if patch.HasField(name)}
+    # Checked here because the model's `Literal` is not checked on
+    # assignment: a mode this daemon does not have would otherwise be kept,
+    # and reported back as the rig's.
+    if "graph_mode" in changes and changes["graph_mode"] not in GRAPH_MODES:
+        raise Refused(
+            f"graph_mode is {changes['graph_mode']!r}; it is one of: {', '.join(GRAPH_MODES)}",
+            context="graph_mode",
+        )
+    return changes
 
 
 def rig_configuration_update_to_wire(
