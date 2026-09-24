@@ -29,3 +29,10 @@ pub mod rig_configuration;
 pub mod store;
 pub mod web;
 pub mod wire;
+
+/// This build's version: what `make -C packaging` stamps in from the git tag,
+/// or the crate's own for a build from a checkout.
+pub const VERSION: &str = match option_env!("STATEMACHINED_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};

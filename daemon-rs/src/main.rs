@@ -132,10 +132,6 @@ async fn main() {
         }
     };
     log::info!("statemachined on {address}  (panels at /, gRPC and reflection on the same port)");
-    log::warn!(
-        "this is the Rust port: every rpc answers as the Python daemon does, and it has not \
-         yet run a session on a rig"
-    );
 
     // **axum and tonic on one listener**, exactly as mousewheeld does it. Each
     // service registers its own path — `/statemachined.v1.State/…` — so no
@@ -195,7 +191,7 @@ async fn main() {
         let address = format!("{}:{}", arguments.bind, port.saturating_add(1));
         match tokio::net::TcpListener::bind(&address).await {
             Ok(listener) => {
-                log::info!("and on {address}, where the Python daemon served gRPC");
+                log::info!("and on {address}, which clients dial when told only a host");
                 Some(listener)
             }
             Err(problem) => {
@@ -225,7 +221,7 @@ async fn main() {
         let mut advertisement = statemachined::mdns_service_advertisement::MdnsServiceAdvertisement::new(
             port,
             &state.configuration().device_target,
-            env!("CARGO_PKG_VERSION"),
+            statemachined::VERSION,
         );
         advertisement.start();
         advertisement
