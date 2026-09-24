@@ -21,53 +21,22 @@ check-core:                 ## enforce the portable core's constraints
 	@./tools/check-core-purity.sh
 
 .PHONY: check-proto
-# Two things, and they fail for different reasons.
+# **protoc** catches a `.proto` that does not parse: `proto/statemachined/v1/` is
+# this daemon's interface -- types *and* rpcs, hand-authored
+# (`contracts/DAEMON_LAYOUT.md`) -- and `proto/statemachined/link/v1/` is the
+# board's. The generated code for each is committed and compared against a fresh
+# generation: the board's here, the daemon's in `rust-check-proto`, the Python
+# client's in `make client`.
 #
-# **protoc** catches a `.proto` that does not parse. `proto/statemachined/v1/`
-# is this daemon's interface — types *and* rpcs, hand-authored
-# (`contracts/DAEMON_LAYOUT.md`) — and nothing generates from it yet, so this
-# is the only thing holding it to being valid protobuf.
-#
-# **check_outcomes.py** catches a copy of the `.tdr` taxonomy that drifted.
-# `proto/braemons/v1/` is that taxonomy, vendored byte-identically from
-# `contracts/vendored/proto/` because neither this daemon nor triald owns it;
-# the checker holds the firmware enum, the Python enum and the graph editor's
-# menu to it, reading all four as text so it runs with nothing installed.
-# `proto/statemachined/v1/` is the interface; this is what turns it into the
-# types the daemon works in. The output is **committed**, so a checkout builds
-# with no protoc and an interface change arrives as a diff a reviewer can read
-# (`contracts/DAEMON_LAYOUT.md`).
-#
-# **The import rewrite is why this is a target and not a command.** protoc
-# roots a generated module's imports at the proto path, so the stubs reach each
-# other as `from statemachined.v1 import ...` — and `statemachined` is this
-# package, so that resolves only through a `__path__` trick no static checker
-# can follow. It cannot work at all for `from braemons.v1 import ...`, which
-# has no package here to hang off. One sed over three file kinds fixes both,
-# and `check-proto` compares the rewritten output so nothing drifts back.
-PROTO_OUT := daemon/src/statemachined/_proto
-PROTOS    := $(wildcard proto/statemachined/v1/*.proto) $(wildcard proto/braemons/v1/*.proto)
+# The `.tdr` taxonomy, `proto/braemons/v1/`, is vendored byte-identically from
+# `contracts/vendored/proto/` because neither this daemon nor triald owns it.
+# `daemon-rs/tests/outcomes.rs` holds the firmware enum and the graph editor's
+# menu to it.
 
-.PHONY: proto generate-into
-proto:                      ## regenerate daemon/src/statemachined/_proto/ from proto/
-	@$(MAKE) --no-print-directory generate-into OUT=$(PROTO_OUT)
-	@echo "$(PROTO_OUT)/"
-
-generate-into:
-	@mkdir -p $(OUT)
-	@uv run --project daemon --group dev python -m grpc_tools.protoc \
-	  --proto_path=proto \
-	  --python_out=$(OUT) --pyi_out=$(OUT) --grpc_python_out=$(OUT) \
-	  $(PROTOS)
-	@find $(OUT) -name '*.py' -o -name '*.pyi' | xargs sed -i \
-	  -e 's/^from statemachined\.v1 import /from statemachined._proto.statemachined.v1 import /' \
-	  -e 's/^from braemons\.v1 import /from statemachined._proto.braemons.v1 import /'
-
-# **The browser's protobuf client is generated and committed**, like
-# daemon/src/statemachined/_proto/ and for the same reason: a checkout runs
-# with uv alone. `packaging/Makefile` copies `client/web/` into the wheel, so a
-# bundle produced at package time would make npm a build dependency of every
-# release. `npm ci` installs exactly what package-lock.json pins, so the bundle
+# **The browser's protobuf client is generated and committed**, like the
+# daemon's wire types and for the same reason: a checkout builds without the
+# generator. The daemon embeds `client/web/`, so a bundle produced at build time
+# would make npm a build dependency of every release. `npm ci` installs exactly what package-lock.json pins, so the bundle
 # is reproducible; `check-web` is what holds it to the proto.
 .PHONY: web check-web
 web:                        ## regenerate client/web/elements/daemon_api_client.js from proto/
@@ -94,7 +63,7 @@ check-web:                  ## fail if the committed browser client is not what 
 client:                     ## the Python client's checks: its stubs, ruff, ty, both suites
 	@$(MAKE) --no-print-directory -C client/python check
 
-check-proto:                ## the proto compiles, and every copy of the taxonomy agrees
+check-proto:                ## the protos compile, and the board's generated code is current
 	@protoc --proto_path=proto --descriptor_set_out=/dev/null \
 	  proto/statemachined/v1/*.proto proto/braemons/v1/*.proto \
 	  proto/statemachined/link/v1/*.proto
@@ -110,19 +79,6 @@ check-proto:                ## the proto compiles, and every copy of the taxonom
 	}
 	@rm -rf build/firmware-proto-check
 	@echo "  proto: $$(grep -c '^  rpc ' proto/statemachined/v1/service.proto) rpcs in $$(grep -c '^service ' proto/statemachined/v1/service.proto) services"
-	@# Against a fresh generation rather than against git: a *new* generated
-	@# file is untracked, and `git diff` says nothing at all about an untracked
-	@# file — which is exactly when a generator is least trusted.
-	@rm -rf build/proto-check
-	@$(MAKE) --no-print-directory generate-into OUT=build/proto-check
-	@diff -r -x '__pycache__' build/proto-check $(PROTO_OUT) >/dev/null || { \
-	  echo "$(PROTO_OUT)/ is not what proto/ produces — the interface changed:"; \
-	  diff -rq -x '__pycache__' build/proto-check $(PROTO_OUT) || true; \
-	  echo "run 'make proto' and commit the result with the change that caused it."; \
-	  exit 1; \
-	}
-	@rm -rf build/proto-check
-	@python3 tools/check_outcomes.py
 
 # The link proto is generated for the board with nanopb and committed, like the
 # daemon's stubs: a board build needs no protoc and a wire change arrives as a
@@ -174,31 +130,25 @@ export STATEMACHINED_FIRMWARE_VERSION
 firmware:                   ## build for the reference board
 	pio run -e $(BOARD)
 
-# Emulation. Covers what the host build cannot compile -- the pin map, the port
-# registers, the timer ISR, the protocol over a real UART -- and says nothing
-# about timing. See emulation/README.md.
+# Emulation: emulation/ holds the Renode platform the reference board runs
+# under, for poking at the HAL by hand. It has no test suite: the Robot suite
+# that was here spoke the board's NDJSON wire from Python, and went with both.
+# See emulation/README.md.
 RENODE_VERSION ?= 1.16.1
-
-.PHONY: emulate
-emulate:                    ## run the firmware under Renode, in Robot tests
-	pio run -e $(BOARD)_sci
-	renode-test emulation/tests/statemachined.robot
 
 .PHONY: upload
 upload:                     ## flash the reference board
 	pio run -e $(BOARD) -t upload
 
-# The bench instrument docs/operations/bringup.md §4 and §5 ask for. Its one dependency
-# (pyserial) lives in daemon/pyproject.toml's `device` extra rather than in whichever
-# python3 is on PATH, so `uv run --project` builds an environment for it on
-# first use and neither renode-test's interpreter nor the uv-tool sandboxes
-# above notice. TARGET is a device path, a host:port, or any pyserial URL --
-# the same tool reaches a board on a network as reaches one on a cable.
+# Talking to a board from a terminal is the client's job, through the daemon:
+# `statemachinectl`, from client/python. `make bench` runs a daemon in front of
+# TARGET, and this asks it things. TARGET is a device path, a host:port, or a
+# socket:// URL -- the same daemon reaches a board on a network as on a cable.
 TARGET ?= /dev/ttyACM0
 
 .PHONY: bringup
-bringup:                    ## talk to a board: make bringup ARGS="state"
-	uv run --project daemon statemachined -t $(TARGET) $(ARGS)
+bringup:                    ## ask the bench daemon something: make bringup ARGS="device"
+	uv run --project client/python statemachinectl --rig $(BENCH_HOST):$(BENCH_PORT) $(ARGS)
 
 # The firmware's own session and engine, built for this machine. Named by the
 # integration tests' skip message and by the bench, both of which are useless
@@ -222,7 +172,7 @@ integration-device:         ## build build/statemachined_native_device on its ow
 # deleting a graph or a state-machine config in the web UI must not delete an
 # example from the repository. Copied only when absent, so an edit made on the
 # bench survives the next `make bench`.
-BENCH_CONFIG    ?= daemon/bench/statemachined_bench_rig_config.toml
+BENCH_CONFIG    ?= tools/bench/statemachined_bench_rig_config.toml
 BENCH_STORE     := build/bench/graphs
 BENCH_CONFIGS   := build/bench/configs
 BENCH_HOST      ?= 127.0.0.1
@@ -237,124 +187,24 @@ bench:                      ## the daemon + web UI against a device: make bench 
 	@for config in configs/*.config.json; do \
 	  [ -f "$(BENCH_CONFIGS)/$$(basename $$config)" ] || cp "$$config" $(BENCH_CONFIGS)/; \
 	done
-	uv run --project daemon statemachined -t $(TARGET) serve \
+	cargo run --quiet --manifest-path daemon-rs/Cargo.toml -- serve -t $(TARGET) \
 	  --config $(BENCH_CONFIG) \
 	  --host $(BENCH_HOST) --port $(BENCH_PORT) $(ARGS)
 
 # The other half of the no-board path: the firmware's own session and engine,
 # built for this machine, on a TCP port the daemon can dial. Not a mock -- see
-# the file's docstring, and daemon/tests/integration/conftest.py, which is the
-# same bridge.
+# daemon-rs/src/native_device_on_a_socket.rs.
 #
-# `statemachined device` rather than a script under daemon/bench/, because the
-# bridge ships: an operator who has installed the package and has no board runs
-# the identical command. From here it finds $(BUILD)/statemachined_native_device;
-# from a package, the binary beside the vendored interpreter.
+# `statemachined device` because the bridge ships: an operator who has
+# installed the package and has no board runs the identical command.
 .PHONY: bench-device
 bench-device: integration-device  ## the native device on socket://127.0.0.1:5300
 	STATEMACHINED_NATIVE_DEVICE=$(abspath $(BUILD))/statemachined_native_device \
-	  uv run --project daemon statemachined device $(ARGS)
+	  cargo run --quiet --manifest-path daemon-rs/Cargo.toml -- device $(ARGS)
 
-# The only tests in this repository that need hardware. Everything else -- the
-# core on the host, the HAL under Renode -- runs in CI with no board attached,
-# and neither can answer what this does: the achieved scan rate, what a command
-# costs the scan, a drawn duration against a real clock, and a predicate driven
-# from real pins.
-#
-# Deliberately NOT part of `make ci`. A target that fails on every machine
-# without a board attached is a target people learn to ignore.
-#
-# Greeting the board takes the rig, which this cannot avoid: the greeting is
-# what hands over. A board that was running on its own stops.
-.PHONY: test-hardware
-test-hardware:              ## the suite that needs a board: make test-hardware TARGET=...
-	uv run --project daemon --group test \
-	  pytest daemon/tests/hardware --target=$(TARGET) $(ARGS)
-
-# The Python tests that need no board, part of `make ci`. All three tiers of the
-# package -- the documents, the two ways to drive a board, and the daemon.
-#
-# tests/unit is arithmetic and translation with nothing attached: the framing,
-# which exists three times in this tree and would otherwise drift silently; the
-# compiler, checked message by message against docs/reference/protocol.md; and the client's
-# own half of every call, against a mock transport.
-#
-# tests/integration drives whole sessions against build/statemachined_native_device,
-# which is the firmware's own session and engine built for this machine -- once
-# through `StatemachinedDevice`, once through the daemon's API, and once through
-# the client in front of that daemon.
-#
-# tests/runs drives whole sessions of several trials through *both* ways of
-# driving a rig -- the daemon's HTTP API and StatemachinedDevice -- against a far
-# end that is either the native device or a board. The same tests run both ways
-# and against both far ends, which is what makes `make test-runs-hardware` a
-# re-run rather than a different suite. The paradigms wait on input lines, and
-# the native device supplies them through a software loopback harness
-# (STATEMACHINED_LOOPBACK); on a board it is eight jumper wires.
-#
-# tests/e2e starts `statemachined serve` and `statemachined device` as
-# subprocesses and talks to them over a socket. It is the only place the shipped
-# commands are run the way an operator runs them, and the only place uvicorn's
-# WebSocket support is exercised at all -- plain uvicorn answers an upgrade with
-# a 404, and every in-process test passes regardless.
-#
-# All three skip themselves when the native device is not built, so this target
-# is safe to run before `make test`; `make ci` runs `make test` first.
-.PHONY: test-python
-test-python:                ## the Python tests that need no board
-	uv run --project daemon --group test pytest \
-	  daemon/tests/unit daemon/tests/integration daemon/tests/e2e daemon/tests/runs $(ARGS)
-
-# The tiers on their own, for a feedback loop that matches what you are editing.
-.PHONY: test-unit
-test-unit:                  ## host-only: no daemon, no device, no socket
-	uv run --project daemon --group test pytest daemon/tests/unit $(ARGS)
-
-.PHONY: test-integration
-test-integration: test      ## build the native device, then drive whole sessions against it
-	uv run --project daemon --group test pytest daemon/tests/integration $(ARGS)
-
-.PHONY: test-runs
-test-runs: test             ## whole sessions, both API paths, against the host build
-	uv run --project daemon --group test pytest daemon/tests/runs $(ARGS)
-
-# The same tests as `test-runs`, with a board on the other end instead of the
-# host build. Not part of `make ci` for the same reason `test-hardware` is not:
-# a target that fails on every machine without a board is one people learn to
-# ignore. Needs the eight-wire loopback harness -- docs/operations/hardware.md -- and skips
-# the paradigms that wait on a line, with the wiring list, when it is not there.
-.PHONY: test-runs-hardware
-test-runs-hardware:         ## the same sessions against a board: make test-runs-hardware TARGET=...
-	uv run --project daemon --group test \
-	  pytest daemon/tests/runs --target=$(TARGET) $(ARGS)
-
-.PHONY: test-e2e-local
-test-e2e-local: test        ## the shipped commands, two processes and a socket
-	uv run --project daemon --group test pytest daemon/tests/e2e $(ARGS)
-
-# **Not part of `make ci`, and that is a statement about this tree rather than
-# about linting.** Ruff arrived with the client, which was written clean against
-# it; the rest of the Python predates it by a year and reports about 160
-# findings, nearly all of them line length and `raise ... from` inside an
-# `except`. None is a defect -- they were checked -- and clearing them is a
-# diff across every route in the daemon, which is somebody's afternoon and not a
-# side effect of moving directories. Until that afternoon happens this is a
-# target you run, not a gate that fails.
-.PHONY: lint-python
-lint-python:                ## ruff over the package and its tests (reports pre-existing debt)
-	uv run --project daemon --group dev ruff check daemon
-
-.PHONY: typecheck
-typecheck:                  ## ty over the package
-	uv run --project daemon --group dev ty check --project daemon
-
-# The trial loop across both daemons is **not** here. It lives in the contracts
-# repo (`rig/`, and `make rig-local` runs it against local checkouts), with the
-# other tests that are about more than one daemon. Running it from here meant
-# installing triald to test this daemon -- a dependency group naming another
-# repository, and a lockfile pin on its main branch -- for a test that is not
-# about this daemon alone. Nothing in this package imports triald or knows it
-# exists, and now nothing in its build does either.
+# The trial loop across the daemons is **not** here. It lives in the contracts
+# repo (`e2e-tests/`), with the other tests that are about more than one
+# daemon; `make e2e` below runs it against this checkout.
 
 # Pinned to match .github/workflows/ci.yml. clang-format's output changes
 # between major versions, and `BasedOnStyle: Google` in .clang-format resolves
@@ -522,16 +372,12 @@ docs-build:                 ## build the static docs site to site/
 # Everything CI runs, in the order it runs it, minus the toolchain installs.
 # The point is that a red build can be reproduced with one command.
 .PHONY: ci
-ci: check-core check-proto test sanitize golden format-check test-python firmware  ## everything CI runs, except emulation
+ci: check-core check-proto test sanitize golden format-check rust-check client firmware  ## everything CI runs
 
-# -- the Rust port ---------------------------------------------------------
-#
-# `daemon/` is the Python daemon that runs on rigs; `daemon-rs/` is what
-# replaces it (RUST_REWRITE_PLAN.md). Until every rpc is ported the two are not
-# interchangeable, so these are their own targets and are not in `ci` yet.
+# -- the daemon -------------------------------------------------------------
 
 .PHONY: rust
-rust:  ## build the Rust daemon
+rust:  ## build the daemon
 	cargo build --manifest-path daemon-rs/Cargo.toml
 
 .PHONY: rust-proto
@@ -547,43 +393,37 @@ rust-check-proto:  ## fail if the committed wire types are not what proto/ produ
 	  exit 1; \
 	}
 
-.PHONY: rust-corpus
-rust-corpus:  ## regenerate the document corpus the two implementations are compared on
-	@uv run --project daemon python tools/document_corpus.py
-	@uv run --project daemon python tools/graph_set_cases.py
-
+# Needs the native device: the upload test commits every compiled set to the
+# firmware built for this machine, and skips, saying so, without it.
 .PHONY: rust-test
-rust-test: rust-corpus  ## the Rust tests, against a freshly generated corpus
+rust-test: integration-device  ## the daemon's tests
 	cargo test --manifest-path daemon-rs/Cargo.toml
 
 .PHONY: rust-check
-rust-check: rust rust-check-proto rust-test  ## everything the Rust side checks
+rust-check: rust rust-check-proto rust-test  ## everything the daemon checks
 	cargo clippy --manifest-path daemon-rs/Cargo.toml --all-targets -- -D warnings
 
-# The family's e2e suite -- contracts/e2e-tests, the acceptance test for the
-# cutover -- against the Rust daemon, unmodified. `test-local` installs the three
-# checkouts into the suite's environment (and collects, so nothing runs twice);
-# then the suite runs with tools/e2e_rust/ first on PATH, where `statemachined
-# serve` starts the Rust binary and everything else is the Python command.
-E2E ?= ../contracts/e2e-tests
+# The family's e2e suite -- contracts/e2e-tests -- against this checkout: the
+# daemon cargo builds, first on PATH, and the native device from build/. The
+# suite's environment gets triald's daemon and the two clients from the
+# checkouts beside this one; statemachined has no Python to install.
+E2E     ?= ../contracts/e2e-tests
+TRIALD  ?= ../triald
+VSTIMD  ?= ../vstimd
 
-.PHONY: e2e-rust
-e2e-rust: rust integration-device  ## the family's e2e suite, with the Rust daemon serving
-	$(MAKE) -C $(E2E) test-local ARGS="--collect-only -q" >/dev/null
+.PHONY: e2e
+e2e: rust integration-device  ## the family's e2e suite, against this checkout
+	cd $(E2E) && uv sync --quiet --group dev
+	@printf 'statemachined-client @ file://%s\n' "$(abspath client/python)" > $(E2E)/.local-overrides.txt
+	cd $(E2E) && uv pip install --quiet --overrides .local-overrides.txt \
+	  -e "$(abspath $(TRIALD))/daemon[serve]" \
+	  -e $(abspath client/python) \
+	  -e $(abspath $(VSTIMD))/client/python
 	cd $(E2E) && \
-	  STATEMACHINED_RUST=$(abspath target/debug/statemachined) \
-	  STATEMACHINED_PYTHON=$$(pwd)/.venv/bin/statemachined \
-	  VSTIMD_BINARY=$(abspath ../vstimd)/target/release/vstimd \
+	  VSTIMD_BINARY=$(abspath $(VSTIMD))/target/release/vstimd \
 	  STATEMACHINED_NATIVE_DEVICE=$(abspath $(BUILD))/statemachined_native_device \
-	  PATH=$(abspath tools/e2e_rust):$$(pwd)/.venv/bin:$$PATH \
+	  PATH=$(abspath target/debug):$$(pwd)/.venv/bin:$$PATH \
 	  .venv/bin/python -m pytest -v $(ARGS)
-
-.PHONY: ported
-ported:  ## how much of the API the Rust daemon answers
-	@total=$$(grep -c 'async fn ' daemon-rs/src/wire/service/statemachined.v1.rs); \
-	left=$$(grep -c 'unported!("' daemon-rs/src/grpc/mod.rs); \
-	echo "$$((total - left))/$$total rpcs ported, $$left to go"
-
 
 .PHONY: clean
 clean:

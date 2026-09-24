@@ -5,10 +5,7 @@
 //! it: an rpc with no implementation does not compile. During the port the
 //! unfinished ones answered `UNIMPLEMENTED` through an `unported!` macro, and
 //! `make ported` counted them; every one now has a body, held to the Python
-//! daemon's answers by `tools/compare_daemons.py`.
-//!
-//! The Python daemon in `daemon/` stays the one on rigs until this one has run
-//! a real session (`dev/RUST_PORT.md` §5.2, §8.1).
+//! daemon's answers by `tools/compare_daemons.py` until that daemon was retired.
 
 use std::sync::Arc;
 

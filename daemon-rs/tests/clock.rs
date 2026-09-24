@@ -6,7 +6,8 @@
 //! plan said to check it against recordings the Python daemon made; there are
 //! no recent ones, and a sweep is the better instrument anyway. A recording
 //! covers whatever happened on some Tuesday — the straight line through the
-//! middle. `tools/clock_trace.py` covers what the arithmetic actually turns on:
+//! middle. `clock_trace.json`, written by a sweep over the Python daemon's
+//! arithmetic before it was retired, covers what the arithmetic actually turns on:
 //! the wrap boundary from both sides, a backwards jump just under the
 //! threshold, a jump of exactly the threshold, several wraps in a row, a ping
 //! worse than the one before it, a round trip that rounds rather than
@@ -56,7 +57,7 @@ struct Estimate {
 
 fn trace() -> Vec<Step> {
     serde_json::from_str(include_str!("clock_trace.json"))
-        .expect("the trace tools/clock_trace.py writes")
+        .expect("clock_trace.json, recorded from the Python daemon")
 }
 
 #[test]

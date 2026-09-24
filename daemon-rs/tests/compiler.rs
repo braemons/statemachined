@@ -4,8 +4,8 @@
 //! **The upload is where a wrong index stops being visible.** A mask one bit
 //! out, a target one state out, a distribution at pool entry 2 instead of 3:
 //! each is a valid message, uploads cleanly, and runs a different experiment.
-//! The device validates shape, not intent. So `tools/graph_set_cases.py` records
-//! every message Python would send, and this checks that Rust sends the same
+//! The device validates shape, not intent. So `graph_set_cases.json` holds
+//! every message Python would send, recorded before that daemon was retired, and this checks that Rust sends the same
 //! ones, in the same order, with the same fields — and builds the same tables a
 //! result is read back through.
 //!
@@ -95,7 +95,7 @@ impl From<&CompiledGraphSet> for Compiled {
 
 fn cases() -> Vec<Case> {
     serde_json::from_str(include_str!("graph_set_cases.json"))
-        .expect("the cases tools/graph_set_cases.py writes")
+        .expect("graph_set_cases.json, recorded from the Python daemon")
 }
 
 fn compile(case: &Case) -> Result<CompiledGraphSet, CompileError> {

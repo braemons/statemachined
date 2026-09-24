@@ -8,8 +8,8 @@
 //!
 //! So this is the one place in the device layer where a disagreement between the
 //! two daemons would stay invisible until it mattered, and it gets the same
-//! treatment the documents got: `tools/line_map_cases.py` records what Python
-//! says, and this checks that Rust says it too.
+//! treatment the documents got: `line_map_cases.json` and `wiring_cases.json`
+//! hold what Python said, recorded before that daemon was retired, and this checks that Rust says it too.
 
 use serde::Deserialize;
 use statemachined::device::device_pin_map::DevicePinMap;
@@ -46,7 +46,7 @@ struct ResolvedLine {
 
 fn cases() -> Vec<Case> {
     serde_json::from_str(include_str!("line_map_cases.json"))
-        .expect("the cases tools/line_map_cases.py writes")
+        .expect("the cases recorded from the Python daemon")
 }
 
 #[test]
@@ -181,7 +181,7 @@ struct WiringFields {
 
 fn wiring_cases() -> Vec<WiringCase> {
     serde_json::from_str(include_str!("wiring_cases.json"))
-        .expect("the cases tools/line_map_cases.py writes")
+        .expect("the cases recorded from the Python daemon")
 }
 
 #[test]

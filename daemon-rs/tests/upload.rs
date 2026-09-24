@@ -8,8 +8,8 @@
 //!
 //! Two checks, because they catch different things:
 //!
-//! * `tools/graph_set_cases.py` records every message Python uploaded for each
-//!   compiled case. What a board decodes off a real socket has to be those
+//! * `graph_set_cases.json` holds every message Python uploaded for each
+//!   compiled case, recorded before that daemon was retired. What a board decodes off a real socket has to be those
 //!   messages, and `set_end` has to carry the fold of the bytes that arrived.
 //! * `build/statemachined_native_device` — the firmware's own session and
 //!   engine, built for this machine — has to answer `set_ok`. That is the
@@ -65,7 +65,7 @@ struct PythonMessage {
 
 fn compiled_cases() -> Vec<(Case, Vec<PythonMessage>)> {
     let cases: Vec<Case> = serde_json::from_str(include_str!("graph_set_cases.json"))
-        .expect("the cases tools/graph_set_cases.py writes");
+        .expect("graph_set_cases.json, recorded from the Python daemon");
     cases
         .into_iter()
         .filter_map(|mut case| {

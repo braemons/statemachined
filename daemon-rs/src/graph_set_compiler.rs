@@ -29,7 +29,8 @@
 //!   last.
 //!
 //! **This is a port.** The wire bodies are checked, message by message, against
-//! what `tools/graph_set_cases.py` records the Python daemon producing — see
+//! what the Python daemon produced, recorded in `tests/graph_set_cases.json`
+//! before it was retired — see
 //! `tests/compiler.rs`. A message this produces that the Python one would not is
 //! a disagreement about the protocol, because the device validates both.
 

@@ -23,7 +23,7 @@ from .daemon_refusals import (
 )
 
 #: Where the daemon puts the refusal as itself. See
-#: `daemon/src/statemachined/daemon/api/servicers/refusals.py`.
+#: `daemon-rs/src/grpc/refusal.rs`.
 REFUSAL_METADATA_KEY = "statemachined-error-bin"
 
 #: A `TypeVar` rather than PEP 695's `def call[T]`, because this package

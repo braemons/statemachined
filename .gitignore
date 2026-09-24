@@ -59,3 +59,4 @@ report.html
 # committed generated artifact -- server reflection is how grpcurl and a client
 # discover this daemon's services -- so it is excepted by name.
 !daemon-rs/src/wire/descriptor_for_reflection.bin
+!daemon-rs/src/wire/link_descriptor.bin

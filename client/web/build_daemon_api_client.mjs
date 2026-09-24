@@ -3,10 +3,10 @@
 // Generates the browser's protobuf types from `proto/` and bundles the network
 // module the panels import.
 //
-// **The bundle is committed**, for the same reason `daemon/src/statemachined/_proto/`
-// is: a checkout runs with uv alone. `packaging/Makefile` copies `client/web/`
-// into the wheel, so a bundle produced at package time would make npm a build
-// dependency of every release, and of every rig that builds one. It is not.
+// **The bundle is committed**, for the same reason `daemon-rs/src/wire/` is: a
+// checkout builds without the generator. The daemon embeds `client/web/`, so a
+// bundle produced at build time would make npm a build dependency of every
+// release, and of every rig that builds one. It is not.
 // `npm ci` installs exactly what package-lock.json pins, so the bundle is
 // reproducible; `make check-web` is what holds it to the proto.
 //

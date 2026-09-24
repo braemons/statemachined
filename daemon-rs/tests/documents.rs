@@ -8,7 +8,8 @@
 //! forget — a port that accepted everything would pass a round-trip test and
 //! lose every rule in `graph_definition.py`.
 //!
-//! `tools/document_corpus.py` writes `document_corpus.json`: the real graphs in
+//! `graph_corpus.json` and `config_corpus.json`, recorded from the Python
+//! daemon before it was retired, hold the real graphs in
 //! `graphs/`, plus one systematic mutation per refusal rule, each with what the
 //! Python implementation said about it. This checks that the Rust
 //! implementation says the same.
@@ -38,12 +39,12 @@ struct Case {
 
 fn graphs() -> Vec<Case> {
     serde_json::from_str(include_str!("graph_corpus.json"))
-        .expect("the corpus tools/document_corpus.py writes")
+        .expect("the corpus recorded from the Python daemon")
 }
 
 fn configs() -> Vec<Case> {
     serde_json::from_str(include_str!("config_corpus.json"))
-        .expect("the corpus tools/document_corpus.py writes")
+        .expect("the corpus recorded from the Python daemon")
 }
 
 /// Both corpora, each with the parser that owns it.

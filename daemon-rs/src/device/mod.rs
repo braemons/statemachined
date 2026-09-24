@@ -6,9 +6,8 @@
 //! same problem — a board on a serial line, framed messages, a request/response
 //! session — in the same family, in Rust.
 //!
-//! The framing is checked against `daemon/tests/unit/wire_vectors.json`, which
-//! is golden against the firmware's own CRC rather than against any host
-//! implementation.
+//! The framing is checked against the published COBS and CRC vectors, and end to
+//! end against the firmware built for this machine (`tests/upload.rs`).
 
 pub mod board_pin_labels;
 pub mod device_clock_correlation;
