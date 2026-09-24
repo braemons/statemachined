@@ -43,7 +43,7 @@ echo "$bad_includes" | while IFS= read -r line; do
 done > /tmp/statemachined-bad-includes.$$ || true
 
 if [ -s /tmp/statemachined-bad-includes.$$ ]; then
-  report 'firmware/core may include only <cstdint> and <cstddef>:'
+  report 'firmware/core may include only <cstdint>, <cstddef> and nanopb:'
   cat /tmp/statemachined-bad-includes.$$ >&2
 fi
 rm -f /tmp/statemachined-bad-includes.$$
