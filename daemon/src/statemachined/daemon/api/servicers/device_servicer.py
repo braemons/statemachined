@@ -159,11 +159,17 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
 
         return await answering(context, body)
 
+    def _graph_names_by_slot(self) -> list[str]:
+        committed = self.service.supervisor.committed_graph_set
+        return [graph.name for graph in committed.graphs_by_slot] if committed else []
+
     async def ReadAutorun(self, request, context):
         def body():
             if not self.service.supervisor.is_connected:
                 raise no_board_attached("autorun is the board's own setting")
-            return convert.autorun_to_wire(self.service.read_autorun())
+            return convert.autorun_to_wire(
+                self.service.read_autorun(), graph_names_by_slot=self._graph_names_by_slot()
+            )
 
         return await answering(context, body)
 
@@ -174,7 +180,8 @@ class DeviceServicer(service_pb2_grpc.DeviceServicer):
             return convert.autorun_to_wire(
                 self.service.set_autorun(
                     request.enabled, **convert.autorun_request_from_wire(request)
-                )
+                ),
+                graph_names_by_slot=self._graph_names_by_slot(),
             )
 
         return await answering(context, body)

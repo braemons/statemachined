@@ -498,6 +498,32 @@ def test_the_recordings_list_separates_the_one_being_written() -> None:
     assert not convert.recordings_to_wire([], active=None).HasField("active")
 
 
+# -- autorun ----------------------------------------------------------------------
+
+
+def test_autorun_names_its_graph_from_the_slot_the_board_reports() -> None:
+    """The board says `graph_index` and knows no names; the proto promises the
+    name "where this daemon can say it", from the committed set. The seam read
+    `slot` and `graph`, which the board never sends, so every answer was slot 0
+    and no graph at all."""
+    reply = {"enabled": True, "active": False, "graph_index": 1, "cap_ms": 5000,
+             "next_trial_id": 100}
+    message = convert.autorun_to_wire(reply, graph_names_by_slot=["go-nogo", "timed-walk"])
+    assert message.slot == 1
+    assert message.graph_name == "timed-walk"
+
+
+def test_autorun_says_no_name_where_it_cannot_say_one() -> None:
+    """No committed set, a slot past its end, or autorun off: a name then would
+    be a guess, and an empty one is the proto's way of not guessing."""
+    reply = {"enabled": True, "graph_index": 3}
+    assert convert.autorun_to_wire(reply, graph_names_by_slot=[]).graph_name == ""
+    assert convert.autorun_to_wire(reply, graph_names_by_slot=["a"]).graph_name == ""
+    off = {"enabled": False, "graph_index": 0}
+    assert convert.autorun_to_wire(off, graph_names_by_slot=["a"]).graph_name == ""
+    assert convert.autorun_to_wire(reply, graph_names_by_slot=["a"]).slot == 3
+
+
 # -- the rig configuration ------------------------------------------------------
 
 

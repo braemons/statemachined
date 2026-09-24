@@ -273,17 +273,25 @@ def firmware_versions_to_wire(comparison: dict) -> device_pb2.FirmwareVersions:
     )
 
 
-def autorun_to_wire(reply: dict) -> device_pb2.Autorun:
+def autorun_to_wire(reply: dict, *, graph_names_by_slot: list[str] = ()) -> device_pb2.Autorun:
     """What the board would do on its own.
 
     `enabled` and `active` are not the same fact (`protocol.md` §3.7): a board
     can be configured to arm its own trials and not be doing so right now.
+
+    **The board says `graph_index` and knows no names.** The name comes from
+    the committed set, by slot, where there is one and autorun is on -- and is
+    left empty otherwise rather than guessed. `seed` stays zero: the board does
+    not report the seed it holds.
     """
+    slot = _int(reply, "graph_index")
+    enabled = bool(reply.get("enabled"))
+    named = enabled and 0 <= slot < len(graph_names_by_slot)
     return device_pb2.Autorun(
-        enabled=bool(reply.get("enabled")),
+        enabled=enabled,
         active=bool(reply.get("active")),
-        graph_name=_text(reply, "graph"),
-        slot=_int(reply, "slot"),
+        graph_name=graph_names_by_slot[slot] if named else "",
+        slot=slot,
         cap_milliseconds=_int(reply, "cap_ms"),
         seed=_int(reply, "seed"),
         next_trial_id=_int(reply, "next_trial_id"),
