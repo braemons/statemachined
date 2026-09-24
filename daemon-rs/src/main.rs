@@ -14,13 +14,21 @@ use statemachined::wire;
 struct Arguments {
     /// The port the panels and the rpcs share.
     ///
-    /// **One port, where the Python daemon needs two.** `grpc.aio` owns its
-    /// socket and uvicorn cannot speak gRPC, so that daemon serves the panels
-    /// on `port` and gRPC on `port + 1`. tonic is a tower service and merges
-    /// into the axum router, so this one does not — which is the whole of
-    /// `grpc_port_for`, deleted.
+    /// **One port is all this daemon needs**, where the Python one needs two:
+    /// `grpc.aio` owns its socket, so that daemon serves the panels on `port`
+    /// and gRPC on `port + 1`. tonic is a tower service and merges into the
+    /// axum router, so everything is on `port` here.
     #[arg(long, default_value_t = 8081)]
     port: u16,
+
+    /// Serve the same thing on `port + 1` as well, as the Python daemon's gRPC
+    /// port is. On by default, **for the cutover**: `statemachined-client`
+    /// dials 8082 when told nothing, triald's executor setting names it, and
+    /// the plan is that nothing which talks to this daemon changes when the
+    /// daemon does (`dev/RUST_PORT.md` §2, §6). Dropping the second port is a
+    /// family decision to take afterwards, in `contracts/DAEMON_LAYOUT.md`.
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    serve_on_the_next_port_too: bool,
 
     /// Bind address. Loopback on a development box; a rig's unit binds the rig
     /// network.
@@ -148,15 +156,53 @@ async fn main() {
 
     // With the peer's address, which tonic's own server would provide and
     // axum only does when asked: `ReadObservers` names who is watching by it.
-    let app = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
-    if let Err(problem) = axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            log::info!("statemachined: stopping");
-        })
-        .await
-    {
-        eprintln!("statemachined: {problem}");
-        std::process::exit(1);
+    // The Python daemon's gRPC port, answered by the same app — see
+    // `serve_on_the_next_port_too`. A bind failure there is reported and not
+    // fatal: the one port that is this daemon's own is already serving.
+    let next = if arguments.serve_on_the_next_port_too {
+        let address = format!("{}:{}", arguments.bind, arguments.port.saturating_add(1));
+        match tokio::net::TcpListener::bind(&address).await {
+            Ok(listener) => {
+                log::info!("and on {address}, where the Python daemon served gRPC");
+                Some(listener)
+            }
+            Err(problem) => {
+                log::warn!("not serving on {address} as well: {problem}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let stopping = tokio::sync::watch::channel(false);
+    let serve = |listener: tokio::net::TcpListener| {
+        let app = app.clone().into_make_service_with_connect_info::<std::net::SocketAddr>();
+        let mut stop = stopping.1.clone();
+        async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = stop.changed().await;
+                })
+                .await
+        }
+    };
+    let mut main = tokio::spawn(serve(listener));
+    let second = next.map(|listener| tokio::spawn(serve(listener)));
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => log::info!("statemachined: stopping"),
+        // The daemon's own port failing is the daemon failing, as it was when
+        // there was only one.
+        finished = &mut main => {
+            if let Ok(Err(problem)) = finished {
+                eprintln!("statemachined: {problem}");
+            }
+            std::process::exit(1);
+        }
+    }
+    let _ = stopping.0.send(true);
+    let _ = main.await;
+    if let Some(second) = second {
+        let _ = second.await;
     }
 }

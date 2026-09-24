@@ -34,7 +34,9 @@ def serve(arguments: list[str]) -> None:
         else:
             sys.exit(f"statemachined (Rust, via e2e shim): serve does not take {argument!r}")
     rust = os.environ["STATEMACHINED_RUST"]
-    command = [rust, "--bind", host, "--port", str(port + 1)]
+    # On P, as the unit asks; it answers on P + 1 as well, where the suite
+    # talks gRPC -- which is the cutover's own compatibility, exercised.
+    command = [rust, "--bind", host, "--port", str(port)]
     if config is not None:
         command += ["--config", config]
     os.execv(rust, command)
