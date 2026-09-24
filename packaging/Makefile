@@ -57,6 +57,11 @@ NFPM_PIN := 2.43.1
 STATEMACHINED_VERSION ?=
 RESOLVED_VERSION := $(strip $(if $(strip $(STATEMACHINED_VERSION)),$(strip $(STATEMACHINED_VERSION)),\
                       $(shell $(ROOT)/packaging/scripts/git-version.sh 2>/dev/null)))
+# The same version as pip spells it, for the client's wheel.
+RESOLVED_PY_VERSION := $(strip $(if $(strip $(STATEMACHINED_VERSION)),\
+                         $(shell STATEMACHINED_VERSION='$(strip $(STATEMACHINED_VERSION))' \
+                                 $(ROOT)/packaging/scripts/git-version.sh --pep440 2>/dev/null),\
+                         $(shell $(ROOT)/packaging/scripts/git-version.sh --pep440 2>/dev/null)))
 
 # Missing version = hard stop, never a default: every path below bakes it into
 # a filename and into package metadata, so continuing with an invented one
@@ -106,7 +111,7 @@ DOCS := README.md LICENSE NOTICE docs/developer/daemon.md docs/reference/api.md 
 
 .PHONY: packages-amd64 packages-arm64 packages packages-here \
         deb rpm stage stage-docs stage-firmware check inspect repro \
-        print-version install-nfpm clean help
+        wheel print-version install-nfpm clean help
 
 # ── Built in the pinned container, one per architecture ─────────────────────
 #
@@ -290,6 +295,20 @@ repro:                      ## build the .deb twice and prove the bytes match
 	   echo "  Compare with: diffoscope, or ar x both and diff the tars."; \
 	   exit 1; \
 	 fi
+
+# ── The client's wheel ──────────────────────────────────────────────────────
+#
+# What a script, triald and the family's e2e suite import to talk to the
+# daemon: `client/python/`, a distribution of its own. Architecture-independent,
+# so one serves every rig. Built from a stamped copy because its pyproject
+# carries the 0.0.0 sentinel and a build must never leave the tree dirty.
+wheel:                      ## the client's wheel, stamped, into dist/
+	@test -n "$(RESOLVED_PY_VERSION)" || { echo "no version: see print-version"; exit 1; }
+	@rm -rf $(BUILD)/client && mkdir -p $(BUILD)/client $(DIST_DIR)
+	tar -C $(ROOT)/client/python --exclude=.venv --exclude=build --exclude=dist \
+	  --exclude=__pycache__ --exclude=.pytest_cache -cf - . | tar -C $(BUILD)/client -xf -
+	cd $(BUILD)/client && uv version --frozen $(RESOLVED_PY_VERSION) >/dev/null && \
+	  uv build --wheel --out-dir $(DIST_DIR)
 
 # Fails visibly when the tag situation leaves the build without a version,
 # rather than aborting deep inside a Docker build. The release workflow's first

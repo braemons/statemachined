@@ -138,9 +138,29 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # ── The client's wheel ─────────────────────────────────────────────────────
+  # A release asset rather than a PyPI upload, as triald's is: what triald and
+  # contracts/e2e-tests install to talk to this release's daemon.
+  wheel:
+    name: client wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Build
+        run: make -C packaging wheel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 7
+
   # ── Publish ───────────────────────────────────────────────────────────────
   release:
-    needs: [firmware, packages, native-device]
+    needs: [firmware, packages, native-device, wheel]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
@@ -156,7 +176,7 @@ jobs:
           mkdir -p release
           find artifacts -type f \( -name '*.deb' -o -name '*.rpm' \
                -o -name '*.bin' -o -name '*.elf' -o -name 'MANIFEST.txt' \
-               -o -name 'statemachined-native-device-*' \) \
+               -o -name 'statemachined-native-device-*' -o -name '*.whl' \) \
                -exec cp -v {} release/ \;
           ls -lh release/
 
@@ -183,6 +203,11 @@ jobs:
           Everything the daemon writes lives under
           `/var/lib/braemons/statemachined/`, which an upgrade or a removal
           never touches.
+
+          ## The client
+
+          `statemachined_client-*.whl` is the Python client for this release's
+          gRPC API: `pip install ./statemachined_client-*.whl`.
 
           ## No board yet?
 
