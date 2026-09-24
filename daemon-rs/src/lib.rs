@@ -17,6 +17,7 @@
 
 pub mod daemon_state;
 pub mod device;
+pub mod event_recording;
 pub mod firmware_manifest;
 pub mod graph_set_compiler;
 pub mod grpc;
