@@ -237,12 +237,15 @@ not, and found `line_map.rs` answering two refusals differently from Python:
 `reconnect_and_restore` and `wait_for_line_start` are not reachable through any
 rpc.
 
-**Outside this repository:** `contracts/e2e-tests` still installs
-`statemachined/daemon[serve,device]` in `make test-local`, runs `statemachined
-device --port N` for its no-board fixture, and its container names
-`/opt/braemons/statemachined/bin/statemachined`. Each has to follow: the Rust
-binary on PATH (as this repository's `make e2e` arranges), the native device
-run as `statemachined_native_device --port N`, and `/usr/bin/statemachined`.
+**Outside this repository:** `contracts/e2e-tests` is changed to match, in its
+working tree and not yet committed, because it sits on uncommitted work of its
+own that it depends on. `make test-local` builds this daemon and the native
+device and puts them first on PATH (24 passed, 5 skipped, 1 xfailed); the
+fixtures run `statemachined_native_device --port 0`; the container takes
+`/usr/bin/statemachined` and the native device from the release's
+`statemachined-native-device-amd64` asset; `run_on_hardware.py` probes a board
+through the daemon and `statemachinectl`. Its `make test` stays red until a
+statemachined release with the Rust package and that asset is pinned.
 
 ---
 
