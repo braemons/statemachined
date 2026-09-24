@@ -192,15 +192,12 @@ bench:                      ## the daemon + web UI against a device: make bench 
 	  --host $(BENCH_HOST) --port $(BENCH_PORT) $(ARGS)
 
 # The other half of the no-board path: the firmware's own session and engine,
-# built for this machine, on a TCP port the daemon can dial. Not a mock -- see
-# daemon-rs/src/native_device_on_a_socket.rs.
-#
-# `statemachined device` because the bridge ships: an operator who has
-# installed the package and has no board runs the identical command.
+# built for this machine, listening on 127.0.0.1:5300 for a daemon to dial. Not
+# a mock -- see firmware/native/statemachined_native_device.cpp. For a bench
+# and for tests; it is not packaged.
 .PHONY: bench-device
-bench-device: integration-device  ## the native device on socket://127.0.0.1:5300
-	STATEMACHINED_NATIVE_DEVICE=$(abspath $(BUILD))/statemachined_native_device \
-	  cargo run --quiet --manifest-path daemon-rs/Cargo.toml -- device $(ARGS)
+bench-device: integration-device  ## the native device on 127.0.0.1:5300
+	$(BUILD)/statemachined_native_device --port 5300 $(ARGS)
 
 # The trial loop across the daemons is **not** here. It lives in the contracts
 # repo (`e2e-tests/`), with the other tests that are about more than one

@@ -16,8 +16,10 @@
 //!   device's word that its fold agrees, and it needs no Python to say so.
 //!   Skipped, and says so, when `make integration-device` has not been run.
 
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
+use std::process::{Child, Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -33,7 +35,6 @@ use statemachined::device::serial_link::SerialLink;
 use statemachined::graph_set_compiler::{compile_graph_set_for_device, DeviceCapabilities};
 use statemachined::model::graph_definition::GraphDefinition;
 use statemachined::model::line_map::LineMap;
-use statemachined::native_device_on_a_socket::{NativeDeviceOnASocket, NativeDeviceOptions};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -275,16 +276,63 @@ fn a_refusal_mid_upload_stops_it_and_names_the_message() {
 
 // -- the firmware -------------------------------------------------------------
 
+/// `build/statemachined_native_device` on a port the kernel picked, killed when
+/// dropped. `None`, and a line saying why, when it has not been built.
+struct NativeDevice {
+    child: Child,
+    target: String,
+}
+
+impl NativeDevice {
+    fn start() -> Option<Self> {
+        let binary = std::env::var_os("STATEMACHINED_NATIVE_DEVICE")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build/statemachined_native_device")
+            });
+        if !binary.is_file() {
+            eprintln!(
+                "skipped: {} is not built; `make integration-device` builds it",
+                binary.display()
+            );
+            return None;
+        }
+        let mut child = Command::new(&binary)
+            .args(["--port", "0"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("the native device starts");
+        // Its first line names the port it got.
+        let mut first_line = String::new();
+        BufReader::new(child.stdout.take().unwrap())
+            .read_line(&mut first_line)
+            .expect("the native device says where it listens");
+        let address = first_line
+            .trim()
+            .strip_prefix("listening on ")
+            .unwrap_or_else(|| panic!("an unexpected first line: {first_line:?}"))
+            .to_string();
+        Some(Self {
+            child,
+            target: address,
+        })
+    }
+}
+
+impl Drop for NativeDevice {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 #[test]
 fn the_firmware_commits_every_set_python_would_have_uploaded() {
-    let device = match NativeDeviceOnASocket::start(0, &NativeDeviceOptions::default()) {
-        Ok(device) => device,
-        Err(problem) => {
-            eprintln!("skipped: {problem}");
-            return;
-        }
+    let Some(device) = NativeDevice::start() else {
+        return;
     };
-    let mut session = session_on(&device.target());
+    let mut session = session_on(&device.target);
     let hello_ack = session.hello(None, TIMEOUT).expect("the device greets");
     let capabilities = DeviceCapabilities::from_hello_ack(&hello_ack);
 

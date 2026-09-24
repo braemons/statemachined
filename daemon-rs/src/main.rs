@@ -9,17 +9,13 @@ use statemachined::grpc::DaemonServices;
 use statemachined::web;
 use statemachined::wire;
 
-/// What the binary is asked to do.
-///
-/// `serve` is the daemon, and the word is accepted so the packaged unit —
-/// `statemachined serve …` — starts it unchanged. `device` is the other *end*
-/// of a link: the firmware compiled for this machine, on a TCP port, for a
-/// daemon with no board to dial. Talking to a board from a terminal is the
-/// client's job (`statemachinectl`), through the daemon.
+/// What the binary is asked to do. `serve` is the only thing it does, and the
+/// word is accepted so the packaged unit — `statemachined serve …` — starts it
+/// unchanged. Talking to a board from a terminal is the client's job
+/// (`statemachinectl`), through the daemon.
 #[derive(Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum Mode {
     Serve,
-    Device,
 }
 
 #[derive(Parser)]
@@ -28,7 +24,7 @@ enum Mode {
 // override in /etc/braemons/statemachined.env follows the unit's own --port.
 #[command(args_override_self = true)]
 struct Arguments {
-    /// `serve`, or nothing: the same thing. `device` runs the native firmware.
+    /// `serve`, or nothing: the same thing.
     #[arg(value_enum)]
     mode: Option<Mode>,
 
@@ -43,10 +39,8 @@ struct Arguments {
     /// `grpc.aio` owns its socket, so that daemon serves the panels on `port`
     /// and gRPC on `port + 1`. tonic is a tower service and merges into the
     /// axum router, so everything is on `port` here.
-    ///
-    /// For `device`, the port the firmware listens on: 5300 unless said.
-    #[arg(long)]
-    port: Option<u16>,
+    #[arg(long, default_value_t = 8081)]
+    port: u16,
 
     /// Serve the same thing on `port + 1` as well, as the Python daemon's gRPC
     /// port is. On by default, **for the cutover**: `statemachined-client`
@@ -89,22 +83,7 @@ struct Arguments {
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let arguments = Arguments::parse();
-    if arguments.mode == Some(Mode::Device) {
-        let port = arguments
-            .port
-            .unwrap_or(statemachined::native_device_on_a_socket::DEFAULT_BENCH_PORT);
-        // STATEMACHINED_STORE and STATEMACHINED_LOOPBACK reach the device
-        // through the environment it inherits.
-        let options = Default::default();
-        if let Err(problem) =
-            statemachined::native_device_on_a_socket::run_until_interrupted(port, &options)
-        {
-            eprintln!("statemachined device: {problem}");
-            std::process::exit(1);
-        }
-        return;
-    }
-    let port = arguments.port.unwrap_or(8081);
+    let port = arguments.port;
 
     let mut configuration = match RigConfiguration::read(&arguments.config) {
         Ok(configuration) => configuration,

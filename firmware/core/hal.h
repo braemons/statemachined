@@ -163,6 +163,16 @@ void set_native_inputs(LineBitmask word);
 /// inputs went high on their own would surprise every other test in the tree.
 void set_native_loopback(uint8_t width, uint8_t shift);
 
+/// The host build's link is a TCP socket on 127.0.0.1, one host at a time --
+/// what a board on a cable is, with the cable replaced by a port. Listens on
+/// `port`, or on one the kernel picks for 0, and returns the port it got, or 0
+/// if it could not listen.
+///
+/// `link_up()` is whether a host is connected, the socket's equivalent of DTR:
+/// it goes false when the host closes the connection, which is what the board
+/// fails safe on.
+uint16_t native_listen(uint16_t port);
+
 #endif  // !ARDUINO
 
 }  // namespace hal
