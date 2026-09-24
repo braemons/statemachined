@@ -24,7 +24,7 @@ use crate::device::state_visit_trace::{
 };
 use crate::device::statemachined_device::UploadProblem;
 use crate::firmware_manifest::{compare_firmware, installed_firmware_version, INSTALLED_MANIFEST};
-use crate::graph_set_compiler::{CompiledGraphSet, DeviceCapabilities};
+use crate::graph_set_compiler::{compile_graph_set_for_device, CompiledGraphSet, DeviceCapabilities};
 use crate::model::graph_definition::GraphDefinition;
 use crate::model::state_machine_config::StateMachineConfig;
 use crate::store::{Document, Store, StoreProblem};
@@ -752,6 +752,60 @@ impl DaemonState {
         }))
     }
 
+    /// Every rule, plus **this board's** capacities.
+    ///
+    /// The capacity half is the half worth having — "you have room for two
+    /// more graphs" is what somebody setting up a session wants to know —
+    /// which is why this needs a board. Compiled against the *resolved* map,
+    /// the one an upload would use.
+    fn validate(&self, graph: &GraphDefinition) -> Result<wire::GraphValidation, tonic::Status> {
+        let warnings: Vec<wire::GraphWarning> = graph
+            .warnings()
+            .into_iter()
+            .map(|warning| wire::GraphWarning {
+                kind: warning.kind,
+                state: warning.state,
+                transition: warning.transition as i32,
+                lines: warning.lines,
+                detail: warning.detail,
+            })
+            .collect();
+        let device = self.device.lock().map_err(poisoned)?;
+        let Some(capabilities) = &device.capabilities else {
+            return Err(Refusal::no_board_attached(
+                "a graph is checked against a board's caps, and there is none",
+            )
+            .into());
+        };
+        Ok(
+            match compile_graph_set_for_device(
+                std::slice::from_ref(graph),
+                &device.resolved_line_map,
+                capabilities,
+                0,
+            ) {
+                // Legal, uploads, runs — and the warnings survive a valid
+                // answer: probably narrower than its author thinks.
+                Ok(compiled) => wire::GraphValidation {
+                    valid: true,
+                    detail: String::new(),
+                    pool_usage: Some(pool_counts(&compiled.pool_usage)),
+                    pool_capacity: Some(pool_counts(&compiled.pool_capacity)),
+                    warnings,
+                },
+                // A refusal has no pools to report, and a zeroed count would
+                // read as a board with no room at all.
+                Err(problem) => wire::GraphValidation {
+                    valid: false,
+                    detail: problem.to_string(),
+                    pool_usage: None,
+                    pool_capacity: None,
+                    warnings,
+                },
+            },
+        )
+    }
+
     /// No board, said before anything is loaded or compiled.
     fn require_a_board(&self) -> Result<(), tonic::Status> {
         if self.device_connected() {
@@ -1301,16 +1355,23 @@ impl service::graph_store_server::GraphStore for DaemonServices {
 
     async fn validate_graph(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ReadFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::GraphValidation>, tonic::Status> {
-        unported!("GraphStore/validate_graph")
+        let graph = self.state.graphs.load(&request.into_inner().name).map_err(graph_problem)?;
+        Ok(tonic::Response::new(self.state.validate(&graph)?))
     }
 
     async fn validate_graph_file(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::FileDraft>,
+        request: tonic::Request<crate::wire::statemachined::v1::FileDraft>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::GraphValidation>, tonic::Status> {
-        unported!("GraphStore/validate_graph_file")
+        // The same check against a **draft**: what somebody is typing. Through
+        // this daemon's own parser and compiler, so what comes back is the
+        // refusal the real thing would give.
+        let graph = GraphDefinition::from_json(&request.into_inner().text).map_err(|problem| {
+            tonic::Status::from(Refusal::new(Category::BadRequest, "bad_graph", problem.0, "text"))
+        })?;
+        Ok(tonic::Response::new(self.state.validate(&graph)?))
     }
 
     async fn upload_graph(

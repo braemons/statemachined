@@ -15,7 +15,7 @@ still calls `unported!`, so it cannot drift from the proto.
 
 ## Done
 
-**32 of 50 rpcs.** The stores, the graph-set upload, the session around it,
+**34 of 50 rpcs.** The stores, the graph-set upload, the session around it,
 the trace, and trials: arming one, starting it, cancelling it, and reading back
 what it did.
 
@@ -178,14 +178,14 @@ not, and found `line_map.rs` answering two refusals differently from Python:
 
 ## Left
 
-**18 rpcs**, and none of them waits on anything but its own module now.
+**16 rpcs**, and none of them waits on anything but its own module now.
 
 | Module | Lines | Unblocks |
 |---|---|---|
 | `daemon/event_recording.py` | 431 | `Recording/*` (9 rpcs) |
 | `statemachined_device.py` — autorun, settings, timers | ~110 | `Device/ReadAutorun`, `WriteAutorun`, `SaveSettings` |
 | `device/device_line_monitor.py` | 112 | `Device/ReadSerialMonitor`, `WatchSerialMonitor` |
-| the servicers alone | — | `Device/WriteLineMapFile`, `GraphStore/ValidateGraph`, `ValidateGraphFile`, `Configuration/PatchConfiguration` |
+| the servicers alone | — | `Device/WriteLineMapFile`, `Configuration/PatchConfiguration` |
 
 **Not exercised by the comparison yet:** a gap in the visit stream's `seq`
 (the `sequence_gap` entry), a link that drops mid-session (`link_lost`, and

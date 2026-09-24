@@ -241,10 +241,31 @@ def first_differences(python, rust, where="", limit=5):
     return found[:limit]
 
 
+PARSER_WORDS = {"bad_graph", "bad_state_machine_config"}
+
+#: A graph that is legal and probably not what its author meant: a line in
+#: both `all` and `any` makes every other line in `any` moot.
+A_DRAFT_WITH_A_WARNING = json.dumps({
+    "name": "draft",
+    "entry": "Wait",
+    "states": [
+        {"name": "Wait", "transitions": [
+            {"when": {"all": ["lever"], "any": ["lever", "abort"]}, "goto": "Done"}]},
+        {"name": "Done", "outcome": "HIT"},
+    ],
+})
+
+
 def answer(call):
     try:
         return {"answered": plain(call())}
     except DaemonRefusedTheRequest as refusal:
+        # A document that does not parse is refused in the parser's own
+        # words -- pydantic's or serde's -- and the port holds the two to the
+        # same verdict, not the same sentence (RUST_PORT.md 4.2).
+        if refusal.error in PARSER_WORDS:
+            return {"refused": {"status": refusal.status, "error": refusal.error,
+                                "context": refusal.context, "detail": "(the parser's)"}}
         return {
             "refused": {
                 "status": refusal.status,
@@ -287,6 +308,7 @@ SCRIPT = [
     ("an active graph with no config", lambda c: c.set_active_graph("go-nogo")),
     ("clearing an active graph nobody set", lambda c: c.clear_active_graph()),
     ("the firmware with no board", lambda c: c.read_firmware()),
+    ("validating with no board", lambda c: c.validate_graph("go-nogo")),
     ("uploading with no board", lambda c: c.upload_graph_set(["go-nogo"])),
     ("opening with no board", lambda c: c.open_session()),
     ("one graph with no board", lambda c: c.upload_graph("go-nogo")),
@@ -366,6 +388,13 @@ def the_first_state_frame(client):
 #: A session of trials, on a board and a config loaded at startup.
 TRIALS = [
     ("a result before any trial", lambda c: c.read_trial_result()),
+    ("validating a stored graph", lambda c: c.validate_graph("go-nogo")),
+    ("validating one that does not fit", lambda c: c.validate_graph("too-big")),
+    ("validating one nobody stored", lambda c: c.validate_graph("nope")),
+    ("validating a draft with a warning", lambda c: c.validate_graph_text(A_DRAFT_WITH_A_WARNING)),
+    ("validating a draft that does not parse", lambda c: c.validate_graph_text("{not json")),
+    ("validating a draft that parses and breaks a rule",
+     lambda c: c.validate_graph_text(json.dumps({"name": "x", "entry": "Nowhere", "states": []}))),
     ("a trial naming no graph, none active", lambda c: c.configure_trial(1)),
     ("a trial before any set", lambda c: c.configure_trial(1, graph="timed-walk")),
     ("the set for trials", lambda c: c.upload_graph_set(["timed-walk", "waits-for-ever"])),
