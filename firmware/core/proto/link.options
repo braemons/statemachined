@@ -1,0 +1,37 @@
+# nanopb limits for proto/statemachined/link/v1/link.proto.
+#
+# Every repeated and string field is bounded here, so the board decodes into
+# fixed-size structs and nothing goes through a callback. The counts must agree
+# with core/config.h; static_asserts in core/protocol/host_link_session.cpp
+# refuse a build where they do not.
+
+# kMaxChoiceOptions
+statemachined.link.v1.GraphDist.opts            max_count:32
+statemachined.link.v1.GraphDist.weights         max_count:32
+
+# kMaxPatchedDistributions
+statemachined.link.v1.Configure.patch           max_count:8
+
+# kMaxLines
+statemachined.link.v1.Wiring.debounce_ms        max_count:32
+statemachined.link.v1.PinMap.pins               max_count:32
+
+# kResultRowsPerFrame: how many rows one result_path carries. 14 rows at the
+# worst case of 34 bytes each still fits kMaxFrame, which a static_assert holds.
+statemachined.link.v1.ResultPath.p              max_count:14
+
+# Strings, with the terminator nanopb stores. The board writes these from its
+# own constants and truncates rather than overflows.
+statemachined.link.v1.PinMap.pins               max_size:8
+statemachined.link.v1.HelloAck.board            max_size:24
+statemachined.link.v1.HelloAck.fw               max_size:48
+statemachined.link.v1.Error.code                max_size:24
+statemachined.link.v1.Error.message             max_size:80
+statemachined.link.v1.Error.context             max_size:64
+statemachined.link.v1.Log.level                 max_size:8
+statemachined.link.v1.Log.message               max_size:96
+
+# The envelope's counters are 16-bit on the wire and on the board.
+statemachined.link.v1.HostMessage.message_id    int_size:IS_16
+statemachined.link.v1.DeviceMessage.message_id  int_size:IS_16
+statemachined.link.v1.DeviceMessage.in_reply_to int_size:IS_16

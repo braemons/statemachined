@@ -96,7 +96,19 @@ client:                     ## the Python client's checks: its stubs, ruff, ty, 
 
 check-proto:                ## the proto compiles, and every copy of the taxonomy agrees
 	@protoc --proto_path=proto --descriptor_set_out=/dev/null \
-	  proto/statemachined/v1/*.proto proto/braemons/v1/*.proto
+	  proto/statemachined/v1/*.proto proto/braemons/v1/*.proto \
+	  proto/statemachined/link/v1/*.proto
+	@# The board's half of the link, like the daemon's, is compared against a
+	@# fresh generation: a link.proto edited without `make firmware-proto` is a
+	@# board built against last week's wire.
+	@rm -rf build/firmware-proto-check
+	@$(MAKE) --no-print-directory firmware-proto FIRMWARE_PROTO_OUT=build/firmware-proto-check
+	@diff -r build/firmware-proto-check/statemachined firmware/core/proto/statemachined >/dev/null || { \
+	  echo "firmware/core/proto/ is not what proto/statemachined/link/ produces."; \
+	  echo "run 'make firmware-proto' and commit the result with the change that caused it."; \
+	  exit 1; \
+	}
+	@rm -rf build/firmware-proto-check
 	@echo "  proto: $$(grep -c '^  rpc ' proto/statemachined/v1/service.proto) rpcs in $$(grep -c '^service ' proto/statemachined/v1/service.proto) services"
 	@# Against a fresh generation rather than against git: a *new* generated
 	@# file is untracked, and `git diff` says nothing at all about an untracked
@@ -111,6 +123,17 @@ check-proto:                ## the proto compiles, and every copy of the taxonom
 	}
 	@rm -rf build/proto-check
 	@python3 tools/check_outcomes.py
+
+# The link proto is generated for the board with nanopb and committed, like the
+# daemon's stubs: a board build needs no protoc and a wire change arrives as a
+# diff. The runtime it links is vendored at the same version in
+# firmware/third_party/nanopb, and the two must move together.
+FIRMWARE_PROTO_OUT ?= firmware/core/proto
+.PHONY: firmware-proto
+firmware-proto:             ## regenerate firmware/core/proto/ from proto/statemachined/link/
+	@mkdir -p $(FIRMWARE_PROTO_OUT)
+	@uvx --from nanopb==0.4.9.1 nanopb_generator -I proto -D $(FIRMWARE_PROTO_OUT) \
+	  -f firmware/core/proto/link.options proto/statemachined/link/v1/link.proto
 
 # Exported rather than set per-recipe so a local run fails the same way CI does:
 # a leak or an unsigned overflow should stop the run, not scroll past.
