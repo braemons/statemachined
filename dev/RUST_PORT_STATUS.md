@@ -15,7 +15,7 @@ still calls `unported!`, so it cannot drift from the proto.
 
 ## Done
 
-**38 of 50 rpcs.** The stores, the graph-set upload, the session around it,
+**41 of 50 rpcs.** The stores, the graph-set upload, the session around it,
 the trace, and trials: arming one, starting it, cancelling it, and reading back
 what it did.
 
@@ -47,7 +47,7 @@ what it did.
 | `device/device_clock_correlation.rs` | `device/device_clock_correlation.py` | 188 |
 | `device/device_pin_map.rs` | `device/device_pin_map.py` | 71 |
 | `device/board_pin_labels.rs` | `device/board_pin_labels.py` | 44 |
-| `device/statemachined_device.rs` | `device/statemachined_device.py` — all but autorun, settings and timers | 848 (most) |
+| `device/statemachined_device.rs` | `device/statemachined_device.py` — all but `set_enabled_timers`, which no rpc calls | 848 (most) |
 | `device/trial_result_reassembly.rs` | `device/trial_result_reassembly.py` — the collector; the bench's blocking reader stays in Python | 161 (most) |
 | `model/trial_record.rs` | `model/trial_record.py` | 138 |
 | `grpc/trial.rs` | `RigService`: the trial, the visit and result records, the link thread | ~250 of 817 |
@@ -76,7 +76,7 @@ green differential test that cannot go red is not evidence.
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
 | Trace | `test_state_visit_trace.py`, ported one test for one, and the day's file line against Python's `json.dumps` | 11 tests |
-| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree; every line a daemon sends at startup, byte for byte | 121 calls |
+| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree; every line a daemon sends at startup, byte for byte | 133 calls |
 | Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
 
 ### Bugs this found in the Python daemon
@@ -112,6 +112,10 @@ regression test:
    effect on the next connection", and it did not.
 6. **`graph_mode` took any string.** The model's `Literal` is not checked on
    assignment, so "banana" was kept and reported back as the rig's mode.
+8. **`ReadAutorun` never said which graph.** It read `slot` and `graph` from a
+   reply that carries `graph_index` and no name, so every answer was slot 0 and
+   no graph. The name now comes from the committed set, as the proto says. The
+   seed is still always zero: the board does not report it.
 7. **A link the daemon closed itself was written down as lost.** The link
    thread checked for a connection outside the lock; a re-greeting that found
    the wrong board closed it in between, and the next pump's
@@ -196,12 +200,11 @@ not, and found `line_map.rs` answering two refusals differently from Python:
 
 ## Left
 
-**12 rpcs**, and none of them waits on anything but its own module now.
+**9 rpcs**, and none of them waits on anything but its own module now.
 
 | Module | Lines | Unblocks |
 |---|---|---|
 | `daemon/event_recording.py` | 431 | `Recording/*` (9 rpcs) |
-| `statemachined_device.py` — autorun, settings, timers | ~110 | `Device/ReadAutorun`, `WriteAutorun`, `SaveSettings` |
 
 **Not exercised by the comparison yet:** a gap in the visit stream's `seq`
 (the `sequence_gap` entry), a link that drops mid-session (`link_lost`, and

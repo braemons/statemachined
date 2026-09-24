@@ -20,9 +20,9 @@ use crate::device::statemachined_device::{DeviceProblem, StatemachinedDevice};
 use crate::rig_configuration::RigConfiguration;
 use crate::device::state_visit_trace::{
     fields as trace_fields, KIND_ACTIVE_GRAPH_SELECTED, KIND_CONFIG_LOADED,
-    KIND_GRAPH_SET_UPLOADED, KIND_LINK_CONNECTED, KIND_SESSION_CLOSED, KIND_SESSION_OPENED,
+    KIND_AUTORUN_CHANGED, KIND_GRAPH_SET_UPLOADED, KIND_LINK_CONNECTED, KIND_SETTINGS_SAVED, KIND_SESSION_CLOSED, KIND_SESSION_OPENED,
 };
-use crate::device::statemachined_device::UploadProblem;
+use crate::device::statemachined_device::{AutorunSetting, UploadProblem};
 use crate::firmware_manifest::{compare_firmware, installed_firmware_version, INSTALLED_MANIFEST};
 use crate::graph_set_compiler::{compile_graph_set_for_device, CompiledGraphSet, DeviceCapabilities};
 use crate::model::graph_definition::{GraphDefinition, Refused};
@@ -916,6 +916,26 @@ impl DaemonState {
         Ok(false)
     }
 
+    fn graph_names_by_slot(&self) -> Result<Vec<String>, tonic::Status> {
+        Ok(self
+            .device
+            .lock()
+            .map_err(poisoned)?
+            .committed_graph_set
+            .as_ref()
+            .map(|committed| committed.graphs_by_slot.iter().map(|graph| graph.name.clone()).collect())
+            .unwrap_or_default())
+    }
+
+    /// No board, in the words autorun's refusal uses.
+    fn require_autorun_board(&self) -> Result<(), tonic::Status> {
+        if self.device_connected() {
+            Ok(())
+        } else {
+            Err(Refusal::no_board_attached("autorun is the board's own setting").into())
+        }
+    }
+
     /// No board, said before anything is loaded or compiled.
     fn require_a_board(&self) -> Result<(), tonic::Status> {
         if self.device_connected() {
@@ -945,6 +965,39 @@ fn serial_monitor_entry(entry: &serde_json::Value) -> wire::SerialMonitorEntry {
         direction: text("direction"),
         line: text("line"),
         recorded_host_time: text("recorded_host_time"),
+    }
+}
+
+/// What the board would do on its own. `enabled` and `active` are not the
+/// same fact: a board can be set to arm its own trials and not be doing so.
+///
+/// **The board says `graph_index` and knows no names**: the name comes from
+/// the committed set, by slot, where there is one and autorun is on, and is
+/// empty otherwise rather than guessed. `seed` stays zero — the board does not
+/// report the one it holds.
+fn autorun_to_wire(reply: &serde_json::Value, graph_names_by_slot: &[String]) -> wire::Autorun {
+    let number = |key: &str| {
+        reply
+            .get(key)
+            .and_then(|value| value.as_i64().or_else(|| value.as_f64().map(|f| f as i64)))
+            .unwrap_or(0)
+    };
+    let flag = |key: &str| reply.get(key).and_then(serde_json::Value::as_bool).unwrap_or(false);
+    let slot = number("graph_index");
+    let enabled = flag("enabled");
+    wire::Autorun {
+        enabled,
+        active: flag("active"),
+        graph_name: usize::try_from(slot)
+            .ok()
+            .and_then(|slot| graph_names_by_slot.get(slot))
+            .filter(|_| enabled)
+            .cloned()
+            .unwrap_or_default(),
+        slot: slot as i32,
+        cap_milliseconds: number("cap_ms") as i32,
+        seed: number("seed"),
+        next_trial_id: number("next_trial_id"),
     }
 }
 
@@ -1471,23 +1524,95 @@ impl service::device_server::Device for DaemonServices {
 
     async fn read_autorun(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadAutorunRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ReadAutorunRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::Autorun>, tonic::Status> {
-        unported!("Device/read_autorun")
+        let _ = request;
+        let state = self.state.clone();
+        off_the_runtime(move || {
+            state.require_autorun_board()?;
+            let reply = state
+                .with_device(|device| device.read_autorun())?
+                .map_err(status_for_device)?;
+            Ok(tonic::Response::new(autorun_to_wire(&reply, &state.graph_names_by_slot()?)))
+        })
+        .await
     }
 
     async fn write_autorun(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::WriteAutorunRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::WriteAutorunRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::Autorun>, tonic::Status> {
-        unported!("Device/write_autorun")
+        // The daemon becomes optional here, which is the whole intent. Written
+        // to the trace because "who armed trial 412" is a question the record
+        // has to answer, and a run the device armed looks otherwise identical.
+        let request = request.into_inner();
+        let state = self.state.clone();
+        off_the_runtime(move || {
+            state.require_autorun_board()?;
+            let graph_name = match (&request.graph_name, request.enabled) {
+                (Some(graph_name), _) => Some(graph_name.clone()),
+                (None, true) => Some(state.graph_for_a_trial("")?),
+                (None, false) => None,
+            };
+            let setting = AutorunSetting {
+                enabled: request.enabled,
+                graph_name: graph_name.clone(),
+                cap_milliseconds: request.cap_milliseconds as i64,
+                seed: request.seed,
+                first_trial_id: request.first_trial_id,
+                start_now: request.start_now.unwrap_or(true),
+            };
+            let reply = state
+                .with_device(|device| device.set_autorun(&setting))?
+                .map_err(|problem| tonic::Status::from(Refusal::from(problem)))?;
+            state.trace.append(
+                KIND_AUTORUN_CHANGED,
+                trace_fields(serde_json::json!({
+                    "enabled": reply.get("enabled").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                    "active": reply.get("active").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                    "graph": graph_name,
+                    "next_trial_id": reply.get("next_trial_id"),
+                })),
+            );
+            Ok(tonic::Response::new(autorun_to_wire(&reply, &state.graph_names_by_slot()?)))
+        })
+        .await
     }
 
     async fn save_settings(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::SaveSettingsRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::SaveSettingsRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::SaveSettingsResult>, tonic::Status> {
-        unported!("Device/save_settings")
+        // What the *board* said, not "it worked": `write_count` is a wear
+        // budget made visible, and `written: false` means no erase cycle was
+        // spent because the settings were already there.
+        let _ = request;
+        let state = self.state.clone();
+        off_the_runtime(move || {
+            state.require_a_board()?;
+            let saved = state
+                .with_device(|device| device.save_settings())?
+                .map_err(status_for_device)?;
+            let flag = |key: &str| saved.get(key).and_then(serde_json::Value::as_bool).unwrap_or(false);
+            state.trace.append(
+                KIND_SETTINGS_SAVED,
+                trace_fields(serde_json::json!({
+                    "has_set": flag("has_set"),
+                    "set_version": saved.get("set_version"),
+                    "autorun": flag("autorun"),
+                    "write_count": saved.get("write_count"),
+                })),
+            );
+            Ok(tonic::Response::new(wire::SaveSettingsResult {
+                written: flag("written"),
+                write_count: saved.get("write_count").and_then(serde_json::Value::as_i64).unwrap_or(0),
+                has_set: flag("has_set"),
+                set_version: saved.get("set_version").and_then(serde_json::Value::as_i64).unwrap_or(0)
+                    as i32,
+                autorun: flag("autorun"),
+            }))
+        })
+        .await
     }
 
 }

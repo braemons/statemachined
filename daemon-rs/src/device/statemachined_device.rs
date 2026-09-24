@@ -144,6 +144,27 @@ pub struct TrialConfiguration {
     pub distribution_patches: Vec<Value>,
 }
 
+/// The arguments of `autorun`, by name. `None` leaves the board's own value.
+#[derive(Debug, Clone, Default)]
+pub struct AutorunSetting {
+    pub enabled: bool,
+    pub graph_name: Option<String>,
+    pub cap_milliseconds: i64,
+    pub seed: Option<i64>,
+    pub first_trial_id: Option<i64>,
+    pub start_now: bool,
+}
+
+/// A seed as Python's `f"{seed:016X}"` writes it: sixteen hex digits, and a
+/// negative one signed rather than in two's complement.
+fn seed_as_python_writes_it(seed: i64) -> String {
+    if seed < 0 {
+        format!("-{:015X}", seed.unsigned_abs())
+    } else {
+        format!("{seed:016X}")
+    }
+}
+
 /// Why a set did not reach the board: it would not compile against this
 /// board, or the board (or the link to it) said no.
 #[derive(Debug)]
@@ -637,6 +658,66 @@ impl StatemachinedDevice {
             MsgType::Cancel,
             &[("trial_id", Value::from(trial_id)), ("reason", Value::from("host"))],
         )
+    }
+
+    // -- the board on its own ----------------------------------------------------
+
+    /// Hand the board the job of arming its own trials, or take it back.
+    ///
+    /// The one thing this daemon does that makes itself optional
+    /// (protocol.md 3.7). `graph_name`, not an index, as for a trial; autorun
+    /// cannot switch paradigms afterwards. `start_now` false records that the
+    /// board should drive itself without starting it — how a rig is set up,
+    /// because `save` is refused on a board that is running.
+    pub fn set_autorun(&mut self, autorun: &AutorunSetting) -> Result<Value, TrialProblem> {
+        self.require_session()?;
+        let mut fields: Vec<(&str, Value)> = vec![("enabled", Value::from(autorun.enabled))];
+        if let Some(graph_name) = &autorun.graph_name {
+            let slot = self
+                .require_committed_graph_set()?
+                .slot_for_graph_name(graph_name)
+                .map_err(TrialProblem::NotInSet)?;
+            fields.push(("graph_index", Value::from(slot)));
+        }
+        if autorun.cap_milliseconds != 0 {
+            fields.push(("cap_ms", Value::from(autorun.cap_milliseconds)));
+        }
+        if let Some(seed) = autorun.seed {
+            fields.push(("seed", Value::from(seed_as_python_writes_it(seed))));
+        }
+        if let Some(first_trial_id) = autorun.first_trial_id {
+            fields.push(("first_trial_id", Value::from(first_trial_id)));
+        }
+        if !autorun.start_now {
+            fields.push(("start_now", Value::from(false)));
+        }
+        let reply = self.ask(MsgType::Autorun, &fields)?;
+        // Remembered so the results of runs this daemon did not arm can still
+        // be named: the device reports indices, and only the graph has names.
+        if autorun.enabled {
+            if let Some(graph_name) = &autorun.graph_name {
+                self.autorun_graph_name = Some(graph_name.clone());
+            }
+        } else {
+            self.autorun_graph_name = None;
+        }
+        Ok(reply)
+    }
+
+    /// What the board would do on its own, asked rather than remembered: the
+    /// settings outlive the session that set them.
+    pub fn read_autorun(&mut self) -> Result<Value, DeviceProblem> {
+        self.ask(MsgType::Autorun, &[])
+    }
+
+    /// Write the board's wiring, graph set and autorun settings to its own
+    /// storage (protocol.md 3.8). Slow — it erases and programs flash — so
+    /// its timeout is at least five seconds.
+    pub fn save_settings(&mut self) -> Result<Value, DeviceProblem> {
+        let timeout = self.timeout.max(Duration::from_secs(5));
+        let reply = self.require_session()?.request(MsgType::Save, timeout, &[]);
+        self.route_what_arrived();
+        Ok(reply?)
     }
 
     // -- reading the link --------------------------------------------------------
