@@ -240,3 +240,25 @@ suite call them.
 3. **Something leaks `statemachined_native_device` processes.** Around fifteen
    were alive across several days, and they respawn when killed. Pre-existing
    and not blocking, but it accumulates across test runs.
+4. **How the package carries two commands.** The `.deb` installs one
+   `statemachined`, and today that is the Python one: the daemon, the bench
+   tools (`hello`, `pins`, `monitor`, …) and `statemachined device`, the
+   native device's bridge, which the e2e suite starts. The Rust binary is only
+   the daemon. Swapping the file would take the bench tools with it; shipping
+   both — the Rust daemon beside a Python CLI under another name, or `serve`
+   dispatched to Rust as `tools/e2e_rust/statemachined` does — is a choice
+   about what an operator types, and it is theirs. The unit file needs no
+   change either way: the Rust binary takes its command line as written.
+5. **The second port.** The Rust daemon answers on `--port + 1` as well, so no
+   client changes at the cutover. Dropping it later means moving
+   `statemachined-client`'s default, triald's executor setting and the e2e
+   fixtures' arithmetic together, in `contracts/DAEMON_LAYOUT.md`.
+6. **`OpenLink` does not restore a board's set.** After a board resets, both
+   daemons re-greet and keep believing in the set they uploaded; the board
+   refuses the next trial until a session is opened again.
+   `reconnect_and_restore` exists for exactly this and nothing calls it — in
+   either daemon. Ported as it is; worth deciding whether `OpenLink` (or the
+   link thread, on a lost link) should use it.
+7. **Two defaults differ on purpose.** With no `--host` the Rust daemon binds
+   loopback where Python binds every interface, and mDNS advertises the
+   crate's version until packaging stamps the release's.
