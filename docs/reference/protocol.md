@@ -5,8 +5,22 @@
 > way round.
 
 The link between the **bridge** (a host process) and the **device** (firmware on
-a microcontroller). USB CDC, newline-delimited JSON, a per-line identifier and
-a CRC, as [`PLAN.md`](https://github.com/braemons/statemachined/blob/main/dev/PLAN.md) specifies.
+a microcontroller). USB CDC; **protobuf messages in COBS frames with a CRC-16**,
+the same framing mousewheeld's board uses.
+
+The shapes are [`proto/statemachined/link/v1/link.proto`](https://github.com/braemons/statemachined/blob/main/proto/statemachined/link/v1/link.proto),
+generated for the firmware with nanopb (`make firmware-proto`, into
+`firmware/core/proto/`) and read by the daemon from its descriptor. This
+document is the prose: what the messages mean, which the `.proto` cannot say.
+
+This link used to be newline-delimited JSON with a CRC on every line, and it
+keeps that wire's vocabulary on purpose: every `oneof body` member is named for
+the `msg_type` it replaced and every field keeps its member name, so the
+examples below are written as the JSON a person reads them as. An enum value is
+the old token behind its enum's prefix — `ACTION_KIND_TIMER_START` is
+`"timer_start"`. What moved to protobuf is the encoding, and with it three
+things JSON could say and protobuf cannot: `null`, a member of the wrong type,
+and a 64-bit integer that had to travel as a hex string.
 
 Everything above the framing is a consequence of two constraints that are worth
 stating before the tables, because most of the odd-looking decisions below come
@@ -14,74 +28,64 @@ from one of them:
 
 - **The device has 32 KB of SRAM.** No message may require the device to hold a
   document larger than a few hundred bytes. That is why both the graph upload
-  and the trial result are _chunked_, and why the path comes back as arrays
-  rather than objects.
+  and the trial result are _chunked_, and why every list and string on the
+  link has a fixed bound.
 - **The device is the timing authority and nothing else.** It reports what
   happened; it never interprets. There is no trial type on this wire, no
   acceptance decision, and no paradigm vocabulary — only a graph, timings, and a
   record of a run.
 
-Throughout, examples are wrapped for readability and `"crc":"...."` stands in
-for a value that depends on the rest of the line. **On the wire every message is
-exactly one line.**
+Throughout, examples are wrapped for readability. **On the wire every message
+is exactly one frame**, and `msg_type` is not a field but the `body` member that
+is set.
 
 ---
 
 ## 1. Framing
 
-One JSON object per line, terminated by a single `\n` (0x0A). A `\r` immediately
-before the `\n` is accepted and ignored, so a terminal program on the other end
-does not break the link.
+Both directions, identically:
 
 ```
-{"msg_type":"ping","message_id":41,"crc":"A3CE"}\n
+COBS( protobuf message ‖ CRC-16, big-endian ) ‖ 0x00
 ```
+
+The bridge sends a `HostMessage` and the device a `DeviceMessage`: a
+`message_id`, on a reply an `in_reply_to`, and a `oneof body` naming the
+message.
 
 **Rules**
 
-|                    |                                                                                                                                |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
-| Encoding           | ASCII. A byte ≥ 0x80 anywhere in a line is a framing error. Non-ASCII text belongs in `log`, escaped as `\uXXXX`               |
-| Line length        | At most `max_line` bytes including the `\n`. The device reports its own limit in `hello_ack`; the reference board's is **512** |
-| Object depth       | At most 4. A conforming message never needs more                                                                               |
-| Unknown members    | **Ignored**, on both sides. This is how the protocol gains fields without a version bump                                       |
-| Unknown `msg_type` | Answered with `error` / `unknown_type`. Never silently dropped                                                                 |
-| Member order       | Free, **except** `crc`, which is always last                                                                                   |
+|                  |                                                                                                                                                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Delimiter        | A single `0x00`. COBS guarantees no other zero byte in a frame, so a receiver that lost bytes — a USB re-enumeration, a board that reset mid-frame — finds the next frame at the next zero without parsing anything. Back-to-back delimiters are not a frame, and a sender may use them to resynchronise a receiver |
+| Frame length     | At most `max_frame` bytes encoded, delimiter included. The device reports its limit in `hello_ack`'s `caps`; the reference board's is **512**, and every message this protocol defines fits in it by construction — the firmware's build refuses a `link.options` under which one would not |
+| Bounded fields   | Every repeated and string field has a limit in `firmware/core/proto/link.options`, so the device decodes into fixed-size structs. A list longer than its limit is a frame that does not decode                                                   |
+| Unknown fields   | **Ignored**, on both sides — protobuf does this. It is how the protocol gains fields without a version bump                                                                                                                                      |
+| Unknown `body`   | Answered with `error` / `unknown_type`. Never silently dropped                                                                                                                                                                                   |
+| Absent fields    | A plain field that is not sent reads as zero. A field is `optional` in the `.proto` where absence has to be told apart from zero — `terminal` on a state that is not terminal, a timer's `loops`. The JSON `null` the old wire used for those is absence now |
 
-A line longer than `max_line`, or one containing no `\n` after `max_line` bytes,
-is discarded up to and including the next `\n` and answered with `error` /
-`too_long`. The receiver must not attempt to parse a truncated object: a
-half-parsed `graph_state` is exactly the failure this protocol exists to
-prevent.
+A frame that is too long, is not valid COBS, or whose CRC does not match is
+answered with `error` / `too_long`, `bad_cobs` or `bad_crc`, and one that
+arrives intact but does not decode as a message with `error` / `bad_message`.
+**None of these carries `in_reply_to`**: nothing in a frame that failed its
+check can be believed, the `message_id` included. The receiver never acts on a
+partly-read frame: a half-decoded `graph_state` is exactly the failure this
+protocol exists to prevent.
 
 ### 1.1 The CRC
 
-`crc` is a string of exactly four uppercase hex digits: **CRC-16/CCITT-FALSE**
-(polynomial `0x1021`, initial value `0xFFFF`, no reflection, no final XOR) over
-the bytes of the line **preceding** the literal `,"crc":`.
-
-```
-{"msg_type":"ping","message_id":41,"crc":"A3CE"}
-└       covered by the CRC       ┘└not covered ┘
-```
-
-`crc` is required to be the final member precisely so that the receiver can find
-it without parsing: scan **backwards** from the `}` for `,"crc":"`, CRC
-everything before it, compare. That costs one pass and no buffer, which matters
-on the device and costs the host nothing.
-
-A message whose CRC does not match is answered with `error` / `bad_crc` naming
-the `message_id` if one could be read, and is otherwise dropped. **It is never acted
-on**, not even partially.
+**CRC-16/CCITT-FALSE** (polynomial `0x1021`, initial value `0xFFFF`, no
+reflection, no final XOR) over the protobuf bytes, appended big-endian before
+COBS encoding.
 
 A CRC is not security and is not claimed to be. It catches the failure that
-actually happens on a USB CDC link — a truncated or spliced line after a
+actually happens on a USB CDC link — a truncated or spliced frame after a
 re-enumeration — early enough that a corrupt graph is refused instead of run.
 
 ### 1.2 `message_id`
 
-An unsigned 16-bit counter, **independent per direction**, incremented by one
-for every line sent and wrapping through zero. It exists for link-level retry
+An unsigned 16-bit counter — carried in a `uint32` — **independent per
+direction**, incremented by one for every frame sent and wrapping through zero. It exists for link-level retry
 and for nothing else; trial attribution is `trial_id`'s job, and the two are
 never conflated.
 
@@ -89,7 +93,7 @@ never conflated.
 > advertised a _sequence_, and readers reasonably expected ordering from it.
 > This protocol provides none — a gap is explicitly not an error, and nothing
 > anywhere waits for a lower number to arrive first. What the field actually
-> does is identify one line, so that a resend of it can be recognised as one.
+> does is identify one message, so that a resend of it can be recognised as one.
 > It is named for that job now. No bridge shipped with the old name; `proto`
 > stays **1**.
 
@@ -108,7 +112,7 @@ never conflated.
 
   The memory is **one command deep**, not a window, because this is strict
   request/response with one command in flight. Deeper would mean storing that
-  many complete replies — `max_line` bytes each — which on a 32 KB part buys
+  many complete replies — `max_frame` bytes each — which on a 32 KB part buys
   nothing that the one-deep case does not already cover. An older duplicate is
   therefore re-executed rather than deduplicated; the bridge must not have two
   commands outstanding.
@@ -121,14 +125,15 @@ never conflated.
 
 ## 2. Types and units
 
-| Notation         | Meaning                                                                                                                                                                                                                                             |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `u8` `u16` `u32` | JSON number, unsigned, within the stated width                                                                                                                                                                                                      |
-| `i8` `i32`       | JSON number, signed                                                                                                                                                                                                                                 |
-| `hex64`          | **String** of 1–16 hex digits. Used for the session seed, because a 64-bit integer is not representable in a JSON number — a `double` silently loses the low bits, and a seed that silently changes is a reproducibility bug that nobody would find |
-| `mask`           | `u32`, one bit per line, bit _n_ is line _n_                                                                                                                                                                                                        |
-| `ms`             | Milliseconds, `i32`. Every duration a graph declares                                                                                                                                                                                                |
-| `us`             | Microseconds, `u32`, the device clock. **Wraps every ~71 minutes**; differences are correct across the wrap, absolute values are not comparable between trials                                                                                      |
+| Notation         | Meaning                                                                                                          |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `u8` `u16` `u32` | `uint32` on the wire, and refused as `bad_field` above the stated width rather than truncated into another value |
+| `i8` `i32`       | `sint32` on the wire, and likewise range-checked                                                                 |
+| `u64`            | `uint64`. The session seed, which the NDJSON wire had to carry as a hex string because a JSON number is a double |
+| `mask`           | `u32`, one bit per line, bit _n_ is line _n_                                                                     |
+| `ms`             | Milliseconds, `i32`. Every duration a graph declares                                                             |
+| `us`             | Microseconds, `u32`, the device clock. **Wraps every ~71 minutes**; differences are correct across the wrap, absolute values are not comparable between trials |
+| a token          | An enum; see the note at the top on how its values are named here                                               |
 
 **Milliseconds on the wire, microseconds in the record.** A graph is authored in
 milliseconds because that is the unit an experimenter thinks in; a run is
@@ -149,16 +154,15 @@ reconnecting the bridge must not cost a re-upload.
 {
   "msg_type": "hello",
   "message_id": 0,
-  "proto": 1,
-  "seed": "0123456789ABCDEF",
-  "crc": "...."
+  "proto": 2,
+  "seed": 81985529216486895
 }
 ```
 
 | Field   | Type    |                                                                                                                                   |
 | ------- | ------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `proto` | `u16`   | Protocol version. **1**                                                                                                           |
-| `seed`  | `hex64` | The session seed. Every per-trial stream is derived from it and the `trial_id`, so a session replays exactly from this one number |
+| `proto` | `u16`   | Protocol version. **2**, the protobuf link; 1 was the NDJSON wire                                                                 |
+| `seed`  | `u64`   | The session seed. Every per-trial stream is derived from it and the `trial_id`, so a session replays exactly from this one number |
 
 Answered with `hello_ack`, or `error` / `bad_proto`.
 
@@ -221,8 +225,7 @@ sessions, since an upload is refused with `busy` while a trial is armed.
   "msg_type": "set_begin",
   "message_id": 1,
   "set_version": 7,
-  "n_graphs": 3,
-  "crc": "...."
+  "n_graphs": 3
 }
 ```
 
@@ -239,8 +242,7 @@ sessions, since an upload is refused with `busy` while a trial is armed.
   "message_id": 4,
   "slot": 0,
   "n_states": 4,
-  "entry": 0,
-  "crc": "...."
+  "entry": 0
 }
 ```
 
@@ -276,8 +278,7 @@ is range-checked against the pool as it arrives rather than after the fact.
   "i": 0,
   "kind": "uniform",
   "a": 300,
-  "b": 700,
-  "crc": "...."
+  "b": 700
 }
 ```
 
@@ -289,7 +290,7 @@ is range-checked against the pool as it arrives rather than after the fact.
 | `"choice"`      | —             | —      | —       | `opts`: array of ms. `weights`: optional array of `u32`, same length |
 
 `i` must equal the number of distributions already accepted. Stating it
-explicitly rather than implying it from arrival order costs four bytes and turns
+explicitly rather than implying it from arrival order costs a byte and turns
 a dropped message from a silently mis-indexed graph into a refusal.
 
 #### `graph_state`
@@ -300,17 +301,16 @@ a dropped message from a silently mis-indexed graph into a refusal.
   "message_id": 6,
   "i": 1,
   "terminal": null,
-  "timeout": { "dist": 0, "target": 2 },
-  "crc": "...."
+  "timeout": { "dist": 0, "target": 2 }
 }
 ```
 
 | Field      | Type             |                                                                                                                                                                                                                                                                                 |
 | ---------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `i`        | `u8`             | State index. Must equal the number of states already accepted                                                                                                                                                                                                                   |
-| `terminal` | `i8` or `null`   | The outcome code this state reports, or `null` for a non-terminal state. The device treats it as opaque — see §6                                                                                                                                                                |
-| `timeout`  | object or `null` | `dist` indexes the distribution pool; `target` is the state entered when it expires                                                                                                                                                                                             |
-| `relight`  | `u8` or `null`   | **Terminal states only.** The distribution the dwell in this state is drawn from — how long before another run may begin. Absent or `null` means none, which is what every graph written before this field existed says. A `relight` on a state that is not terminal is refused |
+| `terminal` | `i8`, optional   | The outcome code this state reports; absent (`null` here) for a non-terminal state. The device treats it as opaque — see §6                                                                                                                                                     |
+| `timeout`  | object, optional | `dist` indexes the distribution pool; `target` is the state entered when it expires. Absent for none                                                                                                                                                                            |
+| `relight`  | `u8`, optional   | **Terminal states only.** The distribution the dwell in this state is drawn from — how long before another run may begin. Absent or `null` means none, which is what every graph written before this field existed says. A `relight` on a state that is not terminal is refused |
 
 **`relight` does not give a terminal state an exit.** Nothing exits a terminal
 state: the run ends there, its record is closed, and the dwell is drawn on
@@ -337,8 +337,7 @@ a single device-wide setting could not express.
   "none": 8,
   "target": 2,
   "hold": 1,
-  "level": false,
-  "crc": "...."
+  "level": false
 }
 ```
 
@@ -348,7 +347,7 @@ a single device-wide setting could not express.
 | `any`    | `mask`         | At least one must be high. `0` means "don't care"                                                                                                                                                                           |
 | `none`   | `mask`         | None of these may be high                                                                                                                                                                                                   |
 | `target` | `u8`           | State entered when the predicate fires                                                                                                                                                                                      |
-| `hold`   | `u8` or `null` | Distribution index for how long the predicate must stay true before it fires. `null` for none                                                                                                                               |
+| `hold`   | `u8`, optional | Distribution index for how long the predicate must stay true before it fires. Absent for none                                                                                                                                |
 | `level`  | bool           | `false` (default): the predicate fires on its own **rising edge**, so a transition already true on entry does not fire until the predicate goes false and true again. `true`: it fires immediately on entry if already true |
 
 Declaration order resolves a tie: the first transition of a state whose
@@ -364,8 +363,7 @@ tie-break an experimenter can reason about from reading the graph.
   "on": "entry",
   "line": 2,
   "kind": "pulse",
-  "ms": 50,
-  "crc": "...."
+  "ms": 50
 }
 ```
 
@@ -437,8 +435,7 @@ A timer that runs **beside** the state machine rather than inside it.
   "gap": 3,
   "line": 0,
   "loops": 3,
-  "none": 16,
-  "crc": "...."
+  "none": 16
 }
 ```
 
@@ -508,8 +505,7 @@ timer is already running is ignored.
   "msg_type": "graph_end",
   "message_id": 40,
   "n_transitions": 6,
-  "n_output_actions": 5,
-  "crc": "...."
+  "n_output_actions": 5
 }
 ```
 
@@ -526,17 +522,17 @@ graph should be told which graph. Answered with `ack`.
   "n_states": 9,
   "n_transitions": 6,
   "n_output_actions": 5,
-  "checksum": "<crc16>",
-  "crc": "...."
+  "checksum": 48879
 }
 ```
 
 The set's totals across every graph, and the checksum.
 
-`checksum` is CRC-16/CCITT-FALSE accumulated over the **CRC-covered bytes of
-every upload message since `set_begin`, in arrival order, `set_begin` included
-and `set_end` excluded**. It is not the same thing as the per-line `crc`: that
-one catches a corrupt line, this one catches a _missing_ one.
+`checksum` is CRC-16/CCITT-FALSE accumulated over the **protobuf bytes of every
+upload message since `set_begin`, in arrival order, `set_begin` included and
+`set_end` excluded** — the `HostMessage` each frame carried, envelope and all.
+It is not the same thing as the per-frame CRC: that one catches a corrupt
+frame, this one catches a _missing_ one.
 
 On success the whole set is validated — every index in range, every slice inside
 its pool, no output line the board does not have, no transition leaving its own
@@ -559,8 +555,7 @@ The per-trial message. Arms the device for exactly one trial.
   "graph_index": 2,
   "cap_ms": 30000,
   "start": "serial",
-  "patch": [{ "i": 0, "a": 250, "b": 900 }],
-  "crc": "...."
+  "patch": [{ "i": 0, "a": 250, "b": 900 }]
 }
 ```
 
@@ -604,10 +599,10 @@ Answered with `armed`, or `error`.
 ### 3.4 `start`, `cancel`, `ping`, `state`
 
 ```json
-{"msg_type":"start","message_id":42,"trial_id":193,"crc":"...."}
-{"msg_type":"cancel","message_id":43,"trial_id":193,"reason":"host","crc":"...."}
-{"msg_type":"ping","message_id":44,"crc":"...."}
-{"msg_type":"state","message_id":45,"crc":"...."}
+{"msg_type":"start","message_id":42,"trial_id":193}
+{"msg_type":"cancel","message_id":43,"trial_id":193,"reason":"host"}
+{"msg_type":"ping","message_id":44}
+{"msg_type":"state","message_id":45}
 ```
 
 `start` is refused unless the device is armed for that `trial_id` and the
@@ -634,7 +629,7 @@ The device announces it with an unsolicited `started` — the same message the
 serial path replies with, minus `in_reply_to`:
 
 ```json
-{"msg_type":"started","message_id":88,"trial_id":193,"at_us":41902133,"by":"line","line":3,"crc":"...."}
+{"msg_type":"started","message_id":88,"trial_id":193,"at_us":41902133,"by":"line","line":3}
 ```
 
 `by` is `"line"` or `"serial"`, on both forms, so a host reads one field rather
@@ -699,8 +694,7 @@ when a rig is wired and then not again for a year.
   "invert": 0,
   "enable": 4294967295,
   "safe": 0,
-  "debounce_ms": [0, 2, 2, 0],
-  "crc": "...."
+  "debounce_ms": [0, 2, 2, 0]
 }
 ```
 
@@ -713,8 +707,10 @@ when a rig is wired and then not again for a year.
 
 Every member is optional and an absent one leaves that setting alone —
 `{"safe":5}` changes the safe levels and nothing else. `debounce_ms` is the
-exception to "leaves it alone" only in the sense above: sending the array at all
-replaces the whole table.
+exception to "leaves it alone" only in the sense above: a non-empty list
+replaces the whole table. **An empty one leaves it alone**, since protobuf
+cannot tell an empty list from an absent one — so `[0]` is how to remove every
+debounce.
 
 Answered with `ack`, or `error`. **Refused with `busy` while a trial is armed or
 running**, like a graph upload and for a sharper reason: the conditioning it
@@ -737,7 +733,7 @@ a debounce must not take the safe levels with it.
 ### 3.6 `timers`
 
 ```json
-{ "msg_type": "timers", "message_id": 46, "enable": 5, "crc": "...." }
+{ "msg_type": "timers", "message_id": 46, "enable": 5 }
 ```
 
 | Field    | Type  |                                                      |
@@ -765,7 +761,7 @@ for.
 ### 3.7 `pins`
 
 ```json
-{ "msg_type": "pins", "message_id": 9, "dir": "in", "crc": "...." }
+{ "msg_type": "pins", "message_id": 9, "dir": "in" }
 ```
 
 Asks the device what its lines are called and, by asking twice, which of them
@@ -785,11 +781,12 @@ wrong drives a valve from a lever's line number and nothing anywhere says so.
 | ----- | ----------------------------------------------------------------------- |
 | `dir` | **Required.** `"in"` or `"out"`. Anything else is `error` / `bad_field` |
 
-**One direction per request, and no chunking.** Both directions in one reply do
-not fit `max_line` on a 32-line board, and a reply that silently carried half
-the map would be worse than none: the host would believe it had the whole
-thing. One direction always fits. A device whose labels somehow do not answers
-`error` / `too_long` rather than truncating.
+**One direction per request, and no chunking.** A reply that silently carried
+half the map would be worse than none: the host would believe it had the whole
+thing, and one direction always fits a frame. A label longer than
+`link.options` allows — seven characters — is answered with `error` /
+`too_long` rather than truncated: `"D1"` where the board says `"D10"` is a wire
+in the wrong hole.
 
 `pins` is legal whenever `hello` has been answered, changes nothing, and may be
 asked at any time — including during a trial, though a host with any sense asks
@@ -805,8 +802,7 @@ once per connection.
   "graph_index": 0,
   "cap_ms": 30000,
   "seed": "0123456789ABCDEF",
-  "first_trial_id": 1,
-  "crc": "...."
+  "first_trial_id": 1
 }
 ```
 
@@ -864,7 +860,7 @@ trial is cancelled as `link_lost` and every line goes to its safe level.
 ### 3.9 `save`
 
 ```json
-{ "msg_type": "save", "message_id": 11, "crc": "...." }
+{ "msg_type": "save", "message_id": 11 }
 ```
 
 Write what the device currently holds — its wiring, its committed graph set and
@@ -884,8 +880,7 @@ Answered with `saved`:
   "set_version": 7,
   "autorun": true,
   "write_count": 3,
-  "written": true,
-  "crc": "...."
+  "written": true
 }
 ```
 
@@ -944,7 +939,7 @@ saved settings is not one.
   "n_graphs": 3,
   "has_wiring": true,
   "caps": {
-    "max_line": 512,
+    "max_frame": 512,
     "max_states": 32,
     "max_transitions": 64,
     "max_output_actions": 64,
@@ -954,8 +949,7 @@ saved settings is not one.
     "max_graphs": 20,
     "max_timers": 8,
     "first_timer_line": 24
-  },
-  "crc": "...."
+  }
 }
 ```
 
@@ -981,10 +975,9 @@ carried a demo paradigm and therefore a second path buffer, and reported 64
 where the other reported 255. There is one image now and it reports 255 — which
 is exactly why a host reads the number rather than knowing it.
 
-They are **nested rather than flat**, and that is a memory decision rather than a
-stylistic one: a receiver's per-message member limit is what bounds how much
-stack a parse costs, and flattening these would push the largest message in the
-protocol past a limit that every other parse would then pay for.
+They are **nested** in a `Caps` message, as they were on the NDJSON wire, where
+a flat `hello_ack` would have pushed the largest message past the parser's
+member limit. The limit went with the parser; the shape stayed.
 
 `has_wiring` says whether anybody has sent §3.5's `wiring`. **False means the
 board is running its compile-time defaults**, which is a different thing from
@@ -1003,8 +996,7 @@ bridge that dropped its link knows whether it has to re-upload.
   "in_reply_to": 41,
   "trial_id": 193,
   "set_version": 7,
-  "graph_index": 2,
-  "crc": "...."
+  "graph_index": 2
 }
 ```
 
@@ -1020,8 +1012,9 @@ the only complete copy is a `truncated` result, and `first_seq` below is what
 lets a host say exactly which visits it is missing.
 
 Chunked, for the same reason the upload is: a full path does not fit in a
-512-byte line, and buffering one that did would cost the device a kilobyte it
-does not have.
+512-byte frame, and buffering one that did would cost the device a kilobyte it
+does not have. A chunk carries up to fourteen rows — the most whose worst case
+still fits a frame.
 
 ```
 result_begin
@@ -1031,31 +1024,29 @@ result_end
 
 ```json
 {"msg_type":"result_begin","message_id":9,"trial_id":193,"outcome":1,"cancel_reason":0,
- "total_us":1483200,"path_len":5,"first_seq":0,"total_visits":5,"truncated":false,"crc":"...."}
+ "total_us":1483200,"path_len":5,"first_seq":0,"total_visits":5,"truncated":false}
 
 {"msg_type":"result_path","message_id":10,"trial_id":193,"from":0,
- "p":[[0,"timeout",255,500,0,500120],[1,"transition",2,0,500120,183044]],"crc":"...."}
+ "p":[{"state":0,"exit":"timeout","transition":255,"drawn_ms":500,"entered_us":0,"duration_us":500120},
+      {"state":1,"exit":"transition","transition":2,"drawn_ms":0,"entered_us":500120,"duration_us":183044}]}
 
-{"msg_type":"result_end","message_id":12,"trial_id":193,"checksum":"<crc16>","crc":"...."}
+{"msg_type":"result_end","message_id":12,"trial_id":193,"checksum":48879}
 ```
 
-Each entry of `p` is a fixed six-element array, **not** an object:
+Each entry of `p` is a `StateVisit`:
 
-```
-[state_index, exit_cause, transition_index, drawn_ms, entered_us, duration_us]
-```
+| Field         | Type   |                                                                                                                                                                                                                                                                                           |
+| ------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `state`       | `u8`   | Which state. An **index**, not a name — the bridge holds the graph and resolves names host-side, which is part of what keeps the device inside 32 KB                                                                                                                                      |
+| `exit`        | token  | `"timeout"` `"transition"` `"cancel"` `"terminal"`                                                                                                                                                                                                                                        |
+| `transition`  | `u8`   | Which of **this state's** transitions fired, counted from zero in declaration order, or `255` for an exit that was not one. Per state, like `state_index` is per graph: the host reads the graph the way it wrote it, and never has to know where a state's slice of the shared pool sits |
+| `drawn_ms`    | `i32`  | The **realised** duration of the draw, in ms. Reported so a random timing is evidence in the record and not merely reproducible from the seed                                                                                                                                             |
+| `entered_us`  | `u32`  | Entry timestamp, device clock                                                                                                                                                                                                                                                             |
+| `duration_us` | `u32`  | Measured duration. This is what actually happened; `drawn_ms` is what was asked for                                                                                                                                                                                                       |
 
-| Position | Type   |                                                                                                                                                                                                                                                                                           |
-| -------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 0        | `u8`   | Which state. An **index**, not a name — the bridge holds the graph and resolves names host-side, which is part of what keeps the device inside 32 KB                                                                                                                                      |
-| 1        | string | `"timeout"` `"transition"` `"cancel"` `"terminal"`                                                                                                                                                                                                                                        |
-| 2        | `u8`   | Which of **this state's** transitions fired, counted from zero in declaration order, or `255` for an exit that was not one. Per state, like `state_index` is per graph: the host reads the graph the way it wrote it, and never has to know where a state's slice of the shared pool sits |
-| 3        | `i32`  | The **realised** duration of the draw, in ms. Reported so a random timing is evidence in the record and not merely reproducible from the seed                                                                                                                                             |
-| 4        | `u32`  | Entry timestamp, device clock                                                                                                                                                                                                                                                             |
-| 5        | `u32`  | Measured duration. This is what actually happened; position 3 is what was asked for                                                                                                                                                                                                       |
-
-Objects would be clearer to read and roughly twice the bytes. The array form is
-documented once, here, and decoded once, in the bridge.
+On the NDJSON wire this was a six-element array, because objects there cost
+twice the bytes. Named protobuf fields cost one byte of tag each, so the row is
+named now — and still documented once, here, and decoded once, in the bridge.
 
 `truncated` is set when the run visited more states than `max_path` holds. **A
 graph may loop, and a long trial degrades to a truncated path rather than to a
@@ -1107,13 +1098,12 @@ nothing else.
   "message_id": 57,
   "trial_id": 193,
   "seq": 2,
-  "v": [1, "transition", 2, 0, 500120, 183044],
-  "crc": "...."
+  "v": {"state": 1, "exit": "transition", "transition": 2, "drawn_ms": 0,
+        "entered_us": 500120, "duration_us": 183044}
 }
 ```
 
-`v` is **the same six-element array as a `result_path` entry**, in the same
-order and with the same types (§4.3). It is decoded by the same function on the
+`v` is **the same `StateVisit` as a `result_path` entry** (§4.3). It is decoded by the same function on the
 host; two shapes for one fact is how the two drift apart.
 
 | Field      | Type  |                                                                                                                                                                                                                                                              |
@@ -1141,10 +1131,10 @@ not have the record. `state_report`'s `tx_stalls` is what would say otherwise.
 ### 4.5 `event`, `error`, `log`, `pong`, `state_report`
 
 ```json
-{"msg_type":"event","message_id":13,"us":1483200,"word":6,"crc":"...."}
-{"msg_type":"error","message_id":14,"in_reply_to":41,"code":"bad_graph","message":"...","context":"...","crc":"...."}
-{"msg_type":"log","message_id":15,"level":"warn","message":"...","crc":"...."}
-{"msg_type":"pong","message_id":16,"in_reply_to":44,"up_us":90210000,"us":1483200,"crc":"...."}
+{"msg_type":"event","message_id":13,"us":1483200,"word":6}
+{"msg_type":"error","message_id":14,"in_reply_to":41,"code":"bad_graph","message":"...","context":"..."}
+{"msg_type":"log","message_id":15,"level":"warn","message":"..."}
+{"msg_type":"pong","message_id":16,"in_reply_to":44,"up_us":90210000,"us":1483200}
 ```
 
 `event` reports the conditioned input word on change. **Off by default and never
@@ -1164,7 +1154,9 @@ may parse it.
 `state_report` answers `state` with the current state index, uptime, the
 nested `graph` object (`has_set`, `set_version`, `n_graphs`, `index`),
 `has_wiring` as in §4.1, `autorun` — whether the board is arming its own trials
-(§3.8) — the counts of dropped and unusable lines, and a nested `scan` object.
+(§3.8) — `dropped_lines`, frames thrown away whole (too long, not COBS, a bad
+CRC), and `bad_lines`, frames that arrived intact and still did not decode —
+and a nested `scan` object.
 
 The `scan` object also carries `timers_enabled` and `timers_running`. They are
 in there rather than at the top level because the top level of `state_report` is
@@ -1216,8 +1208,7 @@ difference is a response window measured wrongly. A bridge should surface it.
   "in_reply_to": 9,
   "dir": "in",
   "n": 8,
-  "pins": ["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"],
-  "crc": "...."
+  "pins": ["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"]
 }
 ```
 
@@ -1258,10 +1249,11 @@ the other two.
 
 | `code`           |                                                                                                                                       |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `bad_crc`        | Line CRC mismatch. Nothing was acted on                                                                                               |
-| `too_long`       | Line exceeded `max_line`; discarded to the next newline                                                                               |
-| `bad_json`       | Not a parsable object, or deeper than 4                                                                                               |
-| `unknown_type`   | Unrecognised `msg_type`                                                                                                               |
+| `bad_crc`        | Frame CRC mismatch. Nothing was acted on, and no `in_reply_to`                                                                        |
+| `bad_cobs`       | Not a valid COBS frame. Likewise                                                                                                      |
+| `too_long`       | A frame exceeded `max_frame` before its delimiter. Likewise. Also a `pin_map` label that does not fit                                 |
+| `bad_message`    | An intact frame that is not a `HostMessage` — a list longer than `link.options` allows, a `message_id` wider than 16 bits             |
+| `unknown_type`   | A `body` this firmware does not know                                                                                                  |
 | `bad_proto`      | `hello` named a protocol version this firmware does not speak                                                                         |
 | `not_ready`      | The command is legal but not in this state — `start` when not armed, `graph_state` before `graph_begin`                               |
 | `bad_order`      | A graph message arrived out of the order §3.2 requires                                                                                |
@@ -1272,7 +1264,7 @@ the other two.
 | `unknown_trial`  | A `start` or `cancel` for a `trial_id` that is not the armed one                                                                      |
 | `busy`           | A trial is in flight and the command is not legal during one                                                                          |
 | `no_pin_map`     | `pins` was asked of a build that does not name its pins. The host keeps whatever it assumed, and knows that it assumed it             |
-| `bad_field`      | A field was present, parsable, and not one of the values it is allowed to be — `pins` with a `dir` that is neither `"in"` nor `"out"` |
+| `bad_field`      | A field is not one of the values it is allowed to be — `pins` with a `dir` that is neither `"in"` nor `"out"`, a `u8` above 255, a required one absent |
 | `internal`       | A bug. Should never appear; if it does, it is one                                                                                     |
 
 **Every refusal names what to change.** An error whose `context` is empty is a
