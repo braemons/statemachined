@@ -25,7 +25,8 @@ use crate::device::state_visit_trace::{
 use crate::device::statemachined_device::UploadProblem;
 use crate::firmware_manifest::{compare_firmware, installed_firmware_version, INSTALLED_MANIFEST};
 use crate::graph_set_compiler::{compile_graph_set_for_device, CompiledGraphSet, DeviceCapabilities};
-use crate::model::graph_definition::GraphDefinition;
+use crate::model::graph_definition::{GraphDefinition, Refused};
+use crate::model::line_map::LineMap;
 use crate::model::state_machine_config::StateMachineConfig;
 use crate::store::{Document, Store, StoreProblem};
 use crate::wire::statemachined::v1 as wire;
@@ -806,6 +807,47 @@ impl DaemonState {
         )
     }
 
+    /// The rig's lines, with what each reads right now where there is a board
+    /// to ask.
+    fn lines_now(&self) -> Result<wire::LineMapView, tonic::Status> {
+        let report = self.read_device_state()?;
+        let word = |key: &str| {
+            report.get("io").and_then(|io| io.get(key)).and_then(serde_json::Value::as_i64)
+        };
+        let device = self.device.lock().map_err(poisoned)?;
+        Ok(line_map_view(&device, word("in"), word("out")))
+    }
+
+    /// Rename lines and change the wiring, and say whether the board heard.
+    ///
+    /// **Resolved against the board before anything is kept**, so a map naming
+    /// a pin this board has not got is refused with the rig still running on
+    /// the map it had. The map goes to the device and into the loaded config
+    /// *in memory*, and not to the store until somebody saves that config: a
+    /// wiring change has to reach the board at once to be checked against the
+    /// wire, and one that reached the disk on every keystroke would make
+    /// "revert" mean nothing.
+    fn apply_line_map(&self, line_map: LineMap) -> Result<bool, tonic::Status> {
+        self.with_device(|device| -> Result<bool, tonic::Status> {
+            let resolved = if device.is_connected() {
+                line_map.resolved_against(&device.pin_map).map_err(|problem| {
+                    tonic::Status::from(Refusal::from(DeviceProblem::LineMap(problem.to_string())))
+                })?
+            } else {
+                line_map.clone()
+            };
+            device.line_map = line_map.clone();
+            device.resolved_line_map = resolved;
+            if let Some(config) = self.loaded_config.lock().map_err(poisoned)?.as_mut() {
+                config.line_map = line_map;
+            }
+            if device.is_connected() {
+                device.push_wiring().map_err(status_for_device)?;
+            }
+            Ok(device.is_connected())
+        })?
+    }
+
     /// No board, said before anything is loaded or compiled.
     fn require_a_board(&self) -> Result<(), tonic::Status> {
         if self.device_connected() {
@@ -1215,22 +1257,43 @@ impl service::device_server::Device for DaemonServices {
         _request: tonic::Request<crate::wire::statemachined::v1::ReadLinesRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::LineMapView>, tonic::Status> {
         let state = self.state.clone();
-        off_the_runtime(move || {
-            let report = state.read_device_state()?;
-            let word = |key: &str| {
-                report.get("io").and_then(|io| io.get(key)).and_then(serde_json::Value::as_i64)
-            };
-            let device = state.device.lock().map_err(poisoned)?;
-            Ok(tonic::Response::new(line_map_view(&device, word("in"), word("out"))))
-        })
-        .await
+        off_the_runtime(move || Ok(tonic::Response::new(state.lines_now()?))).await
     }
 
     async fn write_line_map_file(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::StoredFile>,
+        request: tonic::Request<crate::wire::statemachined::v1::StoredFile>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::WriteLineMapResult>, tonic::Status> {
-        unported!("Device/write_line_map_file")
+        // **A line map is a document**, so what crosses is the file, and the
+        // model that owns it is the only thing that decides whether it is one:
+        // two lines with one name, or a line that says neither its index nor
+        // its pin, is refused by field here rather than puzzled over on a bench.
+        let text = request.into_inner().text;
+        let state = self.state.clone();
+        off_the_runtime(move || {
+            let line_map = serde_json::from_str::<LineMap>(&text)
+                .map_err(|problem| Refused(problem.to_string()))
+                .and_then(|line_map| line_map.validate().map(|()| line_map))
+                .map_err(|problem| {
+                    tonic::Status::from(Refusal::new(
+                        Category::BadRequest,
+                        "bad_line_map",
+                        problem.0,
+                        "text",
+                    ))
+                })?;
+            let pushed = state.apply_line_map(line_map)?;
+            let loaded = state.loaded_config_name();
+            Ok(tonic::Response::new(wire::WriteLineMapResult {
+                line_map: Some(state.lines_now()?),
+                pushed_to_device: pushed,
+                // Always false, and named rather than omitted: a panel has to
+                // be able to say the edit is one restart from being lost.
+                saved_to_the_store: false,
+                state_machine_config: loaded,
+            }))
+        })
+        .await
     }
 
     async fn read_serial_monitor(

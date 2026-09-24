@@ -15,7 +15,7 @@ still calls `unported!`, so it cannot drift from the proto.
 
 ## Done
 
-**34 of 50 rpcs.** The stores, the graph-set upload, the session around it,
+**35 of 50 rpcs.** The stores, the graph-set upload, the session around it,
 the trace, and trials: arming one, starting it, cancelling it, and reading back
 what it did.
 
@@ -75,7 +75,7 @@ green differential test that cannot go red is not evidence.
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
 | Trace | `test_state_visit_trace.py`, ported one test for one, and the day's file line against Python's `json.dumps` | 11 tests |
-| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree | 84 calls |
+| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree | 103 calls |
 | Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
 
 ### Bugs this found in the Python daemon
@@ -182,14 +182,14 @@ not, and found `line_map.rs` answering two refusals differently from Python:
 
 ## Left
 
-**16 rpcs**, and none of them waits on anything but its own module now.
+**15 rpcs**, and none of them waits on anything but its own module now.
 
 | Module | Lines | Unblocks |
 |---|---|---|
 | `daemon/event_recording.py` | 431 | `Recording/*` (9 rpcs) |
 | `statemachined_device.py` — autorun, settings, timers | ~110 | `Device/ReadAutorun`, `WriteAutorun`, `SaveSettings` |
 | `device/device_line_monitor.py` | 112 | `Device/ReadSerialMonitor`, `WatchSerialMonitor` |
-| the servicers alone | — | `Device/WriteLineMapFile`, `Configuration/PatchConfiguration` |
+| the servicer alone | — | `Configuration/PatchConfiguration` |
 
 **Not exercised by the comparison yet:** a gap in the visit stream's `seq`
 (the `sequence_gap` entry), a link that drops mid-session (`link_lost`, and

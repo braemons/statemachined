@@ -241,7 +241,18 @@ def first_differences(python, rust, where="", limit=5):
     return found[:limit]
 
 
-PARSER_WORDS = {"bad_graph", "bad_state_machine_config"}
+PARSER_WORDS = {"bad_graph", "bad_state_machine_config", "bad_line_map"}
+
+
+def a_line_map(**renames) -> str:
+    """The native device's own map, with some lines renamed or re-pinned."""
+    line_map = json.loads(
+        (HERE / "configs" / "native-device.config.json").read_text()
+    )["line_map"]
+    for direction in ("input_lines", "output_lines"):
+        for line in line_map[direction]:
+            line.update(renames.get(line["name"], {}))
+    return json.dumps(line_map)
 
 #: A graph that is legal and probably not what its author meant: a line in
 #: both `all` and `any` makes every other line in `any` moot.
@@ -357,6 +368,13 @@ AFTER_A_STARTUP = [
     ("the trace, as started", lambda c: c.read_trace()),
     ("the device, as started", lambda c: c.read_device()),
     ("the lines, as started", lambda c: c.read_lines()),
+    ("a line map that does not parse", lambda c: c.write_line_map("x", "{not json")),
+    ("a line map naming a pin the board has not got",
+     lambda c: c.write_line_map("x", a_line_map(lever={"pin_label": "D99"}))),
+    ("the lines, after that was refused", lambda c: c.read_lines()),
+    ("a line map that renames the lever",
+     lambda c: c.write_line_map("x", a_line_map(lever={"name": "paw"}))),
+    ("the session, with the map edited in memory", lambda c: c.read_session()),
     ("loading a config written by index", lambda c: c.load_config("by-index")),
     ("the lines, by index", lambda c: c.read_lines()),
 ]
