@@ -84,7 +84,7 @@ green differential test that cannot go red is not evidence.
 ### Bugs this found in the Python daemon
 
 A port is a second implementation, and a second implementation is what finds
-these. All four are fixed in `daemon/`, each in its own commit, each with a
+these. All nine are fixed in `daemon/`, each in its own commit, each with a
 regression test:
 
 1. **`ReadGraphFile` served a file it would not take back.** `exclude_defaults`
@@ -107,24 +107,24 @@ regression test:
    arrived in `ReadDevice` wrapped in double quotes, because the store's
    "not stored" is a `KeyError`.
 
-### And three more in the Python daemon, from the later rpcs
+### And five more in the Python daemon, from the later rpcs
 
 5. **A patched seed or baud never reached the device.** Only the target and
    the expected board were passed on; `PATCHABLE` promised the seed "takes
    effect on the next connection", and it did not.
 6. **`graph_mode` took any string.** The model's `Literal` is not checked on
    assignment, so "banana" was kept and reported back as the rig's mode.
+7. **A link the daemon closed itself was written down as lost.** The link
+   thread checked for a connection outside the lock; a re-greeting that found
+   the wrong board closed it in between, and the next pump's
+   `DeviceNotConnected` became a `link_lost` entry. The Rust thread had the
+   same shape and now asks again under the lock too.
 8. **`ReadAutorun` never said which graph.** It read `slot` and `graph` from a
    reply that carries `graph_index` and no name, so every answer was slot 0 and
    no graph. The name now comes from the committed set, as the proto says. The
    seed is still always zero: the board does not report it.
 9. **A recording name ending in a newline was taken.** `NAME_PATTERN` was
    applied with `re.match`, whose `$` also matches before a trailing newline.
-7. **A link the daemon closed itself was written down as lost.** The link
-   thread checked for a connection outside the lock; a re-greeting that found
-   the wrong board closed it in between, and the next pump's
-   `DeviceNotConnected` became a `link_lost` entry. The Rust thread had the
-   same shape and now asks again under the lock too.
 
 ### And in the firmware
 
