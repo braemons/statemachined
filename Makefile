@@ -537,6 +537,24 @@ rust-test: rust-corpus  ## the Rust tests, against a freshly generated corpus
 rust-check: rust rust-check-proto rust-test  ## everything the Rust side checks
 	cargo clippy --manifest-path daemon-rs/Cargo.toml --all-targets -- -D warnings
 
+# The family's e2e suite -- contracts/e2e-tests, the acceptance test for the
+# cutover -- against the Rust daemon, unmodified. `test-local` installs the three
+# checkouts into the suite's environment (and collects, so nothing runs twice);
+# then the suite runs with tools/e2e_rust/ first on PATH, where `statemachined
+# serve` starts the Rust binary and everything else is the Python command.
+E2E ?= ../contracts/e2e-tests
+
+.PHONY: e2e-rust
+e2e-rust: rust integration-device  ## the family's e2e suite, with the Rust daemon serving
+	$(MAKE) -C $(E2E) test-local ARGS="--collect-only -q" >/dev/null
+	cd $(E2E) && \
+	  STATEMACHINED_RUST=$(abspath target/debug/statemachined) \
+	  STATEMACHINED_PYTHON=$$(pwd)/.venv/bin/statemachined \
+	  VSTIMD_BINARY=$(abspath ../vstimd)/target/release/vstimd \
+	  STATEMACHINED_NATIVE_DEVICE=$(abspath $(BUILD))/statemachined_native_device \
+	  PATH=$(abspath tools/e2e_rust):$$(pwd)/.venv/bin:$$PATH \
+	  .venv/bin/python -m pytest -v $(ARGS)
+
 .PHONY: ported
 ported:  ## how much of the API the Rust daemon answers
 	@total=$$(grep -c 'async fn ' daemon-rs/src/wire/service/statemachined.v1.rs); \

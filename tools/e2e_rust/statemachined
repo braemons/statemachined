@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""`statemachined`, with `serve` answered by the Rust daemon.
+
+The e2e suite in `contracts/e2e-tests/` starts statemachined the way its
+service unit does -- `statemachined serve --port P --config C` -- and talks
+gRPC on `P + 1`, the second port the Python daemon needs. It finds the command
+on PATH. Put this first on PATH and the same suite, unmodified, drives the Rust
+daemon: `serve` becomes the Rust binary on `P + 1`, and every other subcommand
+-- `device`, the bench's own tools -- goes to the Python command, which is
+where they still live.
+
+`make e2e-rust` sets this up. Two variables say where the two daemons are:
+STATEMACHINED_RUST, the Rust binary, and STATEMACHINED_PYTHON, the Python
+console script.
+"""
+
+import os
+import sys
+
+
+def serve(arguments: list[str]) -> None:
+    host, port, config = "127.0.0.1", 8081, None
+    rest = iter(arguments)
+    for argument in rest:
+        if argument == "--host":
+            host = next(rest)
+        elif argument == "--port":
+            port = int(next(rest))
+        elif argument == "--config":
+            config = next(rest)
+        elif argument == "--no-mdns":
+            pass  # the Rust daemon does not advertise yet
+        else:
+            sys.exit(f"statemachined (Rust, via e2e shim): serve does not take {argument!r}")
+    rust = os.environ["STATEMACHINED_RUST"]
+    command = [rust, "--bind", host, "--port", str(port + 1)]
+    if config is not None:
+        command += ["--config", config]
+    os.execv(rust, command)
+
+
+def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "serve":
+        serve(sys.argv[2:])
+    python = os.environ["STATEMACHINED_PYTHON"]
+    os.execv(python, [python, *sys.argv[1:]])
+
+
+if __name__ == "__main__":
+    main()

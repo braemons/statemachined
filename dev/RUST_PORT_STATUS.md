@@ -77,6 +77,7 @@ green differential test that cannot go red is not evidence.
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
 | Trace | `test_state_visit_trace.py`, ported one test for one, and the day's file line against Python's `json.dumps` | 11 tests |
+| The cutover's acceptance test | `contracts/e2e-tests/`, unmodified, with `make e2e-rust` putting `tools/e2e_rust/statemachined` first on PATH so `serve` starts the Rust daemon — vstimd, triald and the native device as they are | 24 passed, 5 skipped (need a board), 1 xfail — the same as against Python |
 | Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree; every line a daemon sends at startup, byte for byte; a recording across a pause, with its gap | 156 calls |
 | Recordings | `test_event_recording.py`, ported one test for one, and the manifest's shape against Python's `json.dumps` | 15 tests |
 | Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
@@ -218,8 +219,6 @@ All three are ported; none has been made to happen against both daemons.
   the `/api` record. Without it a console has to be given the rig's address.
 * **Packaging.** `packaging/` builds a Python wheel into a `.deb`. A Rust binary
   is still a `.deb` and `packages/` does not change, but the Makefile does.
-* **The e2e suite.** `contracts/e2e-tests/` is the acceptance test for the
-  cutover and has not been pointed at this daemon yet.
 
 ---
 
