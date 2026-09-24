@@ -218,7 +218,12 @@ fn a_graph_the_set_does_not_hold_is_not_a_set_that_does_not_fit() {
     assert_eq!(compiled.slot_for_graph_name("state-walk"), Ok(1));
     match compiled.slot_for_graph_name("nobody") {
         Err(CompileError::NotInSet(sentence)) => {
-            assert!(sentence.contains("go-nogo, state-walk, two-alternative-forced-choice"))
+            // Python's sentence, `!r` quotes and all.
+            assert_eq!(
+                sentence,
+                "this set has no graph called 'nobody'. It has: go-nogo, state-walk, \
+                 two-alternative-forced-choice"
+            )
         }
         other => panic!("expected NotInSet, got {other:?}"),
     }

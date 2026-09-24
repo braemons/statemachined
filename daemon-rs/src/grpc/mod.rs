@@ -34,6 +34,7 @@ use crate::wire::statemachined::v1::service;
 
 mod refusal;
 mod trace;
+mod trial;
 use refusal::{store_refusal, Category, Refusal, StoreKind};
 
 /// Not ported yet. See the module docstring.
@@ -446,13 +447,12 @@ impl DaemonState {
         // Timed from before the lock, as Python times it: a caller waiting on
         // somebody else's upload is waiting on this call.
         let started = std::time::Instant::now();
-        let compiled = {
-            let mut device = self.device.lock().map_err(poisoned)?;
-            let set_version = Self::next_set_version(&device);
-            device
-                .upload_graph_set(graphs, set_version)
-                .map_err(|problem| tonic::Status::from(Refusal::from(problem)))?
-        };
+        let compiled = self
+            .with_device(|device| {
+                let set_version = Self::next_set_version(device);
+                device.upload_graph_set(graphs, set_version)
+            })?
+            .map_err(|problem| tonic::Status::from(Refusal::from(problem)))?;
         let elapsed_milliseconds = started.elapsed().as_millis();
         self.trace.append(
             KIND_GRAPH_SET_UPLOADED,
@@ -493,8 +493,7 @@ impl DaemonState {
     /// device — which is what lets somebody load a config to look at it
     /// without disturbing a board mid-experiment.
     fn apply_state_machine_config(&self, config: StateMachineConfig) -> Result<(), tonic::Status> {
-        {
-            let mut device = self.device.lock().map_err(poisoned)?;
+        self.with_device(|device| -> Result<(), tonic::Status> {
             if device.is_connected() {
                 let resolved = config
                     .line_map
@@ -509,7 +508,8 @@ impl DaemonState {
                 device.line_map = config.line_map.clone();
                 device.resolved_line_map = config.line_map.clone();
             }
-        }
+            Ok(())
+        })??;
         let wiring_pushed = self.device_connected();
         self.trace.append(
             KIND_CONFIG_LOADED,
@@ -529,11 +529,7 @@ impl DaemonState {
     /// With no board there is nothing to be busy, so the answer is no rather
     /// than a refusal.
     fn a_trial_is_armed_or_running(&self) -> Result<bool, tonic::Status> {
-        let mut device = self.device.lock().map_err(poisoned)?;
-        if !device.is_connected() {
-            return Ok(false);
-        }
-        let report = device.read_state_report().map_err(status_for_device)?;
+        let report = self.read_device_state()?;
         Ok(report.get("running").and_then(serde_json::Value::as_bool) == Some(true)
             || report.get("link_state").and_then(serde_json::Value::as_i64) == Some(2))
     }
@@ -643,11 +639,13 @@ impl DaemonState {
     /// still runs, and whether that is acceptable is the operator's call. What
     /// must not happen is nobody being able to find out afterwards.
     pub fn connect(&self) -> Result<serde_json::Value, tonic::Status> {
-        let (hello_ack, connection_count) = {
-            let mut device = self.device.lock().map_err(poisoned)?;
-            let hello_ack = device.connect_and_greet().map_err(status_for_device)?;
-            (hello_ack, device.connection_count)
-        };
+        let (hello_ack, connection_count) = self
+            .with_device(|device| {
+                device
+                    .connect_and_greet()
+                    .map(|hello_ack| (hello_ack, device.connection_count))
+            })?
+            .map_err(status_for_device)?;
         let running = hello_ack.get("fw").and_then(serde_json::Value::as_str);
         let installed = installed_firmware_version(std::path::Path::new(INSTALLED_MANIFEST));
         let firmware = compare_firmware(running, installed.as_deref());
@@ -706,11 +704,13 @@ impl DaemonState {
 
     /// One `state_report`, or nothing if there is no board to ask.
     fn read_device_state(&self) -> Result<serde_json::Value, tonic::Status> {
-        let mut device = self.device.lock().map_err(poisoned)?;
-        if !device.is_connected() {
-            return Ok(serde_json::Value::Object(Default::default()));
-        }
-        device.read_state_report().map_err(status_for_device)
+        self.with_device(|device| {
+            if !device.is_connected() {
+                return Ok(serde_json::Value::Object(Default::default()));
+            }
+            device.read_state_report()
+        })?
+        .map_err(status_for_device)
     }
 
     fn device_state(&self) -> Result<wire::DeviceState, tonic::Status> {
@@ -728,6 +728,28 @@ impl DaemonState {
             &state_report,
             last_error,
         ))
+    }
+
+    /// Say the session is over, and write down which trial closing took away.
+    fn close_session(
+        &self,
+        cancelled_trial_id: Option<i64>,
+    ) -> Result<tonic::Response<wire::CloseSessionResult>, tonic::Status> {
+        let was_open = self.session_opened_at.lock().map_err(poisoned)?.take().is_some();
+        let loaded = self.loaded_config.lock().map_err(poisoned)?.as_ref().map(|c| c.name.clone());
+        self.trace.append(
+            KIND_SESSION_CLOSED,
+            trace_fields(serde_json::json!({
+                "state_machine_config": loaded,
+                "cancelled_trial_id": cancelled_trial_id,
+                "was_open": was_open,
+            })),
+        );
+        Ok(tonic::Response::new(wire::CloseSessionResult {
+            was_open,
+            cancelled_trial_id,
+            session: Some(self.session_state()?),
+        }))
     }
 
     /// No board, said before anything is loaded or compiled.
@@ -863,14 +885,58 @@ impl service::state_server::State for DaemonServices {
         &self,
         _request: tonic::Request<crate::wire::statemachined::v1::ReadStateRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::RigState>, tonic::Status> {
-        unported!("State/read_state")
+        let state = self.state.clone();
+        off_the_runtime(move || Ok(tonic::Response::new(state.rig_state()?))).await
     }
 
     async fn watch_state(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::WatchStateRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::WatchStateRequest>,
     ) -> Result<tonic::Response<Self::WatchStateStream>, tonic::Status> {
-        unported!("State/watch_state")
+        // The current state at once, then one frame per change. **At once**: a
+        // client that connected to a quiet rig and saw nothing could not tell
+        // that from a rig that is not there. Frames are coalesced by
+        // construction — each is a whole state read when it is sent — so
+        // `sequence` counts what was sent and nobody reconciles a backlog.
+        let watcher = Watching::register(&self.state, &request, "state");
+        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        tokio::spawn(async move {
+            let mut sequence = 0i64;
+            let mut previous: Option<wire::RigState> = None;
+            loop {
+                let reading = {
+                    let state = watcher.state.clone();
+                    tokio::task::spawn_blocking(move || state.rig_state()).await
+                };
+                let reading = match reading {
+                    Ok(Ok(reading)) => reading,
+                    Ok(Err(status)) => {
+                        let _ = sender.send(Err(status)).await;
+                        return;
+                    }
+                    Err(_) => return,
+                };
+                if previous.as_ref() != Some(&reading) {
+                    let frame = wire::StateFrame {
+                        sequence,
+                        frame: Some(wire::state_frame::Frame::State(reading.clone())),
+                    };
+                    if sender.send(Ok(frame)).await.is_err() {
+                        return;
+                    }
+                    sequence += 1;
+                    previous = Some(reading);
+                    watcher.state.observers.note_delivery(watcher.observer_id, 1);
+                }
+                tokio::select! {
+                    _ = sender.closed() => return,
+                    _ = tokio::time::sleep(WATCH_PERIOD) => {}
+                }
+            }
+        });
+        Ok(tonic::Response::new(Box::pin(
+            tokio_stream::wrappers::ReceiverStream::new(receiver),
+        )))
     }
 
     async fn read_trace(
@@ -969,30 +1035,94 @@ impl service::state_server::State for DaemonServices {
 impl service::trial_server::Trial for DaemonServices {
     async fn configure(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ConfigureTrialRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ConfigureTrialRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::ConfigureTrialResult>, tonic::Status> {
-        unported!("Trial/configure")
+        let state = self.state.clone();
+        let request = request.into_inner();
+        off_the_runtime(move || {
+            state.require_a_board()?;
+            Ok(tonic::Response::new(state.configure_trial(&request)?))
+        })
+        .await
     }
 
     async fn start(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::StartTrialRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::StartTrialRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::StartTrialResult>, tonic::Status> {
-        unported!("Trial/start")
+        let state = self.state.clone();
+        let trial_id = request.into_inner().trial_id;
+        off_the_runtime(move || {
+            state.require_a_board()?;
+            let started = state.start_trial(trial_id)?;
+            Ok(tonic::Response::new(wire::StartTrialResult {
+                trial_id,
+                started_device_microseconds: started
+                    .get("at_us")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0),
+            }))
+        })
+        .await
     }
 
     async fn cancel(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::CancelTrialRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::CancelTrialRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::CancelTrialResult>, tonic::Status> {
-        unported!("Trial/cancel")
+        // **A cancel that races a terminal state comes back with the real
+        // outcome**, passed through rather than rewritten to CANCELLED.
+        let state = self.state.clone();
+        let trial_id = request.into_inner().trial_id;
+        off_the_runtime(move || {
+            state.require_a_board()?;
+            let acknowledgement = state.cancel_trial(trial_id)?;
+            Ok(tonic::Response::new(wire::CancelTrialResult {
+                trial_id,
+                cancelled: acknowledgement
+                    .get("cancelled")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
+                outcome_code: acknowledgement
+                    .get("outcome")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0) as i32,
+            }))
+        })
+        .await
     }
 
     async fn read_result(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadTrialResultRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ReadTrialResultRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::TrialResult>, tonic::Status> {
-        unported!("Trial/read_result")
+        // **Only the last one.** The trace is the history; naming an older
+        // trial is refused rather than answered with the wrong trial, which is
+        // the mistake the whole addressing scheme exists to prevent.
+        let asked = request.into_inner().trial_id;
+        let last = self.state.last_trial_result.lock().map_err(poisoned)?.clone();
+        let Some(result) = last else {
+            return Err(Refusal::new(
+                Category::WrongMoment,
+                "no_result_yet",
+                "no trial has completed on this connection",
+                "trial",
+            )
+            .into());
+        };
+        if let Some(asked) = asked.filter(|asked| *asked != result.trial_id) {
+            return Err(Refusal::new(
+                Category::NoSuchThing,
+                "not_the_last_trial",
+                format!(
+                    "trial {asked} is not the last one to complete; that was trial {}",
+                    result.trial_id
+                ),
+                "trial_id",
+            )
+            .into());
+        }
+        Ok(tonic::Response::new(trial::trial_result_to_wire(&result)))
     }
 
 }
@@ -1369,32 +1499,24 @@ impl service::session_server::Session for DaemonServices {
         // surviving is what makes a reconnect cheap and lets a session resume
         // after a daemon restart.
         //
-        // Python also cancels a trial still armed, because an armed trial with
-        // nobody driving it will run at whatever time somebody next touches a
-        // lever. This daemon cannot arm one yet — `Trial/*` is not ported — so
-        // there is nothing to cancel and `cancelled_trial_id` is always absent.
-        // **The trial port must add the cancel here.**
-        let was_open = self
-            .state
-            .session_opened_at
-            .lock()
-            .map_err(poisoned)?
-            .take()
-            .is_some();
-        let loaded = self.state.loaded_config.lock().map_err(poisoned)?.as_ref().map(|c| c.name.clone());
-        self.state.trace.append(
-            KIND_SESSION_CLOSED,
-            trace_fields(serde_json::json!({
-                "state_machine_config": loaded,
-                "cancelled_trial_id": null,
-                "was_open": was_open,
-            })),
-        );
-        Ok(tonic::Response::new(wire::CloseSessionResult {
-            was_open,
-            cancelled_trial_id: None,
-            session: Some(self.state.session_state()?),
-        }))
+        // The one safety act: a trial still armed is cancelled, because an
+        // armed trial with nobody driving it will run at whatever time
+        // somebody next touches a lever. Reported, never fatal.
+        let state = self.state.clone();
+        off_the_runtime(move || {
+            let (cancelled_trial_id, connected) = {
+                let device = state.device.lock().map_err(poisoned)?;
+                (device.armed_trial_id, device.is_connected())
+            };
+            if let (Some(trial_id), true) = (cancelled_trial_id, connected) {
+                if let Err(problem) = state.try_to_cancel(trial_id)? {
+                    *state.last_error_from_the_device.lock().map_err(poisoned)? =
+                        Some(problem.to_string());
+                }
+            }
+            state.close_session(cancelled_trial_id)
+        })
+        .await
     }
 
     async fn set_active_graph(

@@ -78,6 +78,9 @@ async fn main() {
             .await
             .expect("startup does not panic");
     }
+    // Then the thread that reads the board between requests: visits, results,
+    // and the heartbeat the device's link-loss watchdog waits for.
+    let _link = state.read_the_link_forever();
     let services = DaemonServices::new(state);
 
     let address = format!("{}:{}", arguments.bind, arguments.port);

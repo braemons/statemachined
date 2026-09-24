@@ -212,7 +212,8 @@ impl CompiledGraphSet {
                     .collect::<Vec<_>>()
                     .join(", ");
                 CompileError::NotInSet(format!(
-                    "this set has no graph called {graph_name:?}. It has: {known}"
+                    "this set has no graph called {}. It has: {known}",
+                    quoted(graph_name)
                 ))
             })
     }

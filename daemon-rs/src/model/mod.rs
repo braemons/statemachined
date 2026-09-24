@@ -11,3 +11,4 @@ pub mod graph_definition;
 pub mod line_map;
 pub mod state_machine_config;
 pub mod trial_outcome;
+pub mod trial_record;

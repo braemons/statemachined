@@ -61,6 +61,13 @@ pub struct DaemonState {
     /// fatal: a daemon that refused to start without a board would take the
     /// API down exactly when somebody needs it to find out why.
     pub last_error_from_the_device: Mutex<Option<String>>,
+    /// The last trial to complete. One, not a history: the trace is the
+    /// history, and `ReadTrialTrace` is how a caller asks about any other.
+    pub last_trial_result: Mutex<Option<crate::model::trial_record::TrialResultRecord>>,
+    /// The device's own per-run sequence number, to notice a dropped visit.
+    pub last_visit_sequence_number: Mutex<Option<i64>>,
+    /// Set to stop the link thread.
+    pub stopping: std::sync::atomic::AtomicBool,
 }
 
 impl DaemonState {
@@ -90,6 +97,9 @@ impl DaemonState {
             ),
             observers: ObserverRegistry::new(),
             last_error_from_the_device: Mutex::new(None),
+            last_trial_result: Mutex::new(None),
+            last_visit_sequence_number: Mutex::new(None),
+            stopping: std::sync::atomic::AtomicBool::new(false),
             configuration,
         }
     }

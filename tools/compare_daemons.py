@@ -44,6 +44,7 @@ from statemachined.device.native_device_on_a_socket import (  # noqa: E402
     the_native_device_is_built,
 )
 from statemachined_client import StatemachinedClient  # noqa: E402
+from statemachined_client.api_types import DistributionPatch  # noqa: E402
 from statemachined_client.daemon_refusals import DaemonRefusedTheRequest  # noqa: E402
 
 RUST_DAEMON = HERE / "target" / "debug" / "statemachined"
@@ -58,6 +59,16 @@ DIFFERS_BY_RUN = {
     "connected_at_unix_seconds",
     "connected_seconds",
     "uptime_device_microseconds",
+    # A trial's timings are the device's clock, and two devices started at two
+    # moments measure the same run to different microseconds. The *draws* are
+    # compared: both daemons use one seed, so they must agree exactly.
+    "started_device_microseconds",
+    "entered_device_microseconds",
+    "measured_duration_microseconds",
+    "total_duration_microseconds",
+    "unwrapped_device_microseconds",
+    "entered_host_time",
+    "host_time_uncertainty_microseconds",
 }
 
 
@@ -65,6 +76,43 @@ def a_free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         return probe.getsockname()[1]
+
+
+#: Two graphs that need no hand on a lever: one that walks through random
+#: timeouts to HIT, so the seeded draws can be compared, and one that waits for
+#: a lever nobody presses, so there is something to cancel.
+GRAPHS_FOR_TRIALS = [
+    {
+        "name": "timed-walk",
+        "entry": "Wait",
+        "distributions": {
+            "wait": {"kind": "uniform", "minimum_ms": 20, "maximum_ms": 80},
+            "step": {"kind": "choice", "options_ms": [10, 30, 50], "weights": [1, 2, 1]},
+        },
+        "states": [
+            {"name": "Wait", "timeout": {"after": "wait", "goto": "Step"},
+             "transitions": [{"when": {"all": ["lever"]}, "goto": "Early"}]},
+            {"name": "Step", "timeout": {"after": "step", "goto": "Gate"}},
+            # Left by its *second* transition, at once: nobody presses the
+            # lever, so `none` holds on entry. A transition index to decode.
+            {"name": "Gate", "transitions": [
+                {"when": {"all": ["lever"]}, "goto": "Early"},
+                {"when": {"none": ["lever"]}, "goto": "Done",
+                 "fire_if_already_true_on_entry": True},
+            ]},
+            {"name": "Done", "outcome": "HIT"},
+            {"name": "Early", "outcome": "EARLY"},
+        ],
+    },
+    {
+        "name": "waits-for-ever",
+        "entry": "Wait",
+        "states": [
+            {"name": "Wait", "transitions": [{"when": {"all": ["lever"]}, "goto": "Done"}]},
+            {"name": "Done", "outcome": "HIT"},
+        ],
+    },
+]
 
 
 def a_graph_too_big_for_the_board() -> dict:
@@ -93,6 +141,8 @@ def stores_in(root: Path) -> None:
         for line in by_index["line_map"][direction]:
             line["line_index"] = int(line.pop("pin_label").removeprefix("sim"))
     (root / "configs" / "by-index.config.json").write_text(json.dumps(by_index))
+    for graph in GRAPHS_FOR_TRIALS:
+        (root / "graphs" / f"{graph['name']}.json").write_text(json.dumps(graph))
 
 
 def rig_config(root: Path, target: str, startup: dict) -> Path:
@@ -105,6 +155,12 @@ def rig_config(root: Path, target: str, startup: dict) -> Path:
         f'device_target = "{target}"\n'
         f"connect_on_startup = {connect}\n"
         'expected_board = ""\n'
+        # One seed for both, so a trial draws the same numbers on each.
+        'session_seed = "00C0FFEE00C0FFEE"\n'
+        # Long, so the link thread's reading between requests is the only thing
+        # that brings a result in promptly. The native device notices a lost
+        # link by the port closing, not by a missed ping.
+        "heartbeat_seconds = 30.0\n"
         f'startup_state_machine_config = "{startup.get("config", "")}"\n'
         f'graph_store_directory = "{root / "graphs"}"\n'
         f'state_machine_config_directory = "{root / "configs"}"\n'
@@ -283,6 +339,71 @@ AFTER_A_STARTUP = [
     ("the lines, by index", lambda c: c.read_lines()),
 ]
 
+def the_result_of(trial_id):
+    """Wait for that trial's result to be the last one, then read it."""
+    def call(client):
+        # Well inside the heartbeat: a result that only arrived because a ping
+        # happened to collect it is a daemon that does not read its link.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            try:
+                result = client.read_trial_result()
+                if result.trial_id == trial_id:
+                    return result
+            except DaemonRefusedTheRequest:
+                pass
+            time.sleep(0.05)
+        return client.read_trial_result(trial_id)
+    return call
+
+
+def the_first_state_frame(client):
+    with client.watch_state(timeout_s=5.0) as subscription:
+        for frame in subscription:
+            return frame
+
+
+#: A session of trials, on a board and a config loaded at startup.
+TRIALS = [
+    ("a result before any trial", lambda c: c.read_trial_result()),
+    ("a trial naming no graph, none active", lambda c: c.configure_trial(1)),
+    ("a trial before any set", lambda c: c.configure_trial(1, graph="timed-walk")),
+    ("the set for trials", lambda c: c.upload_graph_set(["timed-walk", "waits-for-ever"])),
+    ("a negative trial id", lambda c: c.configure_trial(-1, graph="timed-walk")),
+    ("a patch naming nothing",
+     lambda c: c.configure_trial(1, graph="timed-walk",
+                                 distribution_patches=[DistributionPatch(name="")])),
+    ("a patch setting nothing",
+     lambda c: c.configure_trial(1, graph="timed-walk",
+                                 distribution_patches=[DistributionPatch(name="wait")])),
+    ("a patch for a distribution the graph has not got",
+     lambda c: c.configure_trial(1, graph="timed-walk",
+                                 distribution_patches=[DistributionPatch(name="nope", minimum_ms=5)])),
+    ("a graph the set has not got", lambda c: c.configure_trial(1, graph="go-nogo")),
+    ("starting what was never armed", lambda c: c.start_trial(9)),
+    ("arming trial 1", lambda c: c.configure_trial(1, graph="timed-walk")),
+    ("starting it", lambda c: c.start_trial(1)),
+    ("its result", the_result_of(1)),
+    ("its trace", lambda c: c.read_trial_trace(1)),
+    ("arming trial 2, which waits for ever",
+     lambda c: c.configure_trial(2, graph="waits-for-ever", cap_milliseconds=60000)),
+    ("starting it", lambda c: c.start_trial(2)),
+    ("the rig while it waits", lambda c: (time.sleep(0.2), c.read_state())[1]),
+    ("the first state frame while it waits", the_first_state_frame),
+    ("cancelling it", lambda c: c.cancel_trial(2)),
+    ("its result", the_result_of(2)),
+    ("the result of a trial that is not the last", lambda c: c.read_trial_result(1)),
+    ("trial 3, patched",
+     lambda c: c.configure_trial(3, graph="timed-walk", distribution_patches=[
+         DistributionPatch(name="wait", minimum_ms=5, maximum_ms=5)])),
+    ("starting it", lambda c: c.start_trial(3)),
+    ("its result", the_result_of(3)),
+    ("the rig after", lambda c: c.read_state()),
+    ("closing, with trial 3 still the armed one", lambda c: c.close_session()),
+    ("what closing left in the device", lambda c: c.read_device().link),
+    ("the trace, every trial in it", lambda c: c.read_trace()),
+]
+
 #: Each run: how the daemons start, and what to ask them.
 RUNS = [
     ("started with nothing", {}, SCRIPT),
@@ -290,6 +411,7 @@ RUNS = [
      {"config": "native-device", "connect": True}, AFTER_A_STARTUP),
     ("started with a config nobody stored, connecting",
      {"config": "nope", "connect": True}, AFTER_A_STARTUP),
+    ("trials", {"config": "native-device", "connect": True}, TRIALS),
 ]
 
 

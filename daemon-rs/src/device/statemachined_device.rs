@@ -3,9 +3,10 @@
 //!
 //! **A port in progress.** What is here is the connection lifecycle — opening a
 //! link, greeting the board, checking it is the board this rig is wired for,
-//! resolving the line map against its pins, and pushing the wiring — and the
-//! graph-set upload. The trial loop and the result reassembly are not ported
-//! yet and the rpcs that need them still answer `UNIMPLEMENTED`.
+//! resolving the line map against its pins, and pushing the wiring — the
+//! graph-set upload, and one trial at a time: arming it, reading the visits it
+//! streams, and naming the result it sends back. Autorun and the board's own
+//! settings are not ported yet.
 //!
 //! The ordering in `connect_and_greet` is the part to keep: **the greeting is
 //! what takes the rig** from a board that was arming its own trials, and the
@@ -22,13 +23,17 @@ use super::device_clock_correlation::DeviceClockCorrelation;
 use super::device_pin_map::{Direction, DevicePinMap, PinLabelSource};
 use super::message_vocabulary::MsgType;
 use super::request_response_session::{
-    random_seed, Discard, RequestProblem, RequestResponseSession,
+    random_seed, RequestProblem, RequestResponseSession, Sink,
 };
 use super::serial_link::SerialLink;
 use crate::graph_set_compiler::{
     compile_graph_set_for_device, CompileError, CompiledGraphSet, DeviceCapabilities,
 };
+use super::device_clock_correlation::HostTimeEstimate;
+use super::message_vocabulary::field;
+use super::trial_result_reassembly::{ReassembledTrialResult, TrialResultCollector};
 use crate::model::graph_definition::GraphDefinition;
+use crate::model::trial_record::{decode_state_visit_row, StateVisitRecord, TrialResultRecord};
 use crate::model::line_map::LineMap;
 
 /// What a caller did that needs a board, without one.
@@ -57,6 +62,86 @@ impl From<RequestProblem> for DeviceProblem {
     fn from(problem: RequestProblem) -> Self {
         Self::Request(problem)
     }
+}
+
+/// What the session set aside while a request was in flight, kept for the
+/// device to route: visits, result chunks, a trial the line started.
+///
+/// Python hands these to a callback inside the request. Here they wait in the
+/// sink until the request returns, and are routed then — before the device
+/// changes anything on the strength of the reply, which is the same order.
+#[derive(Default)]
+pub struct Collected {
+    pending: std::collections::VecDeque<(Value, String)>,
+}
+
+impl Sink for Collected {
+    fn unsolicited(&mut self, message: &Value, line: &str) {
+        self.pending.push_back((message.clone(), line.to_string()));
+    }
+    fn junk(&mut self, _line: &str, _why: &str) {}
+}
+
+/// One `visit` off the wire, named, timestamped and placed in host time.
+///
+/// The three timebases are kept side by side on purpose: `raw` is what the
+/// device said and is the evidence; `unwrapped` is that made monotonic for
+/// this connection; `host_time` is an estimate, labelled as one, and `None`
+/// until a `ping` has been answered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ObservedStateVisit {
+    pub trial_id: i64,
+    pub sequence_number: i64,
+    pub visit: StateVisitRecord,
+    pub unwrapped_device_microseconds: i128,
+    pub host_time: Option<HostTimeEstimate>,
+}
+
+/// What the device said that nobody asked for, routed.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeviceEvent {
+    Visit(ObservedStateVisit),
+    Result(TrialResultRecord),
+    /// Anything else: an event, a log, a late reply — or a visit or result
+    /// this daemon cannot name, because it did not arm the run.
+    Unsolicited(Value),
+}
+
+/// Why a trial command was not sent: no board, no set, or the board said no.
+#[derive(Debug)]
+pub enum TrialProblem {
+    Device(DeviceProblem),
+    NoGraphSetCommitted(String),
+    NotInSet(CompileError),
+}
+
+impl std::fmt::Display for TrialProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Device(problem) => write!(f, "{problem}"),
+            Self::NoGraphSetCommitted(sentence) => f.write_str(sentence),
+            Self::NotInSet(problem) => write!(f, "{problem}"),
+        }
+    }
+}
+
+impl<T: Into<DeviceProblem>> From<T> for TrialProblem {
+    fn from(problem: T) -> Self {
+        Self::Device(problem.into())
+    }
+}
+
+/// The arguments of `configure`, by name.
+#[derive(Debug, Clone, Default)]
+pub struct TrialConfiguration {
+    pub trial_id: i64,
+    pub graph_name: String,
+    pub cap_milliseconds: i64,
+    pub start_source: String,
+    pub start_line: Option<i64>,
+    pub timers: Option<i64>,
+    /// Already translated to pool indices and the wire's `a`/`b`/`c`.
+    pub distribution_patches: Vec<Value>,
 }
 
 /// Why a set did not reach the board: it would not compile against this
@@ -102,7 +187,17 @@ pub struct StatemachinedDevice {
     /// per connection when it is not.
     pub configured_session_seed: Option<String>,
 
-    session: Option<RequestResponseSession<Discard>>,
+    session: Option<RequestResponseSession<Collected>>,
+    /// What has been routed and not yet taken by the daemon.
+    events: Vec<DeviceEvent>,
+    result_collector: TrialResultCollector,
+    /// The last unsolicited `started`: a trial the *line* began.
+    pub last_line_start: Option<Value>,
+    pub armed_trial_id: Option<i64>,
+    pub armed_graph_name: Option<String>,
+    /// The graph a self-driving board was pointed at, which names the results
+    /// of runs this daemon did not arm.
+    pub autorun_graph_name: Option<String>,
     pub hello_ack: Option<Value>,
     /// What this board can hold, from its greeting. `None` until one greets.
     pub capabilities: Option<DeviceCapabilities>,
@@ -142,6 +237,12 @@ impl StatemachinedDevice {
             expected_board: String::new(),
             configured_session_seed: None,
             session: None,
+            events: Vec::new(),
+            result_collector: TrialResultCollector::new(),
+            last_line_start: None,
+            armed_trial_id: None,
+            armed_graph_name: None,
+            autorun_graph_name: None,
             hello_ack: None,
             capabilities: None,
             session_seed: None,
@@ -157,7 +258,7 @@ impl StatemachinedDevice {
         self.session.is_some()
     }
 
-    fn require_session(&mut self) -> Result<&mut RequestResponseSession<Discard>, DeviceProblem> {
+    fn require_session(&mut self) -> Result<&mut RequestResponseSession<Collected>, DeviceProblem> {
         let target = self.target.clone();
         self.session
             .as_mut()
@@ -177,7 +278,7 @@ impl StatemachinedDevice {
         self.disconnect();
         let mut link = SerialLink::open(&self.target, self.baud, self.timeout)?;
         link.reset_input();
-        self.session = Some(RequestResponseSession::new(link, Discard));
+        self.session = Some(RequestResponseSession::new(link, Collected::default()));
         self.clock.forget_everything_observed();
         self.connection_count += 1;
         Ok(())
@@ -190,7 +291,7 @@ impl StatemachinedDevice {
         self.disconnect();
         let mut link = SerialLink::open(&self.target, self.baud, self.timeout)?;
         link.reset_input();
-        let mut session = RequestResponseSession::new(link, Discard);
+        let mut session = RequestResponseSession::new(link, Collected::default());
 
         let seed = self
             .configured_session_seed
@@ -207,6 +308,11 @@ impl StatemachinedDevice {
         // away -- and wrong plausibly, which is the worst kind.
         self.clock.forget_everything_observed();
         self.connection_count += 1;
+        self.armed_trial_id = None;
+        self.armed_graph_name = None;
+        // Whatever the previous session was armed on went away with it.
+        self.last_line_start = None;
+        self.route_what_arrived();
 
         // Before the pin map, because the pin map is the thing that would
         // otherwise make the wrong board look right.
@@ -318,7 +424,10 @@ impl StatemachinedDevice {
         // contradict.
         self.committed_graph_set = None;
         let timeout = self.timeout;
-        send_compiled_upload_messages(self.require_session()?, &compiled.upload_messages, timeout)?;
+        let sent =
+            send_compiled_upload_messages(self.require_session()?, &compiled.upload_messages, timeout);
+        self.route_what_arrived();
+        sent?;
         self.committed_graph_set = Some(compiled.clone());
         self.graphs_of_the_committed_set = graphs.to_vec();
         Ok(compiled)
@@ -404,13 +513,17 @@ impl StatemachinedDevice {
             ("safe", Value::from(wiring.safe)),
             ("debounce_ms", Value::from(wiring.debounce_ms)),
         ];
-        Ok(self.require_session()?.request(MsgType::Wiring, timeout, &fields)?)
+        let reply = self.require_session()?.request(MsgType::Wiring, timeout, &fields);
+        self.route_what_arrived();
+        Ok(reply?)
     }
 
     /// What the board says about itself right now.
     pub fn read_state_report(&mut self) -> Result<Value, DeviceProblem> {
         let timeout = self.timeout;
-        Ok(self.require_session()?.state(timeout)?)
+        let report = self.require_session()?.state(timeout);
+        self.route_what_arrived();
+        Ok(report?)
     }
 
     /// One `ping`, folded into the clock estimate.
@@ -420,9 +533,13 @@ impl StatemachinedDevice {
     pub fn send_heartbeat_ping(&mut self) -> Result<Value, DeviceProblem> {
         let timeout = self.timeout;
         let before = unix_seconds_now();
-        let pong = self.require_session()?.ping(timeout)?;
+        let pong = self.require_session()?.ping(timeout);
         let after = unix_seconds_now();
-        if let Some(device_microseconds) = pong.get("t_us").and_then(Value::as_i64) {
+        self.route_what_arrived();
+        let pong = pong?;
+        // `us`, the device clock raw; `up_us` counts from boot and is not the
+        // clock a visit is stamped with (protocol.md 4.5).
+        if let Some(device_microseconds) = pong.get("us").and_then(Value::as_i64) {
             // A negative round trip means the host clock stepped mid-request,
             // which is not the device's fault and is not worth failing a
             // heartbeat over -- the estimate simply keeps the one it had.
@@ -431,6 +548,269 @@ impl StatemachinedDevice {
                 .observe_ping_round_trip(before, device_microseconds as i128, after);
         }
         Ok(pong)
+    }
+
+    // -- a trial, once ----------------------------------------------------------
+
+    fn require_committed_graph_set(&self) -> Result<&CompiledGraphSet, TrialProblem> {
+        self.committed_graph_set.as_ref().ok_or_else(|| {
+            TrialProblem::NoGraphSetCommitted(
+                "no graph set has been uploaded, so no trial can name a graph".into(),
+            )
+        })
+    }
+
+    /// One command, and whatever arrived while it was in flight routed before
+    /// anything is done with the reply.
+    fn ask(&mut self, msg_type: MsgType, fields: &[(&str, Value)]) -> Result<Value, DeviceProblem> {
+        let timeout = self.timeout;
+        let reply = self.require_session()?.request(msg_type, timeout, fields);
+        self.route_what_arrived();
+        Ok(reply?)
+    }
+
+    /// Arm the device for one trial of one graph.
+    ///
+    /// `graph_name`, never an index: the daemon built the set, so the daemon
+    /// knows which slot the name is in — and an index on the caller's side
+    /// would be a cache to get wrong across a re-upload. `start_line` is the
+    /// input whose **rising edge** starts the trial, required when the start
+    /// source admits a line.
+    pub fn configure_trial(&mut self, trial: &TrialConfiguration) -> Result<Value, TrialProblem> {
+        self.require_session()?;
+        let compiled = self.require_committed_graph_set()?;
+        let graph_index = compiled
+            .slot_for_graph_name(&trial.graph_name)
+            .map_err(TrialProblem::NotInSet)?;
+        let mut fields: Vec<(&str, Value)> = vec![
+            ("trial_id", Value::from(trial.trial_id)),
+            ("set_version", Value::from(compiled.set_version)),
+            ("graph_index", Value::from(graph_index)),
+            ("start", Value::from(trial.start_source.as_str())),
+        ];
+        if let Some(start_line) = trial.start_line {
+            fields.push(("start_line", Value::from(start_line)));
+        }
+        if let Some(timers) = trial.timers {
+            fields.push(("timers", Value::from(timers)));
+        }
+        if trial.cap_milliseconds != 0 {
+            fields.push(("cap_ms", Value::from(trial.cap_milliseconds)));
+        }
+        if !trial.distribution_patches.is_empty() {
+            fields.push(("patch", Value::from(trial.distribution_patches.clone())));
+        }
+        let armed = self.ask(MsgType::Configure, &fields)?;
+        self.armed_trial_id = Some(trial.trial_id);
+        self.armed_graph_name = Some(trial.graph_name.clone());
+        Ok(armed)
+    }
+
+    pub fn start_trial(&mut self, trial_id: i64) -> Result<Value, DeviceProblem> {
+        self.ask(MsgType::Start, &[("trial_id", Value::from(trial_id))])
+    }
+
+    /// Ask for a cancel, and report whatever actually happened.
+    ///
+    /// A cancel that races a terminal state comes back with the **real**
+    /// outcome, passed through unchanged: the alternative is a record claiming
+    /// a trial was cancelled when the animal had already responded.
+    pub fn cancel_trial(&mut self, trial_id: i64) -> Result<Value, DeviceProblem> {
+        self.ask(
+            MsgType::Cancel,
+            &[("trial_id", Value::from(trial_id)), ("reason", Value::from("host"))],
+        )
+    }
+
+    // -- reading the link --------------------------------------------------------
+
+    /// Read whatever the device has said, for a bounded moment.
+    ///
+    /// The daemon's read path: returns after `budget` whatever happened, so the
+    /// thread calling it can give the link back. The budget is the read's
+    /// timeout, not a loop condition around a blocking read — this is called
+    /// holding the device lock, and a read that waited for the command timeout
+    /// would make every request queue behind an idle link.
+    pub fn pump_incoming_lines(&mut self, budget: Duration) -> Result<usize, DeviceProblem> {
+        let deadline = std::time::Instant::now() + budget;
+        let mut lines_read = 0;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let session = self.require_session()?;
+            let Some(line) = session.link.read_line(Some(remaining))? else {
+                break;
+            };
+            lines_read += 1;
+            if let Some(message) = session.receive(&line) {
+                // A reply to a command nobody is waiting for: one that timed
+                // out and whose answer arrived late. Worth seeing.
+                self.route_what_arrived();
+                self.events.push(DeviceEvent::Unsolicited(message));
+            } else {
+                self.route_what_arrived();
+            }
+        }
+        Ok(lines_read)
+    }
+
+    /// Everything routed since the last call, in the order it arrived.
+    pub fn take_events(&mut self) -> Vec<DeviceEvent> {
+        self.route_what_arrived();
+        std::mem::take(&mut self.events)
+    }
+
+    /// Route what the session set aside.
+    ///
+    /// `visit` is decoded here because this is the only place that holds both
+    /// halves: the compiled graph that gives an index a name, and the clock
+    /// that gives a device microsecond a host time. Result chunks go to the
+    /// collector. Everything else is handed on untouched.
+    fn route_what_arrived(&mut self) {
+        loop {
+            let Some((message, line)) = self
+                .session
+                .as_mut()
+                .and_then(|session| session.sink.pending.pop_front())
+            else {
+                return;
+            };
+            let kind = message
+                .get(field::MSG_TYPE)
+                .and_then(Value::as_str)
+                .and_then(MsgType::named);
+            match kind {
+                Some(MsgType::Started) => {
+                    // A trial the line began: remembered, so a caller that
+                    // armed on a line has something to wait for.
+                    self.last_line_start = Some(message.clone());
+                    self.events.push(DeviceEvent::Unsolicited(message));
+                }
+                Some(MsgType::ResultBegin | MsgType::ResultPath | MsgType::ResultEnd) => {
+                    if !line.is_empty() {
+                        self.collect_result_chunk(&line, &message);
+                    }
+                }
+                Some(MsgType::Visit) => {
+                    if let Some(observed) = self.decode_visit_message(&message) {
+                        self.events.push(DeviceEvent::Visit(observed));
+                    }
+                }
+                _ => self.events.push(DeviceEvent::Unsolicited(message)),
+            }
+        }
+    }
+
+    fn collect_result_chunk(&mut self, line: &str, message: &Value) {
+        let reassembled = match self.result_collector.feed(line, message) {
+            Ok(Some(reassembled)) => reassembled,
+            Ok(None) => return,
+            Err(sentence) => {
+                self.events.push(DeviceEvent::Unsolicited(
+                    serde_json::json!({"msg_type": "error", "message": sentence}),
+                ));
+                return;
+            }
+        };
+        match self.name_a_reassembled_result(&reassembled) {
+            Some(Ok(named)) => self.events.push(DeviceEvent::Result(named)),
+            // A result from a run this daemon did not configure: real, and
+            // unreadable without the graph, so it goes on as it came rather
+            // than decoded into a guess.
+            None => self.events.push(DeviceEvent::Unsolicited(reassembled.begin)),
+            Some(Err(sentence)) => self.events.push(DeviceEvent::Unsolicited(
+                serde_json::json!({"msg_type": "error", "message": sentence}),
+            )),
+        }
+    }
+
+    /// Whose graph the run that just ended was: the trial this daemon armed,
+    /// or the graph a self-driving board was pointed at.
+    fn graph_name_for_reporting(&self) -> Option<&str> {
+        self.armed_graph_name
+            .as_deref()
+            .or(self.autorun_graph_name.as_deref())
+    }
+
+    /// A result's indices, turned into the names of the graph that ran it.
+    /// `None` when this daemon cannot know which graph that was.
+    fn name_a_reassembled_result(
+        &self,
+        reassembled: &ReassembledTrialResult,
+    ) -> Option<Result<TrialResultRecord, String>> {
+        let compiled = self.committed_graph_set.as_ref()?;
+        let graph_name = self.graph_name_for_reporting()?;
+        let graph = match compiled.graph_named(graph_name) {
+            Ok(graph) => graph,
+            Err(problem) => return Some(Err(problem.to_string())),
+        };
+        let begin = &reassembled.begin;
+        let number = |key: &str, default: i64| begin.get(key).and_then(Value::as_i64).unwrap_or(default);
+        let visits = reassembled
+            .rows
+            .iter()
+            .map(|row| {
+                decode_state_visit_row(
+                    row.as_array().map(Vec::as_slice).unwrap_or(&[]),
+                    &graph.state_names_by_index,
+                    &graph.transition_target_names_by_state_index,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>();
+        Some(visits.map(|visits| TrialResultRecord {
+            trial_id: number("trial_id", 0),
+            outcome: number("outcome", 0) as i32,
+            cancel_reason: number("cancel_reason", 0) as i32,
+            total_duration_microseconds: number("total_us", 0),
+            path_was_truncated: begin.get("truncated").and_then(Value::as_bool).unwrap_or(false),
+            first_visit_sequence_number: number("first_seq", 0),
+            total_visit_count: number("total_visits", reassembled.rows.len() as i64),
+            visits,
+        }))
+    }
+
+    fn decode_visit_message(&mut self, message: &Value) -> Option<ObservedStateVisit> {
+        let named = (|| {
+            let compiled = self.committed_graph_set.as_ref()?;
+            let graph = compiled.graph_named(self.graph_name_for_reporting()?).ok()?;
+            let row = message.get("v").and_then(Value::as_array)?;
+            Some(decode_state_visit_row(
+                row,
+                &graph.state_names_by_index,
+                &graph.transition_target_names_by_state_index,
+            ))
+        })();
+        let visit = match named {
+            Some(Ok(visit)) => visit,
+            Some(Err(sentence)) => {
+                self.events.push(DeviceEvent::Unsolicited(
+                    serde_json::json!({"msg_type": "error", "message": sentence}),
+                ));
+                return None;
+            }
+            None => {
+                // A visit from a run this daemon did not configure. Real, and
+                // unreadable without a graph: handed on, not decoded into a
+                // guess.
+                self.events.push(DeviceEvent::Unsolicited(message.clone()));
+                return None;
+            }
+        };
+        // Unwrapped here, once, in arrival order: the stream is the only
+        // place that sees every device timestamp exactly once and in sequence,
+        // which is what makes unwrapping correct at all.
+        let unwrapped = self
+            .clock
+            .unwrap_device_microseconds(visit.entered_device_microseconds as i128);
+        Some(ObservedStateVisit {
+            trial_id: message.get("trial_id").and_then(Value::as_i64).unwrap_or(0),
+            sequence_number: message.get("seq").and_then(Value::as_i64).unwrap_or(0),
+            host_time: self.clock.host_time_for_unwrapped_device_microseconds(unwrapped),
+            unwrapped_device_microseconds: unwrapped,
+            visit,
+        })
     }
 }
 
