@@ -196,8 +196,14 @@ impl SerialLink {
         Some(text.trim_end_matches('\r').to_string())
     }
 
-    /// Read whatever is there, waiting at most `remaining`. False on end of
-    /// file — the board went away.
+    /// Read whatever is there, waiting at most `remaining`. True if the caller
+    /// should look again; false only when the loopback has nothing.
+    ///
+    /// **End of file is an error, not a quiet link.** A socket whose far end
+    /// closed, or a tty whose device was unplugged, reads nothing for ever;
+    /// taken for silence, the daemon sat on a dead link until a request timed
+    /// out and never wrote down that it was lost. The errors are pyserial's,
+    /// word for word, because the daemon records them.
     fn fill(&mut self, remaining: Duration) -> io::Result<bool> {
         let mut chunk = [0u8; 4096];
         let read = match &mut self.channel {
@@ -237,7 +243,18 @@ impl SerialLink {
             }
         };
         if read == 0 {
-            return Ok(false);
+            return match &self.channel {
+                Channel::Loopback(_) => Ok(false),
+                Channel::Socket(_) => Err(io::Error::new(
+                    io::ErrorKind::ConnectionAborted,
+                    "read failed: socket disconnected",
+                )),
+                Channel::File(_) => Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "device reports readiness to read but returned no data (device \
+                     disconnected or multiple access on port?)",
+                )),
+            };
         }
         self.receive_buffer.extend_from_slice(&chunk[..read]);
         Ok(true)

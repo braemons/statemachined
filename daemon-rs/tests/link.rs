@@ -118,10 +118,15 @@ fn a_quiet_link_returns_none_rather_than_waiting_for_the_long_timeout() {
 }
 
 #[test]
-fn a_board_that_goes_away_is_not_a_line() {
+fn a_board_that_goes_away_is_an_error_and_not_a_quiet_link() {
+    // A closed socket reads as end of file, and end of file is not a board
+    // with nothing to say: taken for silence, the daemon sat on a dead link
+    // until a request timed out, and never wrote down that it was lost. It is
+    // pyserial's error, word for word, because the daemon records it.
     let (mut link, far_end) = linked();
     drop(far_end);
-    assert_eq!(link.read_line(Some(Duration::from_millis(200))).unwrap(), None);
+    let problem = link.read_line(Some(Duration::from_millis(200))).unwrap_err();
+    assert_eq!(problem.to_string(), "read failed: socket disconnected");
 }
 
 #[test]
