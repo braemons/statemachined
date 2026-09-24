@@ -1,13 +1,77 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "protocol/host_link_session.h"
 
+#include <pb_decode.h>
+#include <pb_encode.h>
+
 #include "protocol/crc16.h"
-#include "protocol/msg_type.h"
 
 namespace statemachined {
+
+// The limits in core/proto/link.options, held to the ones this build was
+// configured with. A board whose link could carry fewer options than its pool
+// holds would refuse a set it has room for; one whose frame could not hold the
+// largest message would fail to send it.
+static_assert(sizeof(statemachined_link_v1_GraphDist{}.opts) / sizeof(int32_t) >=
+                  kMaxChoiceOptions,
+              "link.options: GraphDist.opts holds kMaxChoiceOptions");
+static_assert(sizeof(statemachined_link_v1_Configure{}.patch) /
+                      sizeof(statemachined_link_v1_Patch) ==
+                  kMaxPatchedDistributions,
+              "link.options: Configure.patch holds kMaxPatchedDistributions");
+static_assert(sizeof(statemachined_link_v1_Wiring{}.debounce_ms) / sizeof(uint32_t) ==
+                  kMaxLines,
+              "link.options: Wiring.debounce_ms holds kMaxLines");
+static_assert(sizeof(statemachined_link_v1_PinMap{}.pins) /
+                      sizeof(statemachined_link_v1_PinMap{}.pins[0]) >=
+                  kMaxLines,
+              "link.options: PinMap.pins holds kMaxLines");
+static_assert(statemachined_link_v1_HostMessage_size <= kMaxPayload,
+              "the largest host message fits a frame");
+static_assert(statemachined_link_v1_DeviceMessage_size <= kMaxPayload,
+              "the largest device message fits a frame");
+
 namespace {
 
-constexpr uint16_t kProtocolVersion = 1;
+/// 2: the protobuf link. 1 was the NDJSON wire, which no board speaks now.
+constexpr uint16_t kProtocolVersion = 2;
+
+/// How many rows one result_path carries: what link.options gives `p`.
+constexpr uint8_t kResultRowsPerFrame =
+    sizeof(statemachined_link_v1_ResultPath{}.p) / sizeof(statemachined_link_v1_StateVisit);
+
+/// Empty messages to reset `rx_` and `tx_` from. nanopb's `_init_zero` is a
+/// brace list, which older compilers take as an initialiser and not as the
+/// right-hand side of an assignment.
+const link::HostMessage kNoHostMessage = statemachined_link_v1_HostMessage_init_zero;
+const link::DeviceMessage kNoDeviceMessage = statemachined_link_v1_DeviceMessage_init_zero;
+
+/// A wire value that has to fit a byte, refused rather than truncated.
+bool narrow_u8(uint32_t value, uint8_t* out) {
+  if (value > UINT8_MAX) return false;
+  *out = static_cast<uint8_t>(value);
+  return true;
+}
+
+/// Copy a constant string into one of the link's fixed-size fields. Truncated
+/// rather than overflowed; every string this device sends is its own constant,
+/// and link.options sizes the fields for them.
+template <size_t N>
+void put_text(char (&field)[N], const char* text) {
+  size_t i = 0;
+  if (text != nullptr)
+    for (; i + 1 < N && text[i] != '\0'; ++i) field[i] = text[i];
+  field[i] = '\0';
+}
+
+/// Would `text` fit `field` whole? For the one string a board may hold that is
+/// not a constant of this file: a pin label.
+template <size_t N>
+bool fits(const char (&)[N], const char* text) {
+  size_t length = 0;
+  while (text[length] != '\0') ++length;
+  return length < N;
+}
 
 /// Add `later` to the outputs already owed, with `later` winning where the two
 /// touch the same line. Written out by hand in four places before this existed,
@@ -28,18 +92,31 @@ bool reached(Microseconds deadline, Microseconds now) {
   return static_cast<int32_t>(now - deadline) >= 0;
 }
 
-const char* cause_name(StateExitCause c) {
+statemachined_link_v1_ExitCause exit_cause(StateExitCause c) {
   switch (c) {
     case StateExitCause::Timeout:
-      return "timeout";
+      return statemachined_link_v1_ExitCause_EXIT_CAUSE_TIMEOUT;
     case StateExitCause::Transition:
-      return "transition";
+      return statemachined_link_v1_ExitCause_EXIT_CAUSE_TRANSITION;
     case StateExitCause::Cancel:
-      return "cancel";
+      return statemachined_link_v1_ExitCause_EXIT_CAUSE_CANCEL;
     case StateExitCause::Terminal:
-      return "terminal";
+      return statemachined_link_v1_ExitCause_EXIT_CAUSE_TERMINAL;
   }
-  return "terminal";
+  return statemachined_link_v1_ExitCause_EXIT_CAUSE_TERMINAL;
+}
+
+/// One visit, as a result_path row and a visit's `v` both carry it -- one
+/// shape for one fact, filled in one place.
+link::StateVisit visit_row(const StateVisit& v) {
+  link::StateVisit row = statemachined_link_v1_StateVisit_init_zero;
+  row.state = v.state_index;
+  row.exit = exit_cause(v.cause);
+  row.transition = v.transition_index;
+  row.drawn_ms = v.drawn_ms;
+  row.entered_us = v.entered_us;
+  row.duration_us = v.duration_us;
+  return row;
 }
 
 /// The protocol error code for an upload failure. docs/reference/protocol.md 5 -- the
@@ -58,7 +135,7 @@ const char* upload_error_code(UploadError e) {
     case UploadError::TooMany:
       return "too_many";
     case UploadError::BadField:
-      return "bad_json";
+      return "bad_field";
     case UploadError::CountMismatch:
     case UploadError::ChecksumMismatch:
     case UploadError::Invalid:
@@ -69,19 +146,19 @@ const char* upload_error_code(UploadError e) {
 
 }  // namespace
 
-void DuplicateCommandGuard::remember(uint16_t message_id, const char* line, size_t n) {
-  if (n > sizeof(reply_)) {  // cannot happen: everything is built in a kMaxLine buffer
+void DuplicateCommandGuard::remember(uint16_t message_id, const uint8_t* frame, size_t n) {
+  if (n > sizeof(reply_)) {  // cannot happen: every frame is built in a kMaxFrame buffer
     have_ = false;
     return;
   }
-  for (size_t i = 0; i < n; ++i) reply_[i] = line[i];
+  for (size_t i = 0; i < n; ++i) reply_[i] = frame[i];
   reply_len_ = n;
   last_message_id_ = message_id;
   have_ = true;
 }
 
 HostLinkSession::HostLinkSession(ReplySink& out, const DeviceIdentity& identity)
-    : out_(out), identity_(identity), reader_(rx_, sizeof(rx_)), runner_(live_set_) {
+    : out_(out), identity_(identity), runner_(live_set_) {
   rebind_runner();
 }
 
@@ -110,69 +187,51 @@ void HostLinkSession::run_timer_action(uint8_t timer, bool start, Microseconds n
 
 // ------------------------------------------------------------- receiving ---
 
-void HostLinkSession::receive(const char* bytes, size_t n, Microseconds now_us) {
+void HostLinkSession::receive(const uint8_t* bytes, size_t n, Microseconds now_us) {
   for (size_t i = 0; i < n; ++i) receive_byte(bytes[i], now_us);
 }
 
-void HostLinkSession::receive_byte(char c, Microseconds now_us) {
+void HostLinkSession::receive_byte(uint8_t c, Microseconds now_us) {
   if (!reader_.feed(c)) return;
 
   if (reader_.status() != FrameError::None) {
-    // The line never assembled, so there is no message_id to attribute the error to.
-    // Reported anyway rather than dropped: a host waiting for an answer it will
-    // never get is worse than one told its line was unusable.
-    ++bad_lines_;
-    const char* code = reader_.status() == FrameError::TooLong ? "too_long" : "bad_json";
-    send_orphan_error(code, frame_error_str(reader_.status()), "line");
+    // Checked before decoded, always. The frame never arrived intact, so there
+    // is no message_id to attribute the error to -- and nothing in it can be
+    // believed, the message_id included. Reported anyway rather than dropped:
+    // a host waiting for an answer it will never get is worse than one told
+    // its frame was unusable.
+    send_orphan_error(frame_error_code(reader_.status()), frame_error_str(reader_.status()),
+                      "frame");
     return;
   }
-  handle_line(reader_.line(), reader_.len(), now_us);
+  handle_frame(link::PayloadSpan{reader_.payload(), reader_.len()}, now_us);
 }
 
-void HostLinkSession::handle_line(const char* line, size_t n, Microseconds now_us) {
-  Frame f;
-  const FrameError fe = verify_frame(line, n, &f);
-  if (fe != FrameError::None) {
-    // Verified before parsed, always. A half-parsed graph_state acted on in
-    // part is the failure the whole line layer exists to prevent.
+void HostLinkSession::handle_frame(link::PayloadSpan payload, Microseconds now_us) {
+  rx_ = kNoHostMessage;
+  pb_istream_t stream = pb_istream_from_buffer(payload.bytes, payload.len);
+  if (!pb_decode(&stream, statemachined_link_v1_HostMessage_fields, &rx_)) {
+    // Intact and still not a message: a list longer than this board holds, a
+    // message_id wider than sixteen bits, or bytes that are not protobuf.
     ++bad_lines_;
-    const char* code = fe == FrameError::BadCrc ? "bad_crc" : "bad_json";
-    send_orphan_error(code, frame_error_str(fe), "line");
-    return;
-  }
-
-  JsonObject m(line, n);
-  if (!m.valid()) {
-    ++bad_lines_;
-    send_orphan_error("bad_json", json_error_str(m.error()), "line");
-    return;
-  }
-
-  uint16_t message_id = 0;
-  if (!m.u16(kMessageIdKey, &message_id)) {
-    send_orphan_error("bad_json", "no message_id", "message_id");
+    send_orphan_error("bad_message", PB_GET_ERROR(&stream), "frame");
     return;
   }
 
   // A retry of the command just answered gets that answer back verbatim and
   // changes nothing. Acting twice is what matters: a re-executed start would
   // run a second trial.
-  if (guard_.is_repeat(message_id)) {
-    out_.send_line(guard_.reply(), guard_.reply_len());
+  if (guard_.is_repeat(rx_.message_id)) {
+    out_.send_frame(guard_.reply(), guard_.reply_len());
     return;
   }
 
-  dispatch(m, JsonSpan{f.covered, f.covered_len}, message_id, now_us);
+  dispatch(rx_, payload, now_us);
 }
 
-void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t message_id,
+void HostLinkSession::dispatch(const link::HostMessage& m, link::PayloadSpan payload,
                                Microseconds now_us) {
-  JsonSpan name;
-  if (!m.str(kMsgTypeKey, &name)) {
-    send_error(message_id, "bad_json", "no message type", kMsgTypeKey);
-    return;
-  }
-  const MsgType t = msg_type_from(name);
+  const uint16_t message_id = m.message_id;
 
   // hello is the only thing accepted before a hello: everything else needs a
   // session seed, and a device answering commands without one would be running
@@ -180,94 +239,64 @@ void HostLinkSession::dispatch(const JsonObject& m, JsonSpan covered, uint16_t m
   // Not `state_ == Greeting`: a board driving itself from stored settings is
   // Running with nobody having greeted it, and it must still refuse every
   // command from a host that skipped the handshake.
-  if (!greeted_ && t != MsgType::Hello) {
+  if (!greeted_ && m.which_body != statemachined_link_v1_HostMessage_hello_tag) {
     send_error(message_id, "not_ready", "no hello yet", "hello");
     return;
   }
 
-  // A switch rather than a chain of comparisons, so that a message type added
-  // to MsgType and forgotten here is a -Wswitch warning at build time instead
-  // of a command refused as unknown_type on somebody's bench.
-  switch (t) {
-    case MsgType::Hello:
-      return on_hello(m, message_id, now_us);
-    case MsgType::Ping:
+  switch (m.which_body) {
+    case statemachined_link_v1_HostMessage_hello_tag:
+      return on_hello(m.body.hello, message_id, now_us);
+    case statemachined_link_v1_HostMessage_ping_tag:
       return on_ping(message_id, now_us);
-    case MsgType::State:
+    case statemachined_link_v1_HostMessage_state_tag:
       return on_state_request(message_id, now_us);
-    case MsgType::Wiring:
-      return on_wiring(m, message_id);
-    case MsgType::Timers:
-      return on_timers(m, message_id, now_us);
-    case MsgType::Pins:
-      return on_pins_request(m, message_id);
-    case MsgType::Autorun:
-      return on_autorun(m, message_id, now_us);
-    case MsgType::Save:
+    case statemachined_link_v1_HostMessage_wiring_tag:
+      return on_wiring(m.body.wiring, message_id);
+    case statemachined_link_v1_HostMessage_timers_tag:
+      return on_timers(m.body.timers, message_id, now_us);
+    case statemachined_link_v1_HostMessage_pins_tag:
+      return on_pins_request(m.body.pins, message_id);
+    case statemachined_link_v1_HostMessage_autorun_tag:
+      return on_autorun(m.body.autorun, message_id, now_us);
+    case statemachined_link_v1_HostMessage_save_tag:
       return on_save(message_id);
-    case MsgType::Configure:
-      return on_configure(m, message_id, now_us);
-    case MsgType::Start:
-      return on_start(m, message_id, now_us);
-    case MsgType::Cancel:
-      return on_cancel(m, message_id, now_us);
+    case statemachined_link_v1_HostMessage_configure_tag:
+      return on_configure(m.body.configure, message_id, now_us);
+    case statemachined_link_v1_HostMessage_start_tag:
+      return on_start(m.body.start, message_id, now_us);
+    case statemachined_link_v1_HostMessage_cancel_tag:
+      return on_cancel(m.body.cancel, message_id, now_us);
 
-    case MsgType::SetBegin:
-    case MsgType::SetEnd:
-    case MsgType::GraphBegin:
-    case MsgType::GraphDist:
-    case MsgType::GraphState:
-    case MsgType::GraphTransition:
-    case MsgType::GraphAction:
-    case MsgType::GraphTimer:
-    case MsgType::GraphEnd:
-      return on_upload_message(m, covered, message_id, now_us, t);
+    case statemachined_link_v1_HostMessage_set_begin_tag:
+    case statemachined_link_v1_HostMessage_set_end_tag:
+    case statemachined_link_v1_HostMessage_graph_begin_tag:
+    case statemachined_link_v1_HostMessage_graph_dist_tag:
+    case statemachined_link_v1_HostMessage_graph_state_tag:
+    case statemachined_link_v1_HostMessage_graph_transition_tag:
+    case statemachined_link_v1_HostMessage_graph_action_tag:
+    case statemachined_link_v1_HostMessage_graph_timer_tag:
+    case statemachined_link_v1_HostMessage_graph_end_tag:
+      return on_upload_message(m, payload, now_us);
 
-    // Names this device knows but only ever sends. A host saying `pong` is as
-    // unrecognisable a command as one saying `teleport`, and is refused the
-    // same way rather than falling through to something that half-works.
-    case MsgType::HelloAck:
-    case MsgType::Ack:
-    case MsgType::SetOk:
-    case MsgType::Armed:
-    case MsgType::Started:
-    case MsgType::CancelAck:
-    case MsgType::ResultBegin:
-    case MsgType::ResultPath:
-    case MsgType::ResultEnd:
-    case MsgType::Event:
-    case MsgType::Error:
-    case MsgType::Log:
-    case MsgType::Pong:
-    case MsgType::StateReport:
-    case MsgType::Visit:
-    case MsgType::PinMap:
-    case MsgType::AutorunOk:
-    case MsgType::Saved:
-    case MsgType::Unknown:
+    default:
       break;
   }
 
-  send_error(message_id, "unknown_type", "unrecognised message type", kMsgTypeKey);
+  // A body this firmware does not know -- a newer daemon's command, which
+  // nanopb skipped as an unknown field and left `which_body` at zero. Refused
+  // by name rather than dropped: a host waiting on a reply to it is told.
+  send_error(message_id, "unknown_type", "unrecognised message type", "body");
 }
 
 // -------------------------------------------------------------- handlers ---
 
-void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id, Microseconds now_us) {
-  uint16_t proto = 0;
-  if (!m.u16("proto", &proto)) {
-    send_error(message_id, "bad_json", "no proto", "proto");
-    return;
-  }
-  if (proto != kProtocolVersion) {
+void HostLinkSession::on_hello(const link::Hello& m, uint16_t message_id, Microseconds now_us) {
+  if (m.proto != kProtocolVersion) {
     send_error(message_id, "bad_proto", "this firmware does not speak that version", "proto");
     return;
   }
-  uint64_t seed = 0;
-  if (!m.hex64("seed", &seed)) {
-    send_error(message_id, "bad_json", "seed must be a hex string", "seed");
-    return;
-  }
+  const uint64_t seed = m.seed;
 
   // Resets to idle and abandons any half-finished upload, but deliberately does
   // NOT clear the committed graph: reconnecting the bridge must not cost a
@@ -303,47 +332,41 @@ void HostLinkSession::on_hello(const JsonObject& m, uint16_t message_id, Microse
   armed_trial_id_ = 0;
   start_from_line_ = false;
 
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::HelloAck), tx_message_id_);
-  w.in_reply_to(message_id);
-  w.key_u32("proto", kProtocolVersion);
-  w.key_str("board", identity_.board);
-  w.key_str("fw", identity_.firmware_version);
-  w.key_u32("n_input_lines", identity_.input_line_count);
-  w.key_u32("n_output_lines", identity_.output_line_count);
-  w.key_u32("scan_hz", identity_.measured_scan_hz);
-  // Nested rather than flat, and not for tidiness: a flat hello_ack has
-  // nineteen members, and the reader's limit is what bounds JsonObject's stack
-  // footprint. Raising the limit to fit one device-to-host message would cost
-  // every parse on the device, including the ones a trial waits on.
-  w.begin_object("caps");
-  w.key_u32("max_line", kMaxLine);
-  w.key_u32("max_states", kMaxStates);
-  w.key_u32("max_transitions", kMaxTransitions);
-  w.key_u32("max_output_actions", kMaxOutputActions);
-  w.key_u32("max_distributions", kMaxDistributions);
-  w.key_u32("max_choice_options", kMaxChoiceOptions);
-  w.key_u32("max_path", kMaxPath);
-  w.key_u32("max_graphs", kMaxGraphs);
-  w.key_u32("max_timers", kMaxTimers);
+  auto& ack = compose(statemachined_link_v1_DeviceMessage_hello_ack_tag).body.hello_ack;
+  ack.proto = kProtocolVersion;
+  put_text(ack.board, identity_.board);
+  put_text(ack.fw, identity_.firmware_version);
+  ack.n_input_lines = identity_.input_line_count;
+  ack.n_output_lines = identity_.output_line_count;
+  ack.scan_hz = identity_.measured_scan_hz;
+  ack.has_caps = true;
+  ack.caps.max_frame = kMaxFrame;
+  ack.caps.max_states = kMaxStates;
+  ack.caps.max_transitions = kMaxTransitions;
+  ack.caps.max_output_actions = kMaxOutputActions;
+  ack.caps.max_distributions = kMaxDistributions;
+  ack.caps.max_choice_options = kMaxChoiceOptions;
+  ack.caps.max_path = kMaxPath;
+  ack.caps.max_graphs = kMaxGraphs;
+  ack.caps.max_timers = kMaxTimers;
   // Which input line the first timer holds high. Not derivable from the line
   // count -- the timers are counted down from the top of the word so that a
   // graph means the same thing on a board with eight inputs and one with
   // twenty -- so a host that wants to write a predicate against a timer has to
   // be told. See config.h.
-  w.key_u32("first_timer_line", kFirstTimerLine);
-  w.end_object();
-  w.key_bool("has_set", have_set_);
-  w.key_u32("set_version", have_set_ ? live_set_.version : 0);
-  w.key_u32("n_graphs", have_set_ ? live_set_.n_graphs : 0);
+  ack.caps.first_timer_line = kFirstTimerLine;
+  ack.has_set = have_set_;
+  ack.set_version = have_set_ ? live_set_.version : 0;
+  ack.n_graphs = have_set_ ? live_set_.n_graphs : 0;
   // Whether anybody has told this board what it is wired to. False means it is
   // running the compile-time defaults, which a daemon needs to know before it
   // decides whether to push a wiring or to trust the one that is there.
-  w.key_bool("has_wiring", have_wiring_);
-  send(w, message_id);
+  ack.has_wiring = have_wiring_;
+  send(message_id);
 }
 
-void HostLinkSession::on_timers(const JsonObject& m, uint16_t message_id, Microseconds now_us) {
+void HostLinkSession::on_timers(const link::Timers& m, uint16_t message_id,
+                                Microseconds now_us) {
   // Refused mid-trial for the reason `wiring` is: this changes what the scan
   // does, and a timer switched off under a running trial would move a timing
   // that trial's record could not account for. A trial that wants a different
@@ -353,41 +376,33 @@ void HostLinkSession::on_timers(const JsonObject& m, uint16_t message_id, Micros
     send_error(message_id, "busy", "a trial is armed or running", "timers");
     return;
   }
-  uint32_t enable = 0;
-  if (!m.u32("enable", &enable)) {
-    send_error(message_id, "bad_json", "enable must be a mask", "enable");
-    return;
-  }
+  const uint32_t enable = m.enable;
   timers_enabled_ = enable;
   // Applied now, not at the next trial: between trials is exactly when a
   // free-running timer is doing something, and "off" has to mean off.
   owe(pending_ops_, timers_.set_enabled(enable, now_us));
 
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::Ack), tx_message_id_);
-  w.in_reply_to(message_id);
+  auto& ack = compose(statemachined_link_v1_DeviceMessage_ack_tag).body.ack;
   // Echoed, so a host never has to infer what took: a mask naming timers the
   // set does not declare is accepted and simply has no effect, and this says
   // what the device is actually holding.
-  w.key_u32("enable", enable);
-  w.key_u32("n_timers", live_set_.n_timers);
-  send(w, message_id);
+  ack.has_enable = true;
+  ack.enable = enable;
+  ack.has_n_timers = true;
+  ack.n_timers = live_set_.n_timers;
+  send(message_id);
 }
 
-void HostLinkSession::on_pins_request(const JsonObject& m, uint16_t message_id) {
-  // docs/reference/protocol.md 3.6. One direction per request, and `dir` is required.
+void HostLinkSession::on_pins_request(const link::Pins& m, uint16_t message_id) {
+  // docs/reference/protocol.md 3.7. One direction per request, and `dir` is
+  // required.
   //
-  // Not both in one reply: the labels of a 32-line board do not fit in
-  // `max_line`, and a reply that silently held half of them would be worse than
-  // no reply at all -- the host would believe it had the whole map. One
-  // direction always fits, so this needs no chunking and no partial answer.
-  JsonSpan dir;
-  if (!m.str("dir", &dir)) {
-    send_error(message_id, "bad_json", "no dir", "dir");
-    return;
-  }
-  const bool inputs = json_str_eq(dir, "in");
-  if (!inputs && !json_str_eq(dir, "out")) {
+  // Not both in one reply: a reply that silently held half of the labels would
+  // be worse than no reply at all -- the host would believe it had the whole
+  // map. One direction always fits, so this needs no chunking and no partial
+  // answer.
+  const bool inputs = m.dir == statemachined_link_v1_Direction_DIRECTION_IN;
+  if (!inputs && m.dir != statemachined_link_v1_Direction_DIRECTION_OUT) {
     send_error(message_id, "bad_field", "dir is \"in\" or \"out\"", "dir");
     return;
   }
@@ -401,21 +416,22 @@ void HostLinkSession::on_pins_request(const JsonObject& m, uint16_t message_id) 
     return;
   }
 
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::PinMap), tx_message_id_);
-  w.in_reply_to(message_id);
-  w.key_str("dir", inputs ? "in" : "out");
-  w.key_u32("n", count);
-  w.begin_array("pins");
-  for (uint8_t i = 0; i < count; ++i) w.elem_str(labels[i] != nullptr ? labels[i] : "");
-  w.end_array();
-  if (w.overflowed()) {
-    // A board with more or longer labels than a line can hold. Refused rather
-    // than truncated, for the same reason the whole map is not sent at once.
-    send_error(message_id, "too_long", "the pin map does not fit one line", "pins");
-    return;
+  auto& map = compose(statemachined_link_v1_DeviceMessage_pin_map_tag).body.pin_map;
+  map.dir = inputs ? statemachined_link_v1_Direction_DIRECTION_IN
+                   : statemachined_link_v1_Direction_DIRECTION_OUT;
+  map.n = count;
+  map.pins_count = count;
+  for (uint8_t i = 0; i < count; ++i) {
+    const char* label = labels[i] != nullptr ? labels[i] : "";
+    if (!fits(map.pins[i], label)) {
+      // A label longer than link.options allows. Refused rather than
+      // truncated: "D1" where the board says "D10" is a wire in the wrong hole.
+      send_error(message_id, "too_long", "a pin label does not fit the link", "pins");
+      return;
+    }
+    put_text(map.pins[i], label);
   }
-  send(w, message_id);
+  send(message_id);
 }
 
 void HostLinkSession::set_wiring(const DeviceWiring& w, bool from_host) {
@@ -424,7 +440,7 @@ void HostLinkSession::set_wiring(const DeviceWiring& w, bool from_host) {
   ++wiring_revision_;
 }
 
-void HostLinkSession::on_wiring(const JsonObject& m, uint16_t message_id) {
+void HostLinkSession::on_wiring(const link::Wiring& m, uint16_t message_id) {
   // Refused mid-trial for the reason a graph upload is: the conditioning it
   // changes is read by the scan, and changing a debounce under a running trial
   // would move a timing nobody could account for afterwards.
@@ -436,45 +452,21 @@ void HostLinkSession::on_wiring(const JsonObject& m, uint16_t message_id) {
   // Read into a copy and install it whole, so a message that turns out to be
   // malformed halfway through leaves the board wired the way it was.
   DeviceWiring next = wiring_;
-  uint32_t v = 0;
-  if (m.type_of("invert") != JsonType::Missing) {
-    if (!m.u32("invert", &v)) {
-      send_error(message_id, "bad_json", "invert must be a mask", "invert");
-      return;
-    }
-    next.inputs.invert_mask = v;
-  }
-  if (m.type_of("enable") != JsonType::Missing) {
-    if (!m.u32("enable", &v)) {
-      send_error(message_id, "bad_json", "enable must be a mask", "enable");
-      return;
-    }
-    next.inputs.enable_mask = v;
-  }
-  if (m.type_of("safe") != JsonType::Missing) {
-    if (!m.u32("safe", &v)) {
-      send_error(message_id, "bad_json", "safe must be a mask", "safe");
-      return;
-    }
-    next.output_safe_levels = v;
-  }
-  if (m.type_of("debounce_ms") != JsonType::Missing) {
-    JsonArray a;
-    if (!m.array("debounce_ms", &a)) {
-      send_error(message_id, "bad_json", "debounce_ms must be an array", "debounce_ms");
-      return;
-    }
-    // Every line, not only the ones the array names: a shorter array means the
-    // rest are zero, so that removing a debounce is possible at all.
+  if (m.has_invert) next.inputs.invert_mask = m.invert;
+  if (m.has_enable) next.inputs.enable_mask = m.enable;
+  if (m.has_safe) next.output_safe_levels = m.safe;
+  // Empty leaves the table alone, since protobuf cannot tell an empty list from
+  // an absent one. Anything else replaces every line, not only the ones it
+  // names: a shorter list means the rest are zero, so that removing a debounce
+  // is possible at all -- and `[0]` removes them all.
+  if (m.debounce_ms_count != 0) {
     for (uint8_t i = 0; i < kMaxLines; ++i) next.inputs.debounce_ms[i] = 0;
-    for (uint8_t i = 0; i < kMaxLines; ++i) {
-      int32_t ms = 0;
-      if (!a.next_i32(&ms)) break;
-      if (ms < 0 || ms > UINT16_MAX) {
-        send_error(message_id, "bad_json", "a debounce is out of range", "debounce_ms");
+    for (pb_size_t i = 0; i < m.debounce_ms_count; ++i) {
+      if (m.debounce_ms[i] > UINT16_MAX) {
+        send_error(message_id, "bad_field", "a debounce is out of range", "debounce_ms");
         return;
       }
-      next.inputs.debounce_ms[i] = static_cast<NarrowMilliseconds>(ms);
+      next.inputs.debounce_ms[i] = static_cast<NarrowMilliseconds>(m.debounce_ms[i]);
     }
   }
 
@@ -498,9 +490,9 @@ void HostLinkSession::on_wiring(const JsonObject& m, uint16_t message_id) {
   send_ack(message_id);
 }
 
-void HostLinkSession::on_upload_message(const JsonObject& m, JsonSpan covered,
-                                        uint16_t message_id, Microseconds now_us,
-                                        MsgType type) {
+void HostLinkSession::on_upload_message(const link::HostMessage& m, link::PayloadSpan payload,
+                                        Microseconds now_us) {
+  const uint16_t message_id = m.message_id;
   if (state_ == LinkState::Armed || state_ == LinkState::Running) {
     send_error(message_id, "busy", "a trial is armed or running", "graph upload");
     return;
@@ -508,37 +500,37 @@ void HostLinkSession::on_upload_message(const JsonObject& m, JsonSpan covered,
 
   UploadError e = UploadError::None;
   bool is_end = false;
-  switch (type) {
-    case MsgType::SetBegin:
+  switch (m.which_body) {
+    case statemachined_link_v1_HostMessage_set_begin_tag:
       // From here until set_end succeeds the board holds no graph. The builder
       // writes into the live set because two do not fit, so this is where the
       // old double buffering went -- see graph_builder.h.
       have_set_ = false;
-      e = builder_.begin_set(m, covered);
+      e = builder_.begin_set(m.body.set_begin, payload);
       break;
-    case MsgType::GraphBegin:
-      e = builder_.begin_graph(m, covered);
+    case statemachined_link_v1_HostMessage_graph_begin_tag:
+      e = builder_.begin_graph(m.body.graph_begin, payload);
       break;
-    case MsgType::GraphDist:
-      e = builder_.add_distribution(m, covered);
+    case statemachined_link_v1_HostMessage_graph_dist_tag:
+      e = builder_.add_distribution(m.body.graph_dist, payload);
       break;
-    case MsgType::GraphState:
-      e = builder_.add_state(m, covered);
+    case statemachined_link_v1_HostMessage_graph_state_tag:
+      e = builder_.add_state(m.body.graph_state, payload);
       break;
-    case MsgType::GraphTransition:
-      e = builder_.add_transition(m, covered);
+    case statemachined_link_v1_HostMessage_graph_transition_tag:
+      e = builder_.add_transition(m.body.graph_transition, payload);
       break;
-    case MsgType::GraphAction:
-      e = builder_.add_action(m, covered);
+    case statemachined_link_v1_HostMessage_graph_action_tag:
+      e = builder_.add_action(m.body.graph_action, payload);
       break;
-    case MsgType::GraphTimer:
-      e = builder_.add_timer(m, covered);
+    case statemachined_link_v1_HostMessage_graph_timer_tag:
+      e = builder_.add_timer(m.body.graph_timer, payload);
       break;
-    case MsgType::GraphEnd:
-      e = builder_.end_graph(m, covered);
+    case statemachined_link_v1_HostMessage_graph_end_tag:
+      e = builder_.end_graph(m.body.graph_end, payload);
       break;
-    default:  // set_end; dispatch admits no other type here
-      e = builder_.end_set(m);
+    default:  // set_end; dispatch admits no other body here
+      e = builder_.end_set(m.body.set_end);
       is_end = true;
       break;
   }
@@ -565,15 +557,13 @@ void HostLinkSession::on_upload_message(const JsonObject& m, JsonSpan covered,
   // moment it can be done.
   owe(pending_ops_, timers_.bind(&live_set_, now_us));
 
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::SetOk), tx_message_id_);
-  w.in_reply_to(message_id);
-  w.key_u32("set_version", live_set_.version);
-  w.key_u32("n_graphs", live_set_.n_graphs);
-  w.key_u32("n_states", live_set_.n_states);
-  w.key_u32("n_transitions", live_set_.n_transitions);
-  w.key_u32("n_output_actions", live_set_.n_output_actions);
-  send(w, message_id);
+  auto& ok = compose(statemachined_link_v1_DeviceMessage_set_ok_tag).body.set_ok;
+  ok.set_version = live_set_.version;
+  ok.n_graphs = live_set_.n_graphs;
+  ok.n_states = live_set_.n_states;
+  ok.n_transitions = live_set_.n_transitions;
+  ok.n_output_actions = live_set_.n_output_actions;
+  send(message_id);
 }
 
 // ---------------------------------------------------------------- autorun ---
@@ -616,38 +606,24 @@ void HostLinkSession::end_autorun(Microseconds now_us) {
   state_ = LinkState::Idle;
 }
 
-void HostLinkSession::on_autorun(const JsonObject& m, uint16_t message_id,
+void HostLinkSession::on_autorun(const link::Autorun& m, uint16_t message_id,
                                  Microseconds now_us) {
   // No `enabled` is a question rather than an instruction: report what the
   // board would do, change nothing. Worth having as its own shape because the
   // settings outlive the session that set them, so "what are you configured to
   // do on your own?" is a question a freshly connected daemon has.
-  const bool asking = m.type_of("enabled") == JsonType::Missing;
+  const bool asking = !m.has_enabled;
 
   if (!asking) {
-    bool enabled = false;
-    if (!m.boolean("enabled", &enabled)) {
-      send_error(message_id, "bad_json", "enabled", "enabled");
-      return;
-    }
+    const bool enabled = m.enabled;
     AutorunConfig c = autorun_;
-    if (m.type_of("graph_index") != JsonType::Missing && !m.u8("graph_index", &c.graph_index)) {
-      send_error(message_id, "bad_json", "graph_index", "graph_index");
+    if (m.has_graph_index && !narrow_u8(m.graph_index, &c.graph_index)) {
+      send_error(message_id, "bad_field", "graph_index", "graph_index");
       return;
     }
-    if (m.type_of("cap_ms") != JsonType::Missing && !m.i32("cap_ms", &c.cap_ms)) {
-      send_error(message_id, "bad_json", "cap_ms", "cap_ms");
-      return;
-    }
-    if (m.type_of("seed") != JsonType::Missing && !m.hex64("seed", &c.seed)) {
-      send_error(message_id, "bad_json", "seed must be a hex string", "seed");
-      return;
-    }
-    if (m.type_of("first_trial_id") != JsonType::Missing &&
-        !m.u32("first_trial_id", &c.first_trial_id)) {
-      send_error(message_id, "bad_json", "first_trial_id", "first_trial_id");
-      return;
-    }
+    if (m.has_cap_ms) c.cap_ms = m.cap_ms;
+    if (m.has_seed) c.seed = m.seed;
+    if (m.has_first_trial_id) c.first_trial_id = m.first_trial_id;
 
     // Whether to start driving *now*, as opposed to merely recording that this
     // board should. The two are separate because saving requires an idle board:
@@ -655,11 +631,7 @@ void HostLinkSession::on_autorun(const JsonObject& m, uint16_t message_id,
     // write it down" would be a sequence that could not be performed. With
     // this, a rig is set up while nothing is running -- enable, save, power
     // cycle -- and comes up self-driving from its own storage.
-    bool start_now = true;
-    if (m.type_of("start_now") != JsonType::Missing && !m.boolean("start_now", &start_now)) {
-      send_error(message_id, "bad_json", "start_now", "start_now");
-      return;
-    }
+    const bool start_now = m.has_start_now ? m.start_now : true;
 
     if (enabled) {
       if (!have_set_) {
@@ -694,19 +666,17 @@ void HostLinkSession::on_autorun(const JsonObject& m, uint16_t message_id,
     }
   }
 
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::AutorunOk), tx_message_id_);
-  w.in_reply_to(message_id);
-  w.key_bool("enabled", autorun_.enabled);
+  auto& ok = compose(statemachined_link_v1_DeviceMessage_autorun_ok_tag).body.autorun_ok;
+  ok.enabled = autorun_.enabled;
   // Not the same fact: the setting is stored and survives a takeover, while
   // `active` is whether this board is driving trials right now. A daemon that
   // greeted a self-driving board sees enabled true and active false, which is
   // exactly what happened.
-  w.key_bool("active", autorun_active_);
-  w.key_u32("graph_index", autorun_.graph_index);
-  w.key_i32("cap_ms", autorun_.cap_ms);
-  w.key_u32("next_trial_id", autorun_next_trial_id_);
-  send(w, message_id);
+  ok.active = autorun_active_;
+  ok.graph_index = autorun_.graph_index;
+  ok.cap_ms = autorun_.cap_ms;
+  ok.next_trial_id = autorun_next_trial_id_;
+  send(message_id);
 }
 
 // --------------------------------------------------------------- settings ---
@@ -781,15 +751,13 @@ void HostLinkSession::on_save(uint16_t message_id) {
   // the number the endurance budget is about, and a "save" that wrote nothing
   // is not one of them.
   if (settings_->holds(stored, settings_write_count_)) {
-    JsonWriter unchanged(tx_, sizeof(tx_));
-    unchanged.begin(msg_type_name(MsgType::Saved), tx_message_id_);
-    unchanged.in_reply_to(message_id);
-    unchanged.key_bool("has_set", have_set_);
-    unchanged.key_u32("set_version", have_set_ ? live_set_.version : 0);
-    unchanged.key_bool("autorun", autorun_.enabled);
-    unchanged.key_u32("write_count", settings_write_count_);
-    unchanged.key_bool("written", false);
-    send(unchanged, message_id);
+    auto& unchanged = compose(statemachined_link_v1_DeviceMessage_saved_tag).body.saved;
+    unchanged.has_set = have_set_;
+    unchanged.set_version = have_set_ ? live_set_.version : 0;
+    unchanged.autorun = autorun_.enabled;
+    unchanged.write_count = settings_write_count_;
+    unchanged.written = false;
+    send(message_id);
     return;
   }
 
@@ -804,20 +772,18 @@ void HostLinkSession::on_save(uint16_t message_id) {
   }
   settings_write_count_ = next;
 
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::Saved), tx_message_id_);
-  w.in_reply_to(message_id);
-  w.key_bool("has_set", have_set_);
-  w.key_u32("set_version", have_set_ ? live_set_.version : 0);
-  w.key_bool("autorun", autorun_.enabled);
+  auto& saved = compose(statemachined_link_v1_DeviceMessage_saved_tag).body.saved;
+  saved.has_set = have_set_;
+  saved.set_version = have_set_ ? live_set_.version : 0;
+  saved.autorun = autorun_.enabled;
   // Flash wear, as a number somebody can see. About 100,000 erase cycles is the
   // budget on the reference board.
-  w.key_u32("write_count", settings_write_count_);
-  w.key_bool("written", true);
-  send(w, message_id);
+  saved.write_count = settings_write_count_;
+  saved.written = true;
+  send(message_id);
 }
 
-void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id,
+void HostLinkSession::on_configure(const link::Configure& m, uint16_t message_id,
                                    Microseconds now_us) {
   if (!have_set_) {
     send_error(message_id, "not_ready", "no graph set has been committed", "graph");
@@ -836,19 +802,10 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id,
     return;
   }
 
-  uint32_t trial_id = 0;
-  uint16_t version = 0;
-  if (!m.u32("trial_id", &trial_id)) {
-    send_error(message_id, "bad_json", "no trial_id", "trial_id");
-    return;
-  }
-  if (!m.u16("set_version", &version)) {
-    send_error(message_id, "bad_json", "no set_version", "set_version");
-    return;
-  }
+  const uint32_t trial_id = m.trial_id;
   // A set edit that did not land would otherwise leave the device confidently
   // running the old paradigms.
-  if (version != live_set_.version) {
+  if (m.set_version != live_set_.version) {
     send_error(message_id, "graph_mismatch", "the device holds a different set", "set_version");
     return;
   }
@@ -857,37 +814,35 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id,
   // changing paradigm between two trials costs one field on a message the
   // device was going to receive anyway. See docs/developer/daemon.md 3.2.
   uint8_t graph_index = 0;
-  if (m.type_of("graph_index") != JsonType::Missing) {
-    if (!m.u8("graph_index", &graph_index)) {
-      send_error(message_id, "bad_json", "graph_index", "graph_index");
-      return;
-    }
+  if (!narrow_u8(m.graph_index, &graph_index)) {
+    send_error(message_id, "bad_field", "graph_index", "graph_index");
+    return;
   }
   if (graph_index >= live_set_.n_graphs) {
     send_error(message_id, "bad_index", "no graph in that slot", "graph_index");
     return;
   }
 
-  int32_t cap_ms = 0;
-  if (m.type_of("cap_ms") != JsonType::Missing && !m.i32("cap_ms", &cap_ms)) {
-    send_error(message_id, "bad_json", "cap_ms", "cap_ms");
-    return;
-  }
+  const int32_t cap_ms = m.cap_ms;
 
-  start_from_serial_ = true;
+  // Unspecified is serial, which is what a configure that says nothing about
+  // starting has always meant.
+  bool start_from_serial = true;
   bool start_from_line = false;
-  if (m.type_of("start") != JsonType::Missing) {
-    JsonSpan s;
-    if (!m.str("start", &s)) {
-      send_error(message_id, "bad_json", "start", "start");
+  switch (m.start) {
+    case statemachined_link_v1_StartSource_START_SOURCE_UNSPECIFIED:
+    case statemachined_link_v1_StartSource_START_SOURCE_SERIAL:
+      break;
+    case statemachined_link_v1_StartSource_START_SOURCE_LINE:
+      start_from_serial = false;
+      start_from_line = true;
+      break;
+    case statemachined_link_v1_StartSource_START_SOURCE_BOTH:
+      start_from_line = true;
+      break;
+    default:
+      send_error(message_id, "bad_field", "start must be serial, line or both", "start");
       return;
-    }
-    start_from_serial_ = json_str_eq(s, "serial") || json_str_eq(s, "both");
-    start_from_line = json_str_eq(s, "line") || json_str_eq(s, "both");
-    if (!start_from_serial_ && !start_from_line) {
-      send_error(message_id, "bad_json", "start must be serial, line or both", "start");
-      return;
-    }
   }
 
   // Which line, and is it a line that could ever rise. Both refusals are here
@@ -896,8 +851,12 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id,
   // host has no way to tell that from a subject who has not responded yet.
   uint8_t start_line = 0;
   if (start_from_line) {
-    if (!m.u8("start_line", &start_line)) {
-      send_error(message_id, "bad_json", "start on a line needs start_line", "start_line");
+    if (!m.has_start_line) {
+      send_error(message_id, "bad_field", "start on a line needs start_line", "start_line");
+      return;
+    }
+    if (!narrow_u8(m.start_line, &start_line)) {
+      send_error(message_id, "bad_index", "no such input line", "start_line");
       return;
     }
     if (start_line >= identity_.input_line_count) {
@@ -923,15 +882,8 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id,
   // exactly like a distribution `patch` -- a mask that outlived its trial would
   // be a timer running, or not running, that nobody could account for
   // afterwards.
-  bool patch_timers = false;
-  uint32_t trial_timers = 0;
-  if (m.type_of("timers") != JsonType::Missing) {
-    if (!m.u32("timers", &trial_timers)) {
-      send_error(message_id, "bad_json", "timers must be a mask", "timers");
-      return;
-    }
-    patch_timers = true;
-  }
+  const bool patch_timers = m.has_timers;
+  const uint32_t trial_timers = m.timers;
 
   // Any previous trial's overrides come off before this one's go on, so a
   // trial that was armed and never started cannot leave its foreperiod behind.
@@ -948,27 +900,22 @@ void HostLinkSession::on_configure(const JsonObject& m, uint16_t message_id,
   }
 
   armed_trial_id_ = trial_id;
+  start_from_serial_ = start_from_serial;
   start_from_line_ = start_from_line;
   start_line_ = start_line;
   state_ = LinkState::Armed;
 
   // Both fields, always: this is the confirmation that start requires, and it
   // is not skippable.
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::Armed), tx_message_id_);
-  w.in_reply_to(message_id);
-  w.key_u32("trial_id", trial_id);
-  w.key_u32("set_version", live_set_.version);
-  w.key_u32("graph_index", graph_index);
-  send(w, message_id);
+  auto& armed = compose(statemachined_link_v1_DeviceMessage_armed_tag).body.armed;
+  armed.trial_id = trial_id;
+  armed.set_version = live_set_.version;
+  armed.graph_index = graph_index;
+  send(message_id);
 }
 
-void HostLinkSession::on_start(const JsonObject& m, uint16_t message_id, Microseconds now_us) {
-  uint32_t trial_id = 0;
-  if (!m.u32("trial_id", &trial_id)) {
-    send_error(message_id, "bad_json", "no trial_id", "trial_id");
-    return;
-  }
+void HostLinkSession::on_start(const link::Start& m, uint16_t message_id, Microseconds now_us) {
+  const uint32_t trial_id = m.trial_id;
   // No trial runs that the device was not confirmed configured for.
   if (state_ != LinkState::Armed) {
     send_error(message_id, "not_ready", "not armed", "configure first");
@@ -1006,27 +953,22 @@ void HostLinkSession::on_start(const JsonObject& m, uint16_t message_id, Microse
   start_pending_ = true;
   state_ = LinkState::Running;
 
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::Started), tx_message_id_);
-  w.in_reply_to(message_id);
-  w.key_u32("trial_id", armed_trial_id_);
+  auto& started = compose(statemachined_link_v1_DeviceMessage_started_tag).body.started;
+  started.trial_id = armed_trial_id_;
   // When the command was accepted, which is not when the trial starts: the run
   // begins on the next scan, together with its pins. A host that needs the
   // trial's own clock reads `entered_us` on the first row of the result, which
   // is the timestamp the machine actually ran on. See the note above.
-  w.key_u32("at_us", now_us);
+  started.at_us = now_us;
   // Which source started it, so a host reads one field in both cases rather
   // than inferring the answer from whether the message carried an in_reply_to.
-  w.key_str("by", "serial");
-  send(w, message_id);
+  started.by = statemachined_link_v1_StartSource_START_SOURCE_SERIAL;
+  send(message_id);
 }
 
-void HostLinkSession::on_cancel(const JsonObject& m, uint16_t message_id, Microseconds now_us) {
-  uint32_t trial_id = 0;
-  if (!m.u32("trial_id", &trial_id)) {
-    send_error(message_id, "bad_json", "no trial_id", "trial_id");
-    return;
-  }
+void HostLinkSession::on_cancel(const link::Cancel& m, uint16_t message_id,
+                                Microseconds now_us) {
+  const uint32_t trial_id = m.trial_id;
   // Refused rather than acked, so the bridge learns that nothing was cancelled.
   if (state_ != LinkState::Running || trial_id != armed_trial_id_) {
     send_error(message_id, "unknown_trial", "no such trial is running", "trial_id");
@@ -1034,13 +976,11 @@ void HostLinkSession::on_cancel(const JsonObject& m, uint16_t message_id, Micros
   }
 
   // Reason is checked but only `host` is legal from the host; the others are
-  // the device's own account of why it stopped.
-  JsonSpan why;
-  if (m.type_of("reason") != JsonType::Missing) {
-    if (!m.str("reason", &why) || !json_str_eq(why, "host")) {
-      send_error(message_id, "bad_json", "only host is a reason the host may give", "reason");
-      return;
-    }
+  // the device's own account of why it stopped. Unspecified is `host`.
+  if (m.reason != statemachined_link_v1_CancelReason_CANCEL_REASON_UNSPECIFIED &&
+      m.reason != statemachined_link_v1_CancelReason_CANCEL_REASON_HOST) {
+    send_error(message_id, "bad_field", "only host is a reason the host may give", "reason");
+    return;
   }
 
   // A cancel that beat the scan cancels a trial that does not exist yet, so
@@ -1055,50 +995,25 @@ void HostLinkSession::on_cancel(const JsonObject& m, uint16_t message_id, Micros
   // already responded.
   const bool cancelled = runner_.cancel(TrialCancelReason::Host, now_us);
 
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::CancelAck), tx_message_id_);
-  w.in_reply_to(message_id);
-  w.key_u32("trial_id", trial_id);
-  w.key_bool("cancelled", cancelled);
-  w.key_i32("outcome", static_cast<int32_t>(runner_.result().outcome));
-  send(w, message_id);
+  auto& ack = compose(statemachined_link_v1_DeviceMessage_cancel_ack_tag).body.cancel_ack;
+  ack.trial_id = trial_id;
+  ack.cancelled = cancelled;
+  ack.outcome = static_cast<int32_t>(runner_.result().outcome);
+  send(message_id);
 }
 
-bool HostLinkSession::apply_distribution_patches(const JsonObject& m, uint16_t message_id) {
-  if (m.type_of("patch") == JsonType::Missing) return true;
-
-  JsonArray patches;
-  if (!m.array("patch", &patches)) {
-    send_error(message_id, "bad_json", "patch must be an array", "patch");
-    return false;
-  }
-
-  JsonSpan element;
-  JsonType element_type = JsonType::Missing;
-  while (patches.next(&element, &element_type)) {
-    if (element_type != JsonType::Object) {
-      send_error(message_id, "bad_json", "a patch entry is not an object", "patch");
-      revert_distribution_patches();
-      return false;
-    }
-    JsonObject entry(element.p, element.n);
-    if (!entry.valid()) {
-      send_error(message_id, "bad_json", json_error_str(entry.error()), "patch");
-      revert_distribution_patches();
-      return false;
-    }
-
-    uint8_t index = 0;
-    if (!entry.u8("i", &index)) {
-      send_error(message_id, "bad_json", "a patch entry has no i", "patch");
-      revert_distribution_patches();
-      return false;
-    }
-    if (index >= live_set_.n_distributions) {
+bool HostLinkSession::apply_distribution_patches(const link::Configure& m,
+                                                 uint16_t message_id) {
+  for (pb_size_t k = 0; k < m.patch_count; ++k) {
+    const statemachined_link_v1_Patch& entry = m.patch[k];
+    if (entry.i >= live_set_.n_distributions) {
       send_error(message_id, "bad_index", "no distribution has that index", "patch");
       revert_distribution_patches();
       return false;
     }
+    // Cannot trip while link.options and config.h agree, which a static_assert
+    // holds -- nanopb refuses a longer list before this is reached. Kept so
+    // that the bound is written where the array is indexed.
     if (n_patched_distributions_ >= kMaxPatchedDistributions) {
       send_error(message_id, "too_many", "max_patched_distributions", "patch");
       revert_distribution_patches();
@@ -1108,40 +1023,18 @@ bool HostLinkSession::apply_distribution_patches(const JsonObject& m, uint16_t m
     // The inverse of the patch, not the patch: what to put back when the trial
     // ends. Saved before anything is written, so a refusal below still reverts
     // cleanly.
-    RandomDistribution& distribution = live_set_.distributions[index];
+    RandomDistribution& distribution = live_set_.distributions[entry.i];
     PatchedDistribution& saved = patched_distributions_[n_patched_distributions_++];
-    saved.index = index;
+    saved.index = static_cast<RandomDistributionIndex>(entry.i);
     saved.a = distribution.a;
     saved.b = distribution.b;
     saved.c = distribution.c;
 
     // Only a, b and c. `kind` may not be patched: that would change the shape
     // of the draw, which is a different graph and a different set_version.
-    int32_t value = 0;
-    if (entry.type_of("a") != JsonType::Missing) {
-      if (!entry.i32("a", &value)) {
-        send_error(message_id, "bad_json", "patch a", "patch");
-        revert_distribution_patches();
-        return false;
-      }
-      distribution.a = value;
-    }
-    if (entry.type_of("b") != JsonType::Missing) {
-      if (!entry.i32("b", &value)) {
-        send_error(message_id, "bad_json", "patch b", "patch");
-        revert_distribution_patches();
-        return false;
-      }
-      distribution.b = value;
-    }
-    if (entry.type_of("c") != JsonType::Missing) {
-      if (!entry.i32("c", &value)) {
-        send_error(message_id, "bad_json", "patch c", "patch");
-        revert_distribution_patches();
-        return false;
-      }
-      distribution.c = value;
-    }
+    if (entry.has_a) distribution.a = entry.a;
+    if (entry.has_b) distribution.b = entry.b;
+    if (entry.has_c) distribution.c = entry.c;
   }
   return true;
 }
@@ -1162,17 +1055,15 @@ void HostLinkSession::on_ping(uint16_t message_id, Microseconds now_us) {
     booted_us_ = now_us;
     have_boot_ = true;
   }
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::Pong), tx_message_id_);
-  w.in_reply_to(message_id);
-  w.key_u32("up_us", since(booted_us_, now_us));
+  auto& pong = compose(statemachined_link_v1_DeviceMessage_pong_tag).body.pong;
+  pong.up_us = since(booted_us_, now_us);
   // The device clock itself, raw, wrapping every ~71 minutes. `up_us` counts
   // from the first time anything asked, which is a different origin on every
   // session and cannot be compared with the `entered_us` in a result. This is
   // the value a host correlates against its own clock -- see docs/developer/daemon.md 4.5,
   // where that correlation is called load-bearing.
-  w.key_u32("us", now_us);
-  send(w, message_id);
+  pong.us = now_us;
+  send(message_id);
 }
 
 void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us) {
@@ -1180,75 +1071,56 @@ void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us)
     booted_us_ = now_us;
     have_boot_ = true;
   }
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::StateReport), tx_message_id_);
-  w.in_reply_to(message_id);
-  w.key_u32("link_state", static_cast<uint32_t>(state_));
-  // Nested for the reason `io` and `scan` are, and it is a hard limit rather
-  // than a preference: a message is capped at kJsonMaxMembers, and that cap is
-  // what bounds JsonObject's stack footprint. Four more top-level members here
-  // would push state_report past it and make the reply unparsable.
-  w.begin_object("graph");
-  w.key_bool("has_set", have_set_);
-  w.key_u32("set_version", have_set_ ? live_set_.version : 0);
-  w.key_u32("n_graphs", have_set_ ? live_set_.n_graphs : 0);
-  w.key_u32("index", runner_.graph_index());
-  w.end_object();
-  w.key_bool("has_wiring", have_wiring_);
+  auto& report =
+      compose(statemachined_link_v1_DeviceMessage_state_report_tag).body.state_report;
+  report.link_state = static_cast<uint32_t>(state_);
+  report.has_graph = true;
+  report.graph.has_set = have_set_;
+  report.graph.set_version = have_set_ ? live_set_.version : 0;
+  report.graph.n_graphs = have_set_ ? live_set_.n_graphs : 0;
+  report.graph.index = runner_.graph_index();
+  report.has_wiring = have_wiring_;
   // Whether this board is arming its own trials. `link_state` already says
   // Relighting during the dwell between two of them, but not while one is in
   // flight -- and "who started this trial" is exactly what a daemon that has
-  // just connected to a rig needs to know. This takes state_report to
-  // kJsonMaxMembers exactly: another top-level member here is a message the
-  // device's own parser would refuse, so anything further nests.
-  w.key_bool("autorun", autorun_active_);
-  w.key_u32("trial_id", armed_trial_id_);
+  // just connected to a rig needs to know.
+  report.autorun = autorun_active_;
+  report.trial_id = armed_trial_id_;
   // `running` is the answer to "did the host's start take", not "has the engine
   // ticked yet": between `started` going out and the scan that begins the run
   // there is up to one scan period in which the runner has not started and the
   // trial unarguably has. Reporting false there would make a state_report sent
   // straight after a start contradict the `started` it just received.
-  w.key_bool("running", start_pending_ || runner_.running());
-  w.key_u32("current_state",
-            start_pending_ ? entry_state_of_live_graph() : runner_.current_state());
-  w.key_u32("up_us", since(booted_us_, now_us));
-  // Diagnosis, not control: a link dropping lines should be visible to whoever
-  // is debugging the rig rather than inferred from trials that did not happen.
-  w.key_u32("dropped_lines", reader_.dropped());
-  w.key_u32("bad_lines", bad_lines_);
-  // Nested rather than three more top-level members: a message is capped at
-  // kJsonMaxMembers, and that cap is a RAM decision about JsonObject's stack
-  // footprint rather than a formatting preference.
-  // The live pins, nested for the same reason `scan` is -- a message is capped
-  // at kJsonMaxMembers, and that cap bounds JsonObject's stack footprint.
-  //
-  // This is the only way anything outside the device can check that a graph's
-  // line numbers land on the pins somebody actually wired: there is no read-back
-  // path from a pin, and `out` is the engine's own shadow rather than a
-  // measurement. Under emulation it is what makes the pin map testable at all.
-  w.begin_object("io");
-  w.key_u32("in", last_word_);
-  w.key_u32("out", runner_.driven_levels());
-  w.end_object();
-  w.begin_object("scan");
-  w.key_u32("hz", scan_.hz);
-  w.key_u32("overruns", scan_.overruns);
-  w.key_u32("worst_gap", scan_.worst_gap);
-  w.key_u32("tx_stalls", scan_.tx_stalls);
-  // Same question as the counters above it -- is this device keeping up -- and
-  // nested here because state_report is at kJsonMaxMembers exactly.
-  w.key_u32("visits_dropped", dropped_visits_);
-  // The timers, in here for the same reason and not because they are a scan
-  // health statistic: the top level of state_report is full, and this is the
-  // object that already holds what the scan is doing. `enabled` is the mask in
-  // force *now*, so during a trial that overrode it this is the trial's, not
-  // the device's. `running` is one bit per timer actually in flight, delay
-  // included -- a timer counting down its onset is running, it is simply not
-  // high yet.
-  w.key_u32("timers_enabled", timers_.enabled());
-  w.key_u32("timers_running", timers_.bits() >> kFirstTimerLine);
-  w.end_object();
-  send(w, message_id);
+  report.running = start_pending_ || runner_.running();
+  report.current_state = start_pending_ ? entry_state_of_live_graph() : runner_.current_state();
+  report.up_us = since(booted_us_, now_us);
+  // Diagnosis, not control: a link dropping frames should be visible to
+  // whoever is debugging the rig rather than inferred from trials that did not
+  // happen.
+  report.dropped_lines = reader_.dropped();
+  report.bad_lines = bad_lines_;
+  // The live pins. This is the only way anything outside the device can check
+  // that a graph's line numbers land on the pins somebody actually wired: there
+  // is no read-back path from a pin, and `out` is the engine's own shadow
+  // rather than a measurement. Under emulation it is what makes the pin map
+  // testable at all.
+  report.has_io = true;
+  report.io.in = last_word_;
+  report.io.out = runner_.driven_levels();
+  report.has_scan = true;
+  report.scan.hz = scan_.hz;
+  report.scan.overruns = scan_.overruns;
+  report.scan.worst_gap = scan_.worst_gap;
+  report.scan.tx_stalls = scan_.tx_stalls;
+  // Same question as the counters above it -- is this device keeping up.
+  report.scan.visits_dropped = dropped_visits_;
+  // `enabled` is the mask in force *now*, so during a trial that overrode it
+  // this is the trial's, not the device's. `running` is one bit per timer
+  // actually in flight, delay included -- a timer counting down its onset is
+  // running, it is simply not high yet.
+  report.scan.timers_enabled = timers_.enabled();
+  report.scan.timers_running = timers_.bits() >> kFirstTimerLine;
+  send(message_id);
 }
 
 // ------------------------------------------------------------ trial loop ---
@@ -1372,7 +1244,7 @@ OutputUpdate HostLinkSession::advance_trial(LineBitmask word, Microseconds now_u
     // Flagged, not sent. Sending it means building a result_begin, however many
     // result_path chunks and a result_end -- the largest burst of formatting on
     // this device -- and doing that here means doing it in the trial loop, which
-    // on a board is the timer ISR. ReplySink::send_line() spins when the
+    // on a board is the timer ISR. ReplySink::send_frame() spins when the
     // transmit queue is full, and a spin in an interrupt waiting for the
     // foreground that drains that queue does not end. drain_outbound() sends it,
     // from the foreground, after the visits it summarises.
@@ -1565,19 +1437,19 @@ void HostLinkSession::drain_outbound(uint8_t max_visit_lines) {
 }
 
 void HostLinkSession::emit_line_started() {
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::Started), tx_message_id_);
   // No in_reply_to: nothing asked. This is the device reporting an event, in
   // the same class as `visit` and `result`.
-  w.key_u32("trial_id", armed_trial_id_);
+  auto& started = compose(statemachined_link_v1_DeviceMessage_started_tag).body.started;
+  started.trial_id = armed_trial_id_;
   // Unlike the serial path's, this `at_us` *is* the start of the trial and not
   // an acknowledgement of a command: it is the timestamp of the scan that saw
   // the edge, which is the timestamp that scan stamped `entered_us` with. See
   // on_start() for why the two cases differ.
-  w.key_u32("at_us", line_started_at_us_);
-  w.key_str("by", "line");
-  w.key_u32("line", start_line_);
-  send_unsolicited(w);
+  started.at_us = line_started_at_us_;
+  started.by = statemachined_link_v1_StartSource_START_SOURCE_LINE;
+  started.has_line = true;
+  started.line = start_line_;
+  send_unsolicited();
 }
 
 void HostLinkSession::drain_visits(uint8_t max_lines) {
@@ -1590,21 +1462,14 @@ void HostLinkSession::drain_visits(uint8_t max_lines) {
     // timestamp and `entered_us` is exact -- and each exit tells a host both
     // when the state it reports ended and, via the transition it resolves
     // against the graph, which state the machine is in now.
-    JsonWriter w(tx_, sizeof(tx_));
-    w.begin(msg_type_name(MsgType::Visit), tx_message_id_);
-    w.key_u32("trial_id", p.trial_id);
-    w.key_u32("seq", p.seq);
-    // The same six-element array as a result_path entry, decoded by the same
-    // function on the host. Two shapes for one fact is how the two drift apart.
-    w.begin_array("v");
-    w.elem_u32(p.visit.state_index);
-    w.elem_str(cause_name(p.visit.cause));
-    w.elem_u32(p.visit.transition_index);
-    w.elem_i32(p.visit.drawn_ms);
-    w.elem_u32(p.visit.entered_us);
-    w.elem_u32(p.visit.duration_us);
-    w.end_array();
-    send_unsolicited(w);
+    auto& visit = compose(statemachined_link_v1_DeviceMessage_visit_tag).body.visit;
+    visit.trial_id = p.trial_id;
+    visit.seq = p.seq;
+    // The same row as a result_path entry, decoded by the same function on the
+    // host. Two shapes for one fact is how the two drift apart.
+    visit.has_v = true;
+    visit.v = visit_row(p.visit);
+    send_unsolicited();
     // Last, so the producer never sees a slot freed before it has been read.
     visit_tail_ = static_cast<uint8_t>((visit_tail_ + 1) % kVisitRingDepth);
   }
@@ -1614,80 +1479,57 @@ void HostLinkSession::emit_result() {
   const TrialRecord& r = runner_.result();
   const StateMachineRunRecord& run = runner_.run_record();
 
+  // Over the protobuf of result_begin and every result_path, as they are sent.
   uint16_t checksum = 0xFFFF;
 
   {
-    JsonWriter w(tx_, sizeof(tx_));
-    w.begin(msg_type_name(MsgType::ResultBegin), tx_message_id_);
-    w.key_u32("trial_id", r.trial_id);
-    w.key_i32("outcome", static_cast<int32_t>(r.outcome));
-    w.key_u32("cancel_reason", static_cast<uint32_t>(r.cancel_reason));
-    w.key_u32("total_us", run.total_us);
-    w.key_u32("path_len", run.path_len);
+    auto& begin =
+        compose(statemachined_link_v1_DeviceMessage_result_begin_tag).body.result_begin;
+    begin.trial_id = r.trial_id;
+    begin.outcome = static_cast<int32_t>(r.outcome);
+    begin.cancel_reason = static_cast<uint32_t>(r.cancel_reason);
+    begin.total_us = run.total_us;
+    begin.path_len = run.path_len;
     // What the host needs to know which window it received. `truncated` says a
     // path overflowed; these say by how much and where the surviving one
     // starts, so a trace assembled from the visit stream can be reconciled
     // against it rather than merely compared for length.
-    w.key_u32("first_seq", run.first_seq());
-    w.key_u32("total_visits", run.total_visits);
-    w.key_bool("truncated", run.path_truncated);
-    const size_t len = w.len();
-    checksum = crc16_ccitt(tx_, len, checksum);
-    send_unsolicited(w);
+    begin.first_seq = run.first_seq();
+    begin.total_visits = run.total_visits;
+    begin.truncated = run.path_truncated;
+    const size_t len = encode_composed();
+    checksum = crc16_ccitt(payload_, len, checksum);
+    frame_and_send(len);
   }
 
   // Chunked for the same reason the upload is: a full path does not fit in one
-  // line, and buffering one that did would cost a kilobyte this board does not
-  // have. Rows are packed until the next one would not fit rather than in a
-  // fixed batch, so the line size is the only thing that decides the count.
+  // frame, and buffering one that did would cost a kilobyte this board does
+  // not have. A chunk carries as many rows as link.options gives it, which is
+  // sized so that even the widest rows fit a frame.
   uint8_t from = 0;
   while (from < run.path_len) {
-    JsonWriter w(tx_, sizeof(tx_));
-    w.begin(msg_type_name(MsgType::ResultPath), tx_message_id_);
-    w.key_u32("trial_id", r.trial_id);
-    w.key_u32("from", from);
-    w.begin_array("p");
-
-    // A row is six numbers plus a short word; 64 bytes is comfortably above the
-    // worst case and cheaper than measuring it twice.
-    constexpr size_t kRowBudget = 64;
-    constexpr size_t kTailBudget = 16;  // ],"crc":"XXXX"}\n
+    auto& chunk = compose(statemachined_link_v1_DeviceMessage_result_path_tag).body.result_path;
+    chunk.trial_id = r.trial_id;
+    chunk.from = from;
     uint8_t i = from;
-    while (i < run.path_len && w.len() + kRowBudget + kTailBudget < sizeof(tx_)) {
+    while (i < run.path_len && chunk.p_count < kResultRowsPerFrame) {
       // visit(), not path[i]: the ring drops from the front, so slot 0 is not
       // visit 0 once it has wrapped. `from` stays an offset into what was sent.
-      const StateVisit& v = run.visit(i);
-      w.begin_elem_array();
-      w.elem_u32(v.state_index);
-      w.elem_str(cause_name(v.cause));
-      w.elem_u32(v.transition_index);
-      w.elem_i32(v.drawn_ms);
-      w.elem_u32(v.entered_us);
-      w.elem_u32(v.duration_us);
-      w.end_array();
+      chunk.p[chunk.p_count++] = visit_row(run.visit(i));
       ++i;
     }
-    w.end_array();
-    const size_t len = w.len();
-    checksum = crc16_ccitt(tx_, len, checksum);
-    send_unsolicited(w);
-
-    if (i == from) break;  // a row that cannot fit at all; refuse to spin
+    const size_t len = encode_composed();
+    checksum = crc16_ccitt(payload_, len, checksum);
+    frame_and_send(len);
     from = i;
   }
 
-  {
-    char hex[4];
-    crc16_to_hex(checksum, hex);
-    char text[5] = {hex[0], hex[1], hex[2], hex[3], '\0'};
-    JsonWriter w(tx_, sizeof(tx_));
-    w.begin(msg_type_name(MsgType::ResultEnd), tx_message_id_);
-    w.key_u32("trial_id", r.trial_id);
-    // Catches a dropped chunk, which no per-line crc can see: the line that
-    // vanished was perfectly well formed.
-    w.key_str("checksum", text);
-    send_unsolicited(w);
-  }
+  auto& end = compose(statemachined_link_v1_DeviceMessage_result_end_tag).body.result_end;
+  end.trial_id = r.trial_id;
+  // Catches a dropped chunk, which no per-frame crc can see: the frame that
+  // vanished was perfectly well formed.
+  end.checksum = checksum;
+  send_unsolicited();
 }
 
 // --------------------------------------------------------------- sending ---
@@ -1695,62 +1537,77 @@ void HostLinkSession::emit_result() {
 namespace {
 
 /// The body every refusal shares, whether or not it can name a `message_id`.
-void write_error_body(JsonWriter& w, const char* code, const char* message,
+void write_error_body(statemachined_link_v1_Error& error, const char* code, const char* message,
                       const char* context) {
-  w.key_str("code", code);
-  w.key_str("message", message);
+  put_text(error.code, code);
+  put_text(error.message, message);
   // Every refusal names what to change; an empty context is a defect here
   // rather than a terse style.
-  w.key_str("context", (context != nullptr && context[0] != '\0') ? context : code);
+  put_text(error.context, (context != nullptr && context[0] != '\0') ? context : code);
 }
 
 }  // namespace
 
 void HostLinkSession::send_error(uint16_t message_id, const char* code, const char* message,
                                  const char* context) {
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::Error), tx_message_id_);
-  w.in_reply_to(message_id);
-  write_error_body(w, code, message, context);
-  send(w, message_id);
+  write_error_body(compose(statemachined_link_v1_DeviceMessage_error_tag).body.error, code,
+                   message, context);
+  send(message_id);
 }
 
 // Split from send_error rather than folded into it behind a sentinel value.
-// Zero is a perfectly ordinary message_id -- the counter is a u16 that wraps through
-// it, and the bridge's first command of a session is usually numbered 0 -- so
-// a `message_id != 0` test here answered a real command with a reply carrying no
-// `in_reply_to` and remembered nothing for the retry guard, which is precisely
-// command a bridge would resend and precisely the resend that must not
-// re-execute. Whether a message_id was read is a fact about the line, and the only
-// thing that can know it is the caller.
+// Zero is a perfectly ordinary message_id -- the counter is a u16 that wraps
+// through it -- so a `message_id != 0` test here would answer a real command
+// with a reply carrying no `in_reply_to` and remember nothing for the retry
+// guard, which is precisely the command a bridge would resend and precisely
+// the resend that must not re-execute. Whether a message_id was read is a fact
+// about the frame, and the only thing that can know it is the caller.
 void HostLinkSession::send_orphan_error(const char* code, const char* message,
                                         const char* context) {
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::Error), tx_message_id_);
-  write_error_body(w, code, message, context);
-  send_unsolicited(w);
+  write_error_body(compose(statemachined_link_v1_DeviceMessage_error_tag).body.error, code,
+                   message, context);
+  send_unsolicited();
 }
 
 void HostLinkSession::send_ack(uint16_t message_id) {
-  JsonWriter w(tx_, sizeof(tx_));
-  w.begin(msg_type_name(MsgType::Ack), tx_message_id_);
-  w.in_reply_to(message_id);
-  send(w, message_id);
+  compose(statemachined_link_v1_DeviceMessage_ack_tag);
+  send(message_id);
 }
 
-void HostLinkSession::send(JsonWriter& w, uint16_t message_id) {
-  const size_t n = w.finish();
-  if (n == 0) return;  // a message that does not fit is a firmware bug, not a wire condition
+link::DeviceMessage& HostLinkSession::compose(pb_size_t which) {
+  tx_ = kNoDeviceMessage;
+  tx_.which_body = which;
+  return tx_;
+}
+
+size_t HostLinkSession::encode_composed() {
+  tx_.message_id = tx_message_id_;
+  pb_ostream_t stream = pb_ostream_from_buffer(payload_, sizeof(payload_));
+  if (!pb_encode(&stream, statemachined_link_v1_DeviceMessage_fields, &tx_)) return 0;
+  return stream.bytes_written;
+}
+
+size_t HostLinkSession::frame_and_send(size_t payload_len) {
+  // A message that did not encode is a firmware bug and not a wire condition:
+  // the static_asserts at the top of this file hold every message to the
+  // frame. Nothing half-built goes out. (No message is empty: the body's tag
+  // is always there, even for an `ack` that carries nothing.)
+  if (payload_len == 0) return 0;
+  const size_t n = encode_frame(payload_, payload_len, frame_);
+  if (n == 0) return 0;
   ++tx_message_id_;
-  guard_.remember(message_id, tx_, n);
-  out_.send_line(tx_, n);
+  out_.send_frame(frame_, n);
+  return n;
 }
 
-void HostLinkSession::send_unsolicited(JsonWriter& w) {
-  const size_t n = w.finish();
+void HostLinkSession::send(uint16_t message_id) {
+  tx_.has_in_reply_to = true;
+  tx_.in_reply_to = message_id;
+  const size_t n = frame_and_send(encode_composed());
   if (n == 0) return;
-  ++tx_message_id_;
-  out_.send_line(tx_, n);
+  guard_.remember(message_id, frame_, n);
 }
+
+void HostLinkSession::send_unsolicited() { frame_and_send(encode_composed()); }
 
 }  // namespace statemachined

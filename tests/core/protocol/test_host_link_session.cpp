@@ -9,21 +9,41 @@
 #include <vector>
 
 #include "doctest.h"
+#include "link_json.h"
 #include "protocol/crc16.h"
 #include "protocol/framing.h"
 #include "protocol/host_link_session.h"
 #include "trial/trial.h"
+#include "wire_json.h"
 
 using namespace statemachined;
+using namespace statemachined::test;
 
 namespace {
 
+/// Every frame the board sent, decoded and rendered as the line the NDJSON
+/// board would have written -- which is what these tests read. The frames and
+/// their protobuf are kept too, for the tests about bytes.
 struct RecordingSink : ReplySink {
   std::vector<std::string> lines;
-  void send_line(const char* p, size_t n) override { lines.emplace_back(p, n); }
+  std::vector<Bytes> frames;
+  std::vector<Bytes> payloads;
+  void send_frame(const uint8_t* p, size_t n) override {
+    // Every frame is well-formed and decodes, checked on every message these
+    // tests produce rather than spot-checked: the device emitting a frame the
+    // bridge cannot read is the failure that would strand a session.
+    REQUIRE(n <= kMaxFrame);
+    const Bytes frame(p, p + n);
+    link::DeviceMessage message;
+    Bytes payload;
+    REQUIRE(decode_device_frame(frame, &message, &payload));
+    frames.push_back(frame);
+    payloads.push_back(payload);
+    lines.push_back(json_of(message));
+  }
 };
 
-/// A host, near enough: frames commands, feeds them in a byte at a time, and
+/// A host, near enough: encodes commands, feeds them in a byte at a time, and
 /// reads the replies back.
 struct Host {
   RecordingSink sink;
@@ -38,23 +58,17 @@ struct Host {
   uint16_t graph_checksum = 0xFFFF;
   Microseconds now = 0;
 
-  /// `body` is the object without its closing brace. Returns the replies this
-  /// command produced.
+  /// `body` is the object without its closing brace, as the NDJSON wire wrote
+  /// it; see support/link_json.h. Returns the replies this command produced.
   std::vector<std::string> send(const std::string& body, bool fold_graph = false) {
-    const size_t before = sink.lines.size();
-    char buf[kMaxLine];
-    REQUIRE(body.size() < sizeof(buf));
-    for (size_t i = 0; i < body.size(); ++i) buf[i] = body[i];
-    const size_t n = finish_frame(buf, body.size(), sizeof(buf), true);
-    REQUIRE(n > 0);
+    const Bytes payload = payload_of(body);
     if (fold_graph)
-      graph_checksum = crc16_ccitt(buf, n - 15, graph_checksum);  // the CRC-covered prefix
-    device.receive(buf, n, now);
-    return std::vector<std::string>(sink.lines.begin() + before, sink.lines.end());
+      graph_checksum = crc16_ccitt(payload.data(), payload.size(), graph_checksum);
+    return send_raw(as_text(frame_of(payload)));
   }
 
   /// Open a set upload. Every graph upload is inside one now, so this is the
-  /// line that precedes them all.
+  /// message that precedes them all.
   std::vector<std::string> open_set(int version, int n_graphs = 1) {
     graph_checksum = 0xFFFF;
     return send(R"({"msg_type":"set_begin","message_id":)" + next_message_id() +
@@ -72,40 +86,48 @@ struct Host {
                 std::to_string(n_actions) + R"(,"checksum":")" + checksum_hex() + R"(")");
   }
 
-  /// The same line twice, without re-folding the checksum -- a retry.
-  std::vector<std::string> send_raw(const std::string& line) {
+  /// Bytes as they are, without re-folding the checksum -- a retry, or a
+  /// frame a test has broken on purpose.
+  std::vector<std::string> send_raw(const std::string& bytes) {
     const size_t before = sink.lines.size();
-    device.receive(line.data(), line.size(), now);
+    device.receive(reinterpret_cast<const uint8_t*>(bytes.data()), bytes.size(), now);
     return std::vector<std::string>(sink.lines.begin() + before, sink.lines.end());
   }
 
-  std::string framed(const std::string& body) {
-    char buf[kMaxLine];
-    for (size_t i = 0; i < body.size(); ++i) buf[i] = body[i];
-    const size_t n = finish_frame(buf, body.size(), sizeof(buf), true);
-    return std::string(buf, n);
-  }
+  /// The frame for `body`, as bytes in a string, for a test to send twice or
+  /// to break.
+  std::string framed(const std::string& body) { return as_text(frame_of(payload_of(body))); }
 
   std::string next_message_id() { return std::to_string(message_id++); }
 
   std::string checksum_hex() const {
-    char h[4];
-    crc16_to_hex(graph_checksum, h);
-    return std::string(h, 4);
+    static const char kHex[] = "0123456789ABCDEF";
+    return {kHex[(graph_checksum >> 12) & 0xF], kHex[(graph_checksum >> 8) & 0xF],
+            kHex[(graph_checksum >> 4) & 0xF], kHex[graph_checksum & 0xF]};
+  }
+
+  static Bytes payload_of(const std::string& body) {
+    link::HostMessage m;
+    std::string why;
+    REQUIRE_MESSAGE(host_message_from_json(body + "}", &m, &why), why);
+    const Bytes payload = encode_host_message(m);
+    REQUIRE_FALSE(payload.empty());
+    return payload;
+  }
+
+  static std::string as_text(const Bytes& bytes) {
+    return std::string(bytes.begin(), bytes.end());
   }
 };
 
-/// Every reply is a well-formed, CRC-correct line. Checked on every message
-/// these tests produce rather than spot-checked: the device emitting a line the
-/// bridge cannot parse is the failure that would strand a session.
+/// Every reply, rendered, is one well-formed line. The frame it came in was
+/// checked on arrival, in RecordingSink.
 void check_wire_valid(const std::string& line) {
   REQUIRE(line.size() > 1);
   REQUIRE(line.back() == '\n');
   const std::string body = line.substr(0, line.size() - 1);
-  CHECK(verify_frame(body.data(), body.size(), nullptr) == FrameError::None);
   JsonObject m(body.data(), body.size());
   CHECK(m.valid());
-  for (char c : line) CHECK(static_cast<unsigned char>(c) < 0x80);
 }
 
 std::string type_of(const std::string& line) {
@@ -154,7 +176,7 @@ OutputUpdate advance(Host& h, LineBitmask word, Microseconds now) {
 
 void greet(Host& h) {
   const auto r = h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
-                        R"(,"proto":1,"seed":"0123456789ABCDEF")");
+                        R"(,"proto":2,"seed":"0123456789ABCDEF")");
   REQUIRE(r.size() == 1);
   REQUIRE(type_of(r[0]) == "hello_ack");
 }
@@ -325,7 +347,7 @@ TEST_CASE("hello reports what the board can hold") {
   const std::string& ack = h.sink.lines[0];
   check_wire_valid(ack);
   CHECK(field(ack, "board") == "native");
-  CHECK(field(ack, "proto") == "1");
+  CHECK(field(ack, "proto") == "2");
   // Capacities are nested, which is what keeps the largest message in the
   // protocol inside the reader's member limit.
   const std::string body = ack.substr(0, ack.size() - 1);
@@ -337,8 +359,8 @@ TEST_CASE("hello reports what the board can hold") {
   CHECK(v == kMaxStates);
   CHECK(caps.u32("max_transitions", &v));
   CHECK(v == kMaxTransitions);
-  CHECK(caps.u32("max_line", &v));
-  CHECK(v == kMaxLine);
+  CHECK(caps.u32("max_frame", &v));
+  CHECK(v == kMaxFrame);
   CHECK(field(ack, "in_reply_to") == "0");
   CHECK(h.device.state() == LinkState::Idle);
 }
@@ -688,8 +710,8 @@ TEST_CASE("result_begin says which window of the path it carries") {
 }
 
 TEST_CASE("the result's checksum covers every chunk") {
-  // The per-line crc catches a corrupt chunk. This catches a missing one, which
-  // no per-line check can see: the line that vanished was well formed.
+  // The per-frame crc catches a corrupt chunk. This catches a missing one,
+  // which no per-frame check can see: the frame that vanished was well formed.
   Host h;
   greet(h);
   upload_minimal(h);
@@ -713,17 +735,20 @@ TEST_CASE("the result's checksum covers every chunk") {
     // in would make the checksum depend on how much of the stream a host
     // happened to see.
     if (type_of(l) == "visit") continue;
-    sum = crc16_ccitt(l.data(), l.size() - 15, sum);  // strip \n and the crc tail
+    // Over the protobuf each chunk was sent as, not over its rendering.
+    const Bytes& payload = h.sink.payloads[i];
+    sum = crc16_ccitt(payload.data(), payload.size(), sum);
   }
   REQUIRE(!end.empty());
-  char hex[4];
-  crc16_to_hex(sum, hex);
-  CHECK(field(end, "checksum") == std::string(hex, 4));
+  static const char kHex[] = "0123456789ABCDEF";
+  const std::string hex{kHex[(sum >> 12) & 0xF], kHex[(sum >> 8) & 0xF], kHex[(sum >> 4) & 0xF],
+                        kHex[sum & 0xF]};
+  CHECK(field(end, "checksum") == hex);
 }
 
-TEST_CASE("a path longer than one line is split across chunks") {
+TEST_CASE("a path longer than one frame is split across chunks") {
   // Chunked for the same reason the upload is: a full path does not fit in one
-  // line, and buffering one that did would cost a kilobyte this board has not
+  // frame, and buffering one that did would cost a kilobyte this board has not
   // got.
   Host h;
   greet(h);
@@ -763,7 +788,7 @@ TEST_CASE("a path longer than one line is split across chunks") {
   int chunks = 0;
   for (size_t i = before; i < h.sink.lines.size(); ++i) {
     check_wire_valid(h.sink.lines[i]);
-    CHECK(h.sink.lines[i].size() <= kMaxLine);
+    CHECK(h.sink.frames[i].size() <= kMaxFrame);
     if (type_of(h.sink.lines[i]) == "result_path") ++chunks;
   }
   CHECK(chunks > 1);
@@ -1010,7 +1035,7 @@ TEST_CASE("a start line that could never rise is refused at configure") {
   SUBCASE("no start_line at all") {
     const auto r = h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
                           R"(,"trial_id":1,"set_version":7,"start":"line")");
-    CHECK(field(r[0], "code") == "bad_json");
+    CHECK(field(r[0], "code") == "bad_field");
     CHECK(field(r[0], "context") == "start_line");
     CHECK(h.device.state() == LinkState::Idle);
   }
@@ -1291,6 +1316,31 @@ TEST_CASE("a patch changes a duration for one trial and puts it back") {
   CHECK(field(result.front(), "total_us") == "500000");
 }
 
+TEST_CASE("a patch changes exactly the parameters it names") {
+  // Each of a, b and c has its own presence on the wire, so a patch that names
+  // only `b` must leave `a` and `c` at the graph's values -- and must reach `b`,
+  // not whichever parameter happens to sit beside it.
+  Host h;
+  greet(h);
+  upload_minimal(h);
+  const RandomDistribution& d = h.device.graph_set().distributions[0];
+  REQUIRE(d.a == 500);
+  REQUIRE(d.b == 0);
+  REQUIRE(d.c == 0);
+
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":1,"set_version":7,"patch":[{"i":0,"b":70}])");
+  CHECK(d.a == 500);
+  CHECK(d.b == 70);
+  CHECK(d.c == 0);
+
+  h.send(R"({"msg_type":"configure","message_id":)" + h.next_message_id() +
+         R"(,"trial_id":2,"set_version":7,"patch":[{"i":0,"c":90}])");
+  CHECK(d.a == 500);
+  CHECK(d.b == 0);  // the first configure's patch came off when this one arrived
+  CHECK(d.c == 90);
+}
+
 TEST_CASE("a patch naming a distribution that does not exist is refused") {
   Host h;
   greet(h);
@@ -1351,7 +1401,7 @@ TEST_CASE("only host is a cancel reason the host may give") {
   h.send(R"({"msg_type":"start","message_id":)" + h.next_message_id() + R"(,"trial_id":4)");
   const auto r = h.send(R"({"msg_type":"cancel","message_id":)" + h.next_message_id() +
                         R"(,"trial_id":4,"reason":"link_lost")");
-  CHECK(field(r[0], "code") == "bad_json");
+  CHECK(field(r[0], "code") == "bad_field");
 }
 
 TEST_CASE("uploading while a trial is armed or running is refused") {
@@ -1411,30 +1461,51 @@ TEST_CASE("a second hello keeps the committed graph") {
   CHECK(h.device.set_version() == 7);
 }
 
-TEST_CASE("a corrupt line is refused whole and named") {
+/// A frame of `kMaxFrame + 50` bytes that are not the delimiter, then one.
+std::string overlong_frame() {
+  std::string junk(kMaxFrame + 50, 'x');
+  junk += '\0';
+  return junk;
+}
+
+/// A frame that arrives intact and is not a HostMessage: a length-delimited
+/// field whose length runs past the end of the payload.
+std::string undecodable_frame() {
+  const Bytes garbage{0x52, 0x40, 0x01};
+  const Bytes frame = frame_of(garbage);
+  return std::string(frame.begin(), frame.end());
+}
+
+TEST_CASE("a corrupt frame is refused whole and named") {
   Host h;
   greet(h);
 
   SUBCASE("a bad crc") {
-    std::string line = h.framed(R"({"msg_type":"ping","message_id":3)");
-    line[line.size() - 4] = (line[line.size() - 4] == '0') ? '1' : '0';
-    const auto r = h.send_raw(line);
+    std::string frame = h.framed(R"({"msg_type":"ping","message_id":3)");
+    // The CRC's low byte, which sits just before the delimiter.
+    frame[frame.size() - 2] = static_cast<char>(frame[frame.size() - 2] ^ 0x01);
+    const auto r = h.send_raw(frame);
     REQUIRE(r.size() == 1);
     CHECK(field(r[0], "code") == "bad_crc");
+    CHECK(field(r[0], "in_reply_to") == "");
   }
-  SUBCASE("no crc at all") {
-    const auto r = h.send_raw(std::string(R"({"msg_type":"ping","message_id":3})") + "\n");
-    CHECK(field(r[0], "code") == "bad_json");
+  SUBCASE("not COBS") {
+    const auto r = h.send_raw(std::string("\x05\x11\x22", 3) + '\0');
+    REQUIRE(r.size() == 1);
+    CHECK(field(r[0], "code") == "bad_cobs");
+  }
+  SUBCASE("intact, and not a message") {
+    const auto r = h.send_raw(undecodable_frame());
+    REQUIRE(r.size() == 1);
+    CHECK(field(r[0], "code") == "bad_message");
+    CHECK(field(r[0], "in_reply_to") == "");
   }
   SUBCASE("an unknown message type") {
     const auto r = h.send(R"({"msg_type":"teleport","message_id":)" + h.next_message_id());
     CHECK(field(r[0], "code") == "unknown_type");
   }
-  SUBCASE("an overlong line, and the session survives it") {
-    std::string junk = "{";
-    junk.append(kMaxLine + 50, 'x');
-    junk += "\n";
-    const auto r = h.send_raw(junk);
+  SUBCASE("an overlong frame, and the session survives it") {
+    const auto r = h.send_raw(overlong_frame());
     REQUIRE(r.size() == 1);
     CHECK(field(r[0], "code") == "too_long");
     // A burst of noise costs the link one message, not the session.
@@ -1444,20 +1515,22 @@ TEST_CASE("a corrupt line is refused whole and named") {
 }
 
 TEST_CASE("state_report exposes what a link problem looks like") {
-  // Diagnosis, not control. A link dropping lines should be visible to whoever
-  // is debugging the rig rather than inferred from trials that did not happen.
+  // Diagnosis, not control. A link dropping frames should be visible to
+  // whoever is debugging the rig rather than inferred from trials that did not
+  // happen. Two counts, because they are two faults: a frame that never
+  // arrived intact is the link's, and one that arrived intact and still was not
+  // a message is the sender's.
   Host h;
   greet(h);
-  std::string junk = "{";
-  junk.append(kMaxLine + 50, 'x');
-  junk += "\n";
-  h.send_raw(junk);
+  h.send_raw(overlong_frame());
+  h.send_raw(undecodable_frame());
+  h.send_raw(undecodable_frame());
 
   const auto r = h.send(R"({"msg_type":"state","message_id":)" + h.next_message_id());
   REQUIRE(r.size() == 1);
   CHECK(type_of(r[0]) == "state_report");
   CHECK(field(r[0], "dropped_lines") == "1");
-  CHECK(field(r[0], "bad_lines") == "1");
+  CHECK(field(r[0], "bad_lines") == "2");
   CHECK(r[0].find(R"("has_set":false)") != std::string::npos);
 }
 
@@ -1504,7 +1577,7 @@ TEST_CASE("hello_ack says whether the board has been given a wiring") {
   // means it is running the compile-time defaults.
   Host h;
   auto r = h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
-                  R"(,"proto":1,"seed":"0123456789ABCDEF")");
+                  R"(,"proto":2,"seed":"0123456789ABCDEF")");
   REQUIRE(type_of(r[0]) == "hello_ack");
   // Asserted on the bytes: field() reads strings and numbers, and this is a
   // bool.
@@ -1512,7 +1585,7 @@ TEST_CASE("hello_ack says whether the board has been given a wiring") {
 
   h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() + R"(,"invert":3)");
   r = h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
-             R"(,"proto":1,"seed":"0123456789ABCDEF")");
+             R"(,"proto":2,"seed":"0123456789ABCDEF")");
   CHECK(r[0].find(R"("has_wiring":true)") != std::string::npos);
 }
 
@@ -1544,10 +1617,32 @@ TEST_CASE("a malformed wiring changes nothing") {
   h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() + R"(,"safe":6)");
 
   const auto r = h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() +
-                        R"(,"safe":1,"debounce_ms":[2,-5])");
+                        R"(,"safe":1,"debounce_ms":[2,70000])");
   REQUIRE(type_of(r[0]) == "error");
   CHECK(field(r[0], "context") == "debounce_ms");
   CHECK(h.device.fail_safe().set_high == 6);  // the earlier one, not the refused one
+}
+
+TEST_CASE("a wiring without debounces leaves them alone, and [0] removes them") {
+  // protobuf cannot tell an empty list from an absent one, so an empty
+  // `debounce_ms` has to mean "not mentioned": a wiring that only moves the
+  // safe levels must not quietly take every debounce with it.
+  Host h;
+  greet(h);
+  h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() +
+         R"(,"debounce_ms":[3,0,7])");
+  REQUIRE(h.device.wiring().inputs.debounce_ms[0] == 3);
+  REQUIRE(h.device.wiring().inputs.debounce_ms[2] == 7);
+
+  h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() + R"(,"safe":1)");
+  CHECK(h.device.wiring().inputs.debounce_ms[0] == 3);
+  CHECK(h.device.wiring().inputs.debounce_ms[2] == 7);
+
+  // Any list replaces the whole table, so one zero is how to clear it.
+  h.send(R"({"msg_type":"wiring","message_id":)" + h.next_message_id() +
+         R"(,"debounce_ms":[0])");
+  for (uint8_t line = 0; line < kMaxLines; ++line)
+    CHECK(h.device.wiring().inputs.debounce_ms[line] == 0);
 }
 
 TEST_CASE("a graph upload no longer carries the wiring") {
@@ -1583,7 +1678,7 @@ TEST_CASE("a graph upload no longer carries the wiring") {
   CHECK(h.device.wiring().inputs.invert_mask == 0);  // likewise
 }
 
-TEST_CASE("every reply is a line the bridge can parse") {
+TEST_CASE("every reply is a frame the bridge can read") {
   // Asserted over a whole session rather than per message: the device emitting
   // something unparsable is the failure that would strand a bridge, and it is
   // exactly the kind of thing a targeted test misses.
@@ -1599,9 +1694,9 @@ TEST_CASE("every reply is a line the bridge can parse") {
   h.send(R"({"msg_type":"nonsense","message_id":)" + h.next_message_id());
 
   REQUIRE(h.sink.lines.size() > 10);
-  for (const auto& l : h.sink.lines) {
-    check_wire_valid(l);
-    CHECK(l.size() <= kMaxLine);
+  for (size_t i = 0; i < h.sink.lines.size(); ++i) {
+    check_wire_valid(h.sink.lines[i]);
+    CHECK(h.sink.frames[i].size() <= kMaxFrame);
   }
 }
 
@@ -1647,13 +1742,13 @@ TEST_CASE("message_id 0 is an ordinary identifier, refusals included") {
     CHECK(again[0] == first[0]);  // byte for byte, from the cache
   }
 
-  SUBCASE("a line with no message_id carries no in_reply_to, since there is none") {
-    // The other half of the same rule: `in_reply_to` is omitted only when the line
-    // genuinely never named itself.
+  SUBCASE("a frame that could not be read carries no in_reply_to, since there is none") {
+    // The other half of the same rule: `in_reply_to` is omitted only when the
+    // frame never yielded a message_id that could be believed.
     greet(h);
-    const auto r = h.send(R"({"msg_type":"ping")");
+    const auto r = h.send_raw(undecodable_frame());
     REQUIRE(r.size() == 1);
-    CHECK(field(r[0], "code") == "bad_json");
+    CHECK(field(r[0], "code") == "bad_message");
     CHECK(r[0].find(R"("in_reply_to":)") == std::string::npos);
   }
 }
@@ -1805,7 +1900,7 @@ TEST_CASE("a lost link keeps the committed graph, so a reconnect costs no re-upl
   // The bridge comes back. hello is what brings a fresh session seed; the graph
   // is already there.
   const auto r = h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
-                        R"(,"proto":1,"seed":"FEDCBA9876543210")");
+                        R"(,"proto":2,"seed":"FEDCBA9876543210")");
   REQUIRE(type_of(r[0]) == "hello_ack");
   CHECK(field(r[0], "set_version") == "7");
 }
@@ -1939,7 +2034,7 @@ TEST_CASE("pins requires a direction, and refuses one it does not know") {
   const auto missing = h.send(R"({"msg_type":"pins","message_id":)" + h.next_message_id());
   REQUIRE(missing.size() == 1);
   REQUIRE(type_of(missing[0]) == "error");
-  CHECK(missing[0].find("bad_json") != std::string::npos);
+  CHECK(missing[0].find("bad_field") != std::string::npos);
 
   const auto sideways = h.send(R"({"msg_type":"pins","message_id":)" + h.next_message_id() +
                                R"(,"dir":"sideways")");
@@ -2048,7 +2143,7 @@ TEST_CASE("a host that greets takes the rig") {
   // is a completed visit, which goes out unsolicited alongside the reply.
   const auto took_over =
       without_visits(h.send(R"({"msg_type":"hello","message_id":)" + h.next_message_id() +
-                            R"(,"proto":1,"seed":"0123456789ABCDEF")"));
+                            R"(,"proto":2,"seed":"0123456789ABCDEF")"));
   REQUIRE(took_over.size() == 1);
   REQUIRE(type_of(took_over[0]) == "hello_ack");
   CHECK_FALSE(h.device.autorun_active());

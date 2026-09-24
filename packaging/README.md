@@ -35,13 +35,12 @@ distribution ships. Inside the package nothing carries it: the binary, the unit,
 the user and the logrotate entry are all plain `statemachined`, because that is
 what an operator types. `sudo apt install ./braemons-statemachined_*_arm64.deb`.
 
-**A vendored interpreter, not a set of `python3-*` dependencies.** The whole
-tree — CPython from python-build-standalone, the daemon, and its five runtime
-dependencies — lands under `/opt/braemons/statemachined` and behaves like a
-compiled binary. It costs about 45 MB and makes the packages
-per-architecture despite being pure Python, and it buys the thing a rig
-actually needs: an operating system upgrade that moves Python cannot stop an
-experiment, and a box in a rack does not need a working `pip` to be repaired.
+**One binary.** The daemon is Rust, and its web UI is embedded in it, so the
+package is `/usr/bin/statemachined`, the unit files, the conffiles, the docs and
+the flashable firmware — mousewheeld's shape. Nothing to vendor and no runtime
+dependency but glibc, so an operating system upgrade cannot stop an experiment
+by moving an interpreter. Debug symbols stay in, as mousewheeld's do: a stall on
+a rig is diagnosed where it happens.
 
 **One `nfpm.yaml`, both formats.** A `debian/` directory plus a hand-written
 `.spec` would be the same list of files written twice, and the second copy is
@@ -50,10 +49,9 @@ cargo-deb and rpmbuild are different tools; nfpm packs both from one staged
 tree, so the matrix here is by architecture alone.
 
 **Built in a pinned container, and reproducible.** Base image pinned by digest,
-uv and nfpm by version, dependencies installed from `python/uv.lock` with
-hashes rather than resolved against PyPI at build time, every mtime taken from
-the commit, and every `.pyc` rebuilt with hash-based invalidation so that
-normalising those mtimes does not invalidate them. Two builds of one commit are
+rustc and nfpm by version, dependencies from `Cargo.lock` (`--locked`) rather
+than whatever a registry published since, paths in the binary remapped so they
+do not name the machine that built it, and every mtime taken from the commit. Two builds of one commit are
 then the same bytes: `make -C packaging repro` builds twice and compares, and CI
 runs it.
 
@@ -67,27 +65,24 @@ this machine produce different bytes — different base OS, so different wheel
 selection — which is exactly why what a release publishes comes out of the
 container.
 
-**Not a cross-compile.** vstimd cross-compiles because it is Rust. Nothing here
-is compiled at all — uv fetches a prebuilt interpreter and prebuilt wheels — but
-that interpreter is native to the architecture it was fetched for, so the arm64
-package is built by running the builder image *as* arm64 under qemu. Slower,
-and much simpler than a cross toolchain.
+**Not a cross-compile.** The arm64 package is built by running the builder
+image *as* arm64 under qemu, so one recipe serves both architectures and the
+check at its end runs the binary it is about to pack. Slower than vstimd's
+cross toolchain, and much simpler.
 
-**The version comes from the git tag.** `python/pyproject.toml` carries a
-`0.0.0` sentinel and `scripts/git-version.sh` stamps the real version into a
-*copy* at build time, so a build never dirties the working tree — and a `0.0.0`
-artifact in the wild means the stamping was bypassed rather than that somebody
-forgot to bump a number.
+**The version comes from the git tag.** `scripts/git-version.sh` derives it, and
+the build stamps it into the binary at compile time (`STATEMACHINED_VERSION`), so
+a build never dirties the working tree. A binary built from a checkout without
+it reports the crate's own version, which says it was not packaged.
 
 ## The files
 
 | | |
 |---|---|
-| `Makefile` | stages the tree, checks it, and hands it to nfpm |
+| `Makefile` | builds the binary, stages the tree, runs it, and hands it to nfpm |
 | `docker/Dockerfile.package-builder` | the pinned image both architectures are built in |
 | `nfpm.yaml` | what goes where, and what is a conffile |
-| `scripts/git-version.sh` | the version, in its package form and its PEP 440 form |
-| `scripts/check-staged-tree.py` | runs the interpreter that is about to be shipped |
+| `scripts/git-version.sh` | the version, in its package form |
 | `scripts/{postinstall,preremove,postremove}.sh` | the user, the rule, the unit |
 | `systemd/statemachined.service` | how it runs, and what it is not allowed to touch |
 | `sysusers/statemachined.conf` | the unprivileged account |

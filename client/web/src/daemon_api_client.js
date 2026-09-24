@@ -2,17 +2,15 @@
 //
 // The one place in this UI that knows a network exists.
 //
-// It speaks the **Connect protocol** to the eight services in
-// `proto/statemachined/v1/`, over the same port the panels themselves are
-// served from — `daemon/src/statemachined/daemon/api/web_edge.py` answers it
-// in the daemon, so there is no proxy to deploy and nothing to configure.
+// It speaks **gRPC-Web** to the eight services in `proto/statemachined/v1/`,
+// over the same port the panels themselves are served from —
+// `daemon/src/statemachined/daemon/api/web_edge.py` answers it in the daemon,
+// so there is no proxy to deploy and nothing to configure.
 //
-// Connect rather than gRPC-Web, which is what mousewheeld uses: that daemon is
-// Rust and `tonic-web` translates in process, while this one is Python and the
-// edge is written against the protocol specification. Connect's unary call is
-// a plain HTTP POST with the bare message in the body, which is a great deal
-// less to own — and the browser cannot tell the difference, because both are
-// `createClient` over a transport.
+// The same protocol mousewheeld speaks, reached the same way. That daemon is
+// Rust and `tonic-web` translates in process; this one is Python and the edge
+// is written against the specification — and the browser cannot tell the
+// difference, because both are `createClient` over a transport.
 //
 // Every element takes a `base` attribute rather than assuming same-origin,
 // because the point of the `/elements/` contract is that a console served from
@@ -25,7 +23,10 @@
 // the generated types stop here. What crosses is protobuf's JSON mapping —
 // `fromJson` on the way out, `toJson` on the way back — which is a plain object
 // with the field names the proto spells, and which refuses an unknown field in
-// a request by name, in the browser, before it reaches the wire.
+// a request by name, in the browser, before it reaches the wire. That check is
+// now the *only* one of its kind: the wire is binary, and the daemon's parser
+// keeps unknown fields rather than refusing them, so this is the strictest of
+// the two paths rather than a copy of it.
 //
 // Those names are the proto's own: every field pins `json_name` to its
 // snake_case spelling, so `newest_trace_entry_number` is that in the proto, on
@@ -36,8 +37,8 @@
 // panel reads as what it wants.
 
 import { createClient, ConnectError, Code } from "@connectrpc/connect";
-import { createConnectTransport } from "@connectrpc/connect-web";
-import { fromJson, toJson } from "@bufbuild/protobuf";
+import { createGrpcWebTransport } from "@connectrpc/connect-web";
+import { fromBinary, fromJson, toJson } from "@bufbuild/protobuf";
 
 import {
   Configuration as ConfigurationService,
@@ -50,6 +51,9 @@ import {
   Trial as TrialService,
 } from "../gen/statemachined/v1/service_pb.js";
 import { ErrorSchema } from "../gen/statemachined/v1/common_pb.js";
+
+/// Where the daemon puts the refusal as itself. See `api/servicers/refusals.py`.
+const REFUSAL_METADATA_KEY = "statemachined-error-bin";
 
 export { TrialOutcomeSchema } from "../gen/braemons/v1/trial_outcome_pb.js";
 
@@ -98,7 +102,7 @@ export class DaemonRefusedTheRequest extends Error {
   ///
   /// A daemon that is not running, a CORS rejection and a cancelled stream all
   /// arrive here too. They have no `statemachined.v1.Error` — nothing refused
-  /// anything, the call never landed — so the code is the Connect one and the
+  /// anything, the call never landed — so the code is the gRPC one and the
   /// detail is what the browser said.
   static from(thrown) {
     if (thrown instanceof DaemonRefusedTheRequest) return thrown;
@@ -119,17 +123,28 @@ export class DaemonRefusedTheRequest extends Error {
   }
 }
 
-/// `statemachined.v1.Error` out of the error's details, or `null`.
+/// `statemachined.v1.Error` out of the trailing metadata, or `null`.
+///
+/// gRPC-Web carries a `-bin` metadata value base64-encoded, and without
+/// padding, which `atob` will not take. The same shape mousewheeld's client
+/// reads, because it is the same wire.
 function refusalIn(failure) {
-  const [refusal] = failure.findDetails(ErrorSchema);
-  if (refusal === undefined) return null;
-  return toJson(ErrorSchema, refusal, { alwaysEmitImplicit: true });
+  const encoded = failure.metadata?.get(REFUSAL_METADATA_KEY);
+  if (!encoded) return null;
+  try {
+    const padded = encoded + "=".repeat((4 - (encoded.length % 4)) % 4);
+    const binary = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return toJson(ErrorSchema, fromBinary(ErrorSchema, bytes), { alwaysEmitImplicit: true });
+  } catch {
+    return null; // a refusal we cannot read is still a refusal; keep the sentence
+  }
 }
 
 export class DaemonApiClient {
   constructor(baseUrl) {
     this.baseUrl = (baseUrl || "").replace(/\/+$/, "");
-    const transport = createConnectTransport({ baseUrl: this.baseUrl || "/" });
+    const transport = createGrpcWebTransport({ baseUrl: this.baseUrl || "/" });
     this.state = createClient(StateService, transport);
     this.trial = createClient(TrialService, transport);
     this.device = createClient(DeviceService, transport);

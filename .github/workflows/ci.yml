@@ -5,7 +5,7 @@
 # version pinned in both places is a version that drifts. What is left in this
 # file is the things only CI has -- the matrix, the caches, the artifacts.
 #
-# To reproduce a red build: `make ci` (add `make emulate` for the Renode job).
+# To reproduce a red build: `make ci`.
 name: CI
 
 on:
@@ -45,25 +45,33 @@ jobs:
       # same way this one does.
       - run: make sanitize
 
-  python-tests:
-    name: "the Python package: unit, integration, and the shipped commands"
+  daemon:
+    name: "the daemon: its tests, its generated types, clippy"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # prost-build runs protoc to check the committed wire types are current.
+      # Ubuntu 24.04's is 3.21.12, the version they were generated with; a
+      # different protoc could write a different descriptor.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
+      # The upload test commits every compiled set to the firmware built for
+      # this machine, which `rust-test` builds first.
+      - run: make rust-check
+
+  client:
+    name: "the Python client: its stubs, ruff, ty, and against the daemon"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # uv, not the runner's system Python: the daemon is a uv project and
-      # `uv run --project daemon` builds its environment from daemon/uv.lock.
       - uses: astral-sh/setup-uv@v6
-      - name: Cache uv
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/uv
-          key: uv-${{ runner.os }}-${{ hashFiles('daemon/uv.lock') }}
-      # Needs the checkout rather than only the package: test_message_framing.py
-      # asserts the daemon's framing against emulation/tests' copy of it, and
-      # the integration and end-to-end suites drive whole sessions against the
-      # firmware built for this machine -- which `make test` builds first.
-      - run: make test
-      - run: make test-python
+      - uses: Swatinem/rust-cache@v2
+      # The client's suite starts the daemon cargo builds.
+      - run: make rust
+      - run: make client
+      # The hardware suite, against the firmware built for this machine: every
+      # test but the timing budgets means the same thing there.
+      - run: make test-hardware TARGET=native
 
   # There is no job here for the trial loop across both daemons. It lives in the
   # contracts repo, in `e2e-tests/`, with the tests that are about the three daemons
@@ -104,10 +112,14 @@ jobs:
     name: a flashable image
     # Only once the thing is known to work: an artifact somebody flashes onto a
     # rig should not exist for a commit whose tests are red.
-    needs: [core-tests, emulation, firmware-build]
+    needs: [core-tests, firmware-build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The image records its version, which comes from the last `v*` tag;
+          # a shallow checkout has none and `make image` refuses to guess.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
       - name: Cache PlatformIO
         uses: actions/cache@v4
@@ -140,7 +152,7 @@ jobs:
     # amd64 only, and out of the pinned builder image rather than natively:
     # arm64 runs under qemu and costs about ten minutes, which is the release
     # workflow's business rather than every push's.
-    needs: [python-tests]
+    needs: [daemon]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -155,38 +167,6 @@ jobs:
       # is the build, not the version.
       - name: Build twice and compare
         run: make -C packaging repro STATEMACHINED_VERSION=0.0.1
-
-  emulation:
-    name: the HAL runs on an emulated board
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - name: Cache PlatformIO
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.platformio
-            ~/.cache/uv
-          key: pio-uno_r4_minima_sci-${{ hashFiles('platformio.ini') }}
-      - run: make install-pio
-      # Renode's version is pinned in the Makefile: the Robot keyword library
-      # ships inside Renode, so a different Renode is a different set of
-      # keywords.
-      - run: make install-renode
-      # Covers what the host build cannot compile: the pin map, the port
-      # registers, the timer ISR, and the protocol over a real UART. It asserts
-      # nothing about timing -- Renode's virtual time makes that meaningless.
-      # See emulation/README.md.
-      - run: make emulate
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: renode-logs
-          path: |
-            logs/
-            log.html
-            robot_output.xml
 
   format:
     name: clang-format

@@ -4,119 +4,102 @@
 #include "protocol/crc16.h"
 
 namespace statemachined {
-namespace {
-
-// `,"crc":"XXXX"}` -- fixed width, which is the whole reason the protocol pins
-// crc as the last member: the receiver finds it by arithmetic from the end of
-// the line rather than by parsing its way to it.
-constexpr size_t kCrcTailLen = 14;
-constexpr char kCrcPrefix[] = ",\"crc\":\"";
-constexpr size_t kCrcPrefixLen = 8;
-
-}  // namespace
 
 const char* frame_error_str(FrameError e) {
   switch (e) {
     case FrameError::None:
       return "ok";
     case FrameError::TooLong:
-      return "line exceeded the line budget";
-    case FrameError::NonAscii:
-      return "line contained a non-ASCII byte";
-    case FrameError::NotObject:
-      return "line is not a JSON object";
-    case FrameError::NoCrc:
-      return "line has no trailing crc member";
+      return "frame exceeded the frame budget";
+    case FrameError::BadCobs:
+      return "frame is not valid COBS";
     case FrameError::BadCrc:
-      return "crc does not match the line";
+      return "crc does not match the frame";
   }
   return "unknown";
 }
 
-FrameError verify_frame(const char* line, size_t len, Frame* out) {
-  if (len < kCrcTailLen + 1 || line[0] != '{' || line[len - 1] != '}')
-    return FrameError::NotObject;
-
-  const char* tail = line + len - kCrcTailLen;
-  for (size_t i = 0; i < kCrcPrefixLen; ++i)
-    if (tail[i] != kCrcPrefix[i]) return FrameError::NoCrc;
-  if (tail[12] != '"') return FrameError::NoCrc;
-
-  uint16_t claimed = 0;
-  if (!crc16_from_hex(tail + kCrcPrefixLen, &claimed)) return FrameError::NoCrc;
-
-  const size_t covered_len = len - kCrcTailLen;
-  if (crc16_ccitt(line, covered_len) != claimed) return FrameError::BadCrc;
-
-  if (out != nullptr) {
-    out->covered = line;
-    out->covered_len = covered_len;
+const char* frame_error_code(FrameError e) {
+  switch (e) {
+    case FrameError::None:
+      return "internal";
+    case FrameError::TooLong:
+      return "too_long";
+    case FrameError::BadCobs:
+      return "bad_cobs";
+    case FrameError::BadCrc:
+      return "bad_crc";
   }
-  return FrameError::None;
+  return "internal";
 }
 
-size_t finish_frame(char* buf, size_t len, size_t cap, bool newline) {
-  const size_t needed = len + kCrcTailLen + (newline ? 1u : 0u);
-  if (needed > cap) return 0;
-
-  const uint16_t crc = crc16_ccitt(buf, len);
-  for (size_t i = 0; i < kCrcPrefixLen; ++i) buf[len + i] = kCrcPrefix[i];
-  crc16_to_hex(crc, buf + len + kCrcPrefixLen);
-  buf[len + 12] = '"';
-  buf[len + 13] = '}';
-  if (newline) buf[len + 14] = '\n';
-  return needed;
+size_t encode_frame(const uint8_t* payload, size_t len, uint8_t* out) {
+  if (len > kMaxPayload) return 0;
+  // Sealed in place at the end of `out` and stuffed forwards from its start.
+  // COBS writes at most one byte ahead of where it reads for every 254 it
+  // reads, so starting the source that far along leaves the reads always ahead
+  // of the writes -- and saves the 500-byte copy a second buffer would cost.
+  const size_t sealed_len = len + 2;
+  uint8_t* sealed = out + (kMaxFrame - 1 - sealed_len);
+  for (size_t i = len; i-- > 0;) sealed[i] = payload[i];
+  const uint16_t crc = crc16_ccitt(sealed, len);
+  sealed[len] = static_cast<uint8_t>(crc >> 8);
+  sealed[len + 1] = static_cast<uint8_t>(crc & 0xFF);
+  const size_t encoded = cobs_encode(sealed, sealed_len, out);
+  out[encoded] = 0;
+  return encoded + 1;
 }
 
-void LineReader::reset() {
-  len_ = 0;
-  status_ = FrameError::None;
-  discarding_ = false;
-  complete_ = false;
-}
-
-bool LineReader::feed(char c) {
-  // A completed line stays readable until the next byte arrives, so the caller
-  // can parse it without having to copy it out first.
-  if (complete_) {
-    len_ = 0;
-    status_ = FrameError::None;
-    complete_ = false;
-  }
-
-  if (c == '\n') {
-    if (discarding_) {
-      ++dropped_;
-      discarding_ = false;
-      complete_ = true;
-      len_ = 0;
-      return true;  // status_ already says why
+bool FrameReader::feed(uint8_t byte) {
+  if (byte != 0) {
+    if (fill_ < sizeof(buffer_)) {
+      buffer_[fill_++] = byte;
+    } else {
+      overflowed_ = true;
     }
-    // A \r immediately before the newline is accepted and ignored, so a
-    // terminal program on the other end does not break the link.
-    if (len_ > 0 && buf_[len_ - 1] == '\r') --len_;
-    // A wholly empty line is not a message and not an error. \r\n handling and
-    // idle keepalives both produce them, and answering each with an error would
-    // make a cosmetic problem look like a fault.
-    if (len_ == 0) return false;
-    complete_ = true;
+    return false;
+  }
+
+  // A delimiter: whatever was collected is one frame.
+  const size_t collected = fill_;
+  const bool overflowed = overflowed_;
+  fill_ = 0;
+  overflowed_ = false;
+  len_ = 0;
+
+  // Back-to-back delimiters are how a sender resynchronises a receiver, so an
+  // empty frame is not an error and is not reported.
+  if (collected == 0 && !overflowed) return false;
+
+  if (overflowed) {
+    status_ = FrameError::TooLong;
+    ++dropped_;
     return true;
   }
-
-  if (discarding_) return false;
-
-  if (static_cast<unsigned char>(c) >= 0x80) {
-    status_ = FrameError::NonAscii;
-    discarding_ = true;
-    return false;
+  const size_t decoded = cobs_decode(buffer_, collected, buffer_);
+  if (decoded < 2) {
+    status_ = FrameError::BadCobs;
+    ++dropped_;
+    return true;
   }
-  if (len_ >= cap_) {
-    status_ = FrameError::TooLong;
-    discarding_ = true;
-    return false;
+  const size_t payload_len = decoded - 2;
+  const uint16_t sent =
+      static_cast<uint16_t>((buffer_[payload_len] << 8) | buffer_[payload_len + 1]);
+  if (crc16_ccitt(buffer_, payload_len) != sent) {
+    status_ = FrameError::BadCrc;
+    ++dropped_;
+    return true;
   }
-  buf_[len_++] = c;
-  return false;
+  len_ = payload_len;
+  status_ = FrameError::None;
+  return true;
+}
+
+void FrameReader::reset() {
+  fill_ = 0;
+  len_ = 0;
+  overflowed_ = false;
+  status_ = FrameError::None;
 }
 
 }  // namespace statemachined

@@ -4,8 +4,8 @@
 statemachined is at **v0.1.0-alpha1**. It has never controlled a session
 with a subject in it, and it is not something a rig should depend on yet.
 What is real: the portable core, the wire protocol and the Uno R4 Minima
-HAL are implemented and tested — on the host, under sanitizers, on an
-emulated board under Renode, and on a physical R4, which measured
+HAL are implemented and tested — on the host, under sanitizers, and on a
+physical R4, which measured
 **122 767 Hz** against the 10 kHz target. The rest is still being argued
 out in the [plan](https://github.com/braemons/statemachined/blob/main/dev/PLAN.md).
 
@@ -78,63 +78,26 @@ rig installs, and why a translator alone is not enough.
 
 ## Drive it from Python
 
-`daemon/` is one package with three tiers, and which one you install says how
-you mean to drive a board.
+The daemon owns the board; a script talks to the daemon, with the client in
+`client/python/` (`statemachined-client`):
 
-```sh
-pip install statemachined            # the documents, and talking to a daemon
-pip install 'statemachined[device]'  # + open the serial port yourself
-pip install 'statemachined[serve]'   # + be the daemon
+```python
+from statemachined_client import StatemachinedClient
+
+rig = StatemachinedClient("rig-3.local")      # gRPC, on 8082
+rig.upload_graph_set(["go-nogo", "two-alternative-forced-choice"])
+
+rig.configure_trial(1, graph="go-nogo", cap_milliseconds=30_000)
+rig.start_trial(1)
+rig.wait_for_trial(1, timeout_s=35)
+
+result = rig.read_trial_result(1)
+print(result.outcome, [visit.state_name for visit in result.visits])
 ```
 
-=== "Through the daemon"
-
-    When something other than your script owns the board — a rig, where
-    `statemachined serve` is holding it and a web UI and triald are watching
-    too:
-
-    ```python
-    from statemachined.client import StatemachinedClient
-
-    with StatemachinedClient("http://rig-3.local:8081") as rig:
-        rig.session.upload_graph_set(["go-nogo", "2afc"])
-
-        with rig.trace.subscribe("my-experiment") as stream:
-            rig.trial.configure(1, graph="go-nogo", cap_milliseconds=30_000)
-            rig.trial.start(1)
-            stream.wait_for_trial(1, timeout_seconds=35)
-
-        for entry in rig.trace.for_trial(1):
-            print(entry["kind"], entry.get("state_name"), entry.get("outcome"))
-    ```
-
-=== "Straight at the board"
-
-    On a bench, with no daemon anywhere:
-
-    ```python
-    from statemachined.device import StatemachinedDevice
-    from statemachined.model.graph_definition import GraphDefinition
-    from statemachined.model.line_map import LineMap
-
-    board = StatemachinedDevice("/dev/ttyACM0", line_map=LineMap.model_validate(wiring))
-    board.connect_and_greet()
-    board.push_wiring()
-    board.upload_graph_set([GraphDefinition.model_validate(go_nogo)], set_version=1)
-
-    result = board.run_trial_to_completion(1, "go-nogo", cap_milliseconds=30_000)
-    # `.name`, not the member: TrialOutcome is an IntEnum and since Python 3.11
-    # those print as their number. The `.tdr` taxonomy crosses the wire by name.
-    print(result.outcome.name, [visit.state_name for visit in result.visits])
-    ```
-
-**Two classes and not one facade with two backends**, because the difference
-is not the transport. A daemon keeps a trace ring, takes named recordings off
-it, holds a graph store and saved configs on disk, and can say who else is
-watching — all of which exist because it _outlives the script that spoke to
-it_. A direct connection has no ring to record from. What they share is the
-trial loop, the graph set, the wiring, autorun and save — because those are
-the board's, not the daemon's.
+The daemon keeps a trace ring, takes named recordings off it, holds a graph
+store and saved configs on disk, and can say who else is watching — all of
+which exist because it _outlives the script that spoke to it_.
 
 ## Target hardware
 

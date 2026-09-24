@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// The firmware, on this machine, speaking the real protocol down a pipe.
+// The firmware, on this machine, speaking the real protocol on a TCP port.
 //
 // firmware/src/main.cpp is the board's entry point and cannot run here: it is
 // Arduino, it wants a timer peripheral, and its whole subject is what runs in
@@ -14,6 +14,13 @@
 // exactly this: "whole trials, cancel races, link loss", on the host, with no
 // board attached.
 //
+// The link is a socket on 127.0.0.1 rather than a serial port -- the port is
+// `--port`, 5300 unless said, and 0 lets the kernel pick; the first line on
+// stdout names the one it got. A daemon dials it with `-t 127.0.0.1:5300`, and
+// a host that disconnects is a port closing: the device fails safe and waits
+// for the next one, as a board does. It is for tests and a bench without a
+// board, and it is not packaged.
+//
 // What it is NOT is a timing test. The scan here is a nanosleep in a loop on a
 // preemptible desktop kernel, and docs/operations/hardware.md's numbers come from a board.
 // Durations are honest to a millisecond or so, which is what an integration
@@ -25,11 +32,11 @@
 #include <cstring>
 #include <ctime>
 
-#include "protocol/firmware_version.h"
 #include "hal.h"
 #include "io/input_conditioner.h"
 #include "io/reply_queue.h"
 #include "io/settings_store.h"
+#include "protocol/firmware_version.h"
 #include "protocol/host_link_session.h"
 
 using namespace statemachined;
@@ -58,7 +65,8 @@ void drain_reply_queue() {
 
 class QueueingReplySink : public ReplySink {
  public:
-  void send_line(const char* bytes, size_t length) override {
+  void send_frame(const uint8_t* frame, size_t length) override {
+    const char* bytes = reinterpret_cast<const char*>(frame);
     // A burst bigger than the queue is the result that ends a trial. On a board
     // that costs the scan its periods and is counted; here there is no timer to
     // be late for, so waiting for the pipe is simply what happens.
@@ -156,7 +164,25 @@ void configure_the_loopback_from_the_environment() {
   hal::set_native_loopback(static_cast<uint8_t>(width), static_cast<uint8_t>(shift % width));
 }
 
-int main() {
+/// `--port N`, or 5300.
+uint16_t port_from(int argc, char** argv) {
+  for (int i = 1; i + 1 < argc; ++i) {
+    if (std::strcmp(argv[i], "--port") == 0)
+      return static_cast<uint16_t>(std::atoi(argv[i + 1]));
+  }
+  return 5300;
+}
+
+int main(int argc, char** argv) {
+  const uint16_t port = hal::native_listen(port_from(argc, argv));
+  if (port == 0) {
+    std::fprintf(stderr, "statemachined_native_device: cannot listen on that port\n");
+    return 1;
+  }
+  // The one line a harness reads, to learn the port it asked the kernel for.
+  std::printf("listening on 127.0.0.1:%u\n", static_cast<unsigned>(port));
+  std::fflush(stdout);
+
   // Before init(), which primes the conditioner off the first read: a harness
   // configured after that would have its first scan see an input word that the
   // conditioner had already been told was the resting state.
@@ -183,14 +209,27 @@ int main() {
   apply_output_update(session.fail_safe());
 
   uint16_t applied_wiring_revision = session.wiring_revision();
+  bool link_was_up = false;
 
   for (;;) {
     const Microseconds now_us = hal::micros_now();
 
+    // A host that went away, handled as firmware/src/main.cpp handles a port
+    // closing: the run in flight is cancelled through the ordinary exit path,
+    // every line goes to its safe level unless the board was told to drive
+    // itself, and whatever was queued for that host is dropped.
+    const bool up = hal::link_up();
+    if (!up && link_was_up) {
+      apply_output_update(session.link_lost(now_us));
+      if (!session.autorun_active()) apply_output_update(session.fail_safe());
+      reply_queue.clear();
+    }
+    link_was_up = up;
+
     char inbound[128];
-    const size_t received = hal::link_read(inbound, sizeof(inbound));
+    const size_t received = up ? hal::link_read(inbound, sizeof(inbound)) : 0;
     if (received > 0) {
-      session.receive(inbound, received, now_us);
+      session.receive(reinterpret_cast<const uint8_t*>(inbound), received, now_us);
       if (session.wiring_revision() != applied_wiring_revision) {
         applied_wiring_revision = session.wiring_revision();
         input_conditioner.configure(session.wiring().inputs);

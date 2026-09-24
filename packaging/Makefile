@@ -1,28 +1,21 @@
 # The .deb and the .rpm, built the way vstimd builds its own.
 #
-# Two things this is, and one it is not.
-#
-# **Vendored.** A self-contained Python tree lands under
-# /opt/braemons/statemachined -- interpreter and all -- rather than a set of
-# `python3-*` dependencies. That is the braemons pattern (docs/developer/daemon.md §6.1)
-# and the reason is a rig rather than taste: an OS upgrade that moves Python
-# must not be able to stop an experiment, and a box in a rack should not need a
-# working pip to be repaired. The price is that a pure-Python package is
-# per-architecture.
+# **One binary.** The daemon is Rust, and the panels are embedded in it, so the
+# package is /usr/bin/statemachined, the flashable firmware, the docs, and the
+# unit files. No interpreter and no
+# dependencies to vendor.
 #
 # **Built in a pinned container**, like vstimd's. `packages-amd64` and
 # `packages-arm64` build inside packaging/docker/Dockerfile.package-builder,
-# whose base image and every tool in it are pinned by digest or version, and
-# whose file mtimes come from the commit rather than from the clock. So the
-# artifact is a function of the commit and this repository, not of who ran it
-# -- which is what makes a CI build and a developer's build comparable.
+# whose base image, toolchain and every tool in it are pinned, and whose file
+# mtimes and embedded paths come from the commit rather than from the clock or
+# the machine. So the artifact is a function of the commit and this repository,
+# not of who ran it -- which is what makes a CI build and a developer's build
+# comparable.
 #
-# What it is **not** is a cross-compile. vstimd cross-compiles because it is
-# Rust; the only thing compiled here is the native device -- the firmware built
-# for the host, which `statemachined device` runs so a box with no board still
-# has something real to talk to -- and the vendored interpreter is a native
-# artifact besides. So the arm64 package is built by running the builder image
-# as arm64 under qemu. Register the handler once per boot:
+# The arm64 package is built by running the builder image as arm64 under qemu
+# rather than by cross-compiling, so one recipe serves both. Register the
+# handler once per boot:
 #
 #     docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
 #
@@ -45,16 +38,11 @@ DIST_DIR ?= $(ROOT)/dist
 
 PACKAGE_BUILDER_IMAGE ?= statemachined-package-builder
 
-# Where the tree lands on the target: the path the launcher's shebang, the
-# systemd unit and nfpm.yaml all name. Changing it means changing all three.
-PREFIX := /opt/braemons/statemachined
+# Where the binary lands on the target: the path the systemd unit and
+# nfpm.yaml both name. Changing it means changing both.
+BINARY := /usr/bin/statemachined
 
-# The interpreter uv fetches from python-build-standalone. Pinned here because
-# the package is built out of it: a rig and CI disagreeing about which Python
-# ran the daemon is exactly the difference this vendoring exists to remove.
-PYTHON_VERSION ?= 3.12
-
-UV   ?= uv
+CARGO ?= cargo
 NFPM ?= nfpm
 NFPM_PIN := 2.43.1
 
@@ -69,6 +57,7 @@ NFPM_PIN := 2.43.1
 STATEMACHINED_VERSION ?=
 RESOLVED_VERSION := $(strip $(if $(strip $(STATEMACHINED_VERSION)),$(strip $(STATEMACHINED_VERSION)),\
                       $(shell $(ROOT)/packaging/scripts/git-version.sh 2>/dev/null)))
+# The same version as pip spells it, for the client's wheel.
 RESOLVED_PY_VERSION := $(strip $(if $(strip $(STATEMACHINED_VERSION)),\
                          $(shell STATEMACHINED_VERSION='$(strip $(STATEMACHINED_VERSION))' \
                                  $(ROOT)/packaging/scripts/git-version.sh --pep440 2>/dev/null),\
@@ -83,7 +72,6 @@ RESOLVED_PY_VERSION := $(strip $(if $(strip $(STATEMACHINED_VERSION)),\
 # in a checkout with no tags.
 VERSION    = $(or $(RESOLVED_VERSION),$(error Cannot determine the version. Run \
 packaging/scripts/git-version.sh to see why, or pass STATEMACHINED_VERSION=<version>))
-PY_VERSION = $(or $(RESOLVED_PY_VERSION),$(error Cannot determine the version))
 
 REVISION ?= 1
 
@@ -113,8 +101,8 @@ ARCH := $(strip \
   $(if $(filter armv7l,$(UNAME_M)),arm7,))))
 
 # The flashable images, if `make image` has been run in the repository root. A
-# package without them still installs; GET /api/device/firmware then has nothing
-# to compare the running board against, and says so.
+# package without them still installs; the daemon then has nothing to compare
+# the running board against, and says so.
 IMAGE_DIR ?= $(ROOT)/image
 
 # Documentation that ships in the package, because the box in the rack is where
@@ -122,8 +110,8 @@ IMAGE_DIR ?= $(ROOT)/image
 DOCS := README.md LICENSE NOTICE docs/developer/daemon.md docs/reference/api.md docs/reference/protocol.md docs/operations/hardware.md docs/operations/bringup.md
 
 .PHONY: packages-amd64 packages-arm64 packages packages-here \
-        deb rpm stage stage-device stage-docs stage-firmware check inspect repro \
-        print-version install-nfpm clean help
+        deb rpm stage stage-docs stage-firmware check inspect repro \
+        wheel print-version install-nfpm clean help
 
 # ── Built in the pinned container, one per architecture ─────────────────────
 #
@@ -186,162 +174,37 @@ deb rpm: export STATEMACHINED_PKG_VERSION = $(VERSION)
 # ── The staged tree ─────────────────────────────────────────────────────────
 
 stage: $(STAGE)/.stamp      ## build the tree the package is cut from
-# The panels are a prerequisite, minus their build inputs: `node_modules` is
-# tens of thousands of files, so a `find` across it would be slow on every
-# build and would restage whenever somebody ran `npm ci`.
-$(STAGE)/.stamp: $(shell find $(ROOT)/daemon/src $(ROOT)/firmware/core $(ROOT)/firmware/hal \
-                              $(ROOT)/firmware/native -type f) \
+# The panels are a prerequisite because they are embedded, minus their build
+# inputs: `node_modules` is tens of thousands of files.
+$(STAGE)/.stamp: $(shell find $(ROOT)/daemon-rs -type f -not -path '*/target/*') \
                  $(shell find $(ROOT)/client/web -type f \
                            -not -path '*/node_modules/*' -not -path '*/gen/*') \
-                 $(ROOT)/daemon/pyproject.toml $(ROOT)/CMakeLists.txt
+                 $(ROOT)/Cargo.toml $(ROOT)/Cargo.lock
 	@test -n "$(ARCH)" || { \
 	  echo "error: no nfpm architecture known for $(UNAME_M)."; \
 	  echo "       Build on the target architecture, or add it above."; exit 1; }
 	rm -rf $(BUILD)
-	@mkdir -p $(STAGE)$(PREFIX) $(SRC) $(DIST_DIR)
+	@mkdir -p $(dir $(STAGE)$(BINARY)) $(DIST_DIR)
 
-	@#  The interpreter, copied out of uv's managed store rather than symlinked
-	@#  into it. --managed-python so this cannot silently vendor whatever Python
-	@#  happens to be on PATH, which would defeat the entire exercise.
-	$(UV) python install --managed-python $(PYTHON_VERSION)
-	cp -a "$$(dirname $$(dirname $$($(UV) python find --managed-python $(PYTHON_VERSION))))/." \
-	  $(STAGE)$(PREFIX)/
-	@#  uv marks its own installs externally managed so that nothing writes into
-	@#  the store. This copy is not that store: it is a tree being built into a
-	@#  package, and the daemon is about to be installed into it.
-	find $(STAGE)$(PREFIX) -name EXTERNALLY-MANAGED -delete
-
-	@#  The daemon, stamped. pyproject.toml carries the 0.0.0 sentinel in the
-	@#  repository, so the version is substituted in a copy -- a build must never
-	@#  leave the working tree dirty, and a dirty tree is itself part of the
-	@#  version string.
-	cp -a $(ROOT)/daemon/. $(SRC)/
-	rm -rf $(SRC)/tests $(SRC)/bench $(SRC)/.venv
-	@#  **The panels are copied in here**, and this is the only place it can
-	@#  happen. They are authored in `client/web/`, a sibling of `daemon/`
-	@#  (contracts/DAEMON_LAYOUT.md), so that somebody looking for this daemon's
-	@#  UI finds it without knowing how the Python package is laid out. Python
-	@#  ships data *inside* a package, and hatchling's force-include reaches
-	@#  outside the project but is a trap -- a wheel built from an sdist cannot
-	@#  contain a path above the sdist's own root. A copy into the staged tree
-	@#  has no such cleverness in it, and `web_directory()` falls back to the
-	@#  authored location when no copy was made, which is every editable install.
-	cp -a $(ROOT)/client/web $(SRC)/src/statemachined/daemon/web
-	@#  The panels' build inputs are not panels. `client/web/` is an npm
-	@#  project as well as a web root -- it generates
-	@#  elements/daemon_api_client.js from proto/ -- and node_modules alone
-	@#  would put tens of megabytes of somebody else's source into a package
-	@#  that installs onto a rig. The generated bundle is committed, so nothing
-	@#  dropped here is needed to serve the UI.
-	rm -rf $(SRC)/src/statemachined/daemon/web/node_modules \
-	       $(SRC)/src/statemachined/daemon/web/gen \
-	       $(SRC)/src/statemachined/daemon/web/src \
-	       $(SRC)/src/statemachined/daemon/web/package.json \
-	       $(SRC)/src/statemachined/daemon/web/package-lock.json \
-	       $(SRC)/src/statemachined/daemon/web/build_daemon_api_client.mjs
-	sed -i 's/^version = "0.0.0"$$/version = "$(PY_VERSION)"/' $(SRC)/pyproject.toml
-	@grep -q '^version = "$(PY_VERSION)"$$' $(SRC)/pyproject.toml || { \
-	  echo "error: the version sentinel in daemon/pyproject.toml did not match."; \
-	  echo "       Nothing was stamped, and a 0.0.0 package is a package nobody"; \
-	  echo "       can correlate with a commit. Fix the sed above."; exit 1; }
-	@#  The dependencies come from daemon/uv.lock, exported with hashes, rather
-	@#  than being resolved against PyPI at build time. Otherwise a release of
-	@#  fastapi between two builds of one commit changes the artifact, which is
-	@#  the difference between "reproducible" and "reproducible this afternoon".
-	@#  Exported from the unmodified daemon/ because that is where the lock
-	@#  matches its pyproject; the project itself then goes in --no-deps.
+	@#  The version is stamped in at compile time, from the one place it is
+	@#  defined, rather than written into Cargo.toml: a build must never leave
+	@#  the working tree dirty, and a dirty tree is itself part of the version.
 	@#
-	@#  **Both extras, named rather than implied.** The package's dependencies
-	@#  are tiered now -- the base tier is the documents and the HTTP client, and
-	@#  a bare export would vendor an interpreter that cannot open a serial port
-	@#  or serve a request. A rig installs the daemon, so a rig gets `device` and
-	@#  `serve`, and naming them here is what makes that a decision rather than a
-	@#  default somebody has to reconstruct from a traceback.
-	$(UV) export --project $(ROOT)/daemon --frozen --no-default-groups --no-emit-project \
-	  --extra device --extra serve \
-	  --no-header --no-annotate --format requirements.txt -o $(SRC)/requirements.txt
-	$(UV) pip install --python $(STAGE)$(PREFIX)/bin/python3 \
-	  --link-mode=copy --no-cache --quiet -r $(SRC)/requirements.txt
-	$(UV) pip install --python $(STAGE)$(PREFIX)/bin/python3 \
-	  --link-mode=copy --no-cache --quiet --no-deps $(SRC)
+	@#  --remap-path-prefix, so the paths the debug info and panic messages
+	@#  carry are the same on every machine: two builds of one commit in two
+	@#  checkouts are otherwise two different binaries. --locked, so the
+	@#  dependencies are Cargo.lock's and nothing a registry published since.
+	cd $(ROOT) && STATEMACHINED_VERSION=$(VERSION) \
+	  RUSTFLAGS="--remap-path-prefix=$(ROOT)=/build/statemachined --remap-path-prefix=$(CARGO_HOME_DIR)=/cargo" \
+	  $(CARGO) build --release --locked --target-dir $(BUILD)/target \
+	    --manifest-path daemon-rs/Cargo.toml
+	install -m 0755 $(BUILD)/target/release/statemachined $(STAGE)$(BINARY)
 
-	@#  Nothing in here is a development environment: no headers, no pip, no
-	@#  tkinter, and no console scripts but ours -- the ones uv writes carry the
-	@#  *build* machine's path to the interpreter, so shipping them would ship a
-	@#  handful of commands that are broken on every target.
-	rm -rf $(STAGE)$(PREFIX)/include $(STAGE)$(PREFIX)/share
-	rm -rf $(STAGE)$(PREFIX)/lib/python*/idlelib $(STAGE)$(PREFIX)/lib/python*/tkinter \
-	       $(STAGE)$(PREFIX)/lib/python*/lib2to3 $(STAGE)$(PREFIX)/lib/python*/ensurepip \
-	       $(STAGE)$(PREFIX)/lib/python*/site-packages/pip \
-	       $(STAGE)$(PREFIX)/lib/python*/site-packages/pip-*.dist-info
-	find $(STAGE)$(PREFIX)/bin -mindepth 1 \
-	  -not -name python -not -name python3 -not -name 'python3.[0-9]*' -delete
-	rm -f $(STAGE)$(PREFIX)/bin/*-config
-	@#  python-build-standalone leaves a BUILD manifest of its own at the root of
-	@#  the tree. Harmless, and not something a rig should be asked to explain.
-	rm -f $(STAGE)$(PREFIX)/BUILD
-
-	@#  One launcher, written here rather than taken from the wheel, so that the
-	@#  shebang is the installed path and not this machine's staging directory.
-	@printf '%s\n' \
-	  '#!$(PREFIX)/bin/python3' \
-	  '# The installed entry point. See packaging/Makefile for why it is not' \
-	  '# the console script the wheel carries.' \
-	  'import sys' \
-	  'from statemachined.command_line_interface import main' \
-	  '' \
-	  'if __name__ == "__main__":' \
-	  '    sys.exit(main())' \
-	  > $(STAGE)$(PREFIX)/bin/statemachined
-	chmod 0755 $(STAGE)$(PREFIX)/bin/statemachined
-
-	$(MAKE) --no-print-directory stage-device stage-docs stage-firmware stage-deterministic
+	$(MAKE) --no-print-directory stage-docs stage-firmware stage-deterministic
 	@touch $@
 
-# The firmware, compiled for the host, inside the package.
-#
-# It looks like a test fixture and is not one. A box that has just run
-# `apt install braemons-statemachined` has a daemon and no board, and the first
-# question anybody asks of it is whether it works -- `statemachined device` on
-# one terminal, `-t socket://127.0.0.1:5300` on the other, and the answer
-# involves the firmware's own session, engine and result chunker rather than a
-# mock of them. docs/developer/daemon.md has called this "how anybody runs this daemon with
-# no board on the desk" since M4h; until now it was only true from a checkout.
-#
-# libexec/ rather than bin/: nothing types this name. `statemachined device`
-# finds it relative to the interpreter that is running (see
-# device/native_device_on_a_socket.py), which is why the path is not written
-# down anywhere but here.
-#
-# A build with no compiler still produces a package. It is not the release
-# path -- packaging/docker/Dockerfile.package-builder carries g++ and cmake
-# precisely so a released package always has this -- but a developer's
-# `make -C packaging deb` on a machine without them should say so and carry on
-# rather than fail at the last step.
-stage-device:
-	@mkdir -p $(STAGE)$(PREFIX)/libexec
-	@if command -v cmake >/dev/null 2>&1 && command -v c++ >/dev/null 2>&1; then \
-	  cmake -S $(ROOT) -B $(BUILD)/device -DCMAKE_BUILD_TYPE=Release \
-	    -DSTATEMACHINED_FIRMWARE_VERSION=$(VERSION) >/dev/null && \
-	  cmake --build $(BUILD)/device -j --target statemachined_native_device >/dev/null && \
-	  install -m 0755 $(BUILD)/device/statemachined_native_device \
-	    $(STAGE)$(PREFIX)/libexec/statemachined-device && \
-	  echo "  device: statemachined-device, $$(du -h $(STAGE)$(PREFIX)/libexec/statemachined-device | cut -f1)"; \
-	else \
-	  printf '%s\n' \
-	    'No native device was built into this package.' \
-	    '' \
-	    'It is the firmware compiled for this machine, and `statemachined device`' \
-	    'runs it so that a daemon on a box with no board has something real to' \
-	    'talk to. Building it needs cmake and a C++17 compiler, which the machine' \
-	    'that packed this did not have.' \
-	    '' \
-	    'Released packages always carry it -- see' \
-	    'packaging/docker/Dockerfile.package-builder. Build one from a checkout' \
-	    'with `make -C packaging deb` on a machine with a compiler.' \
-	    > $(STAGE)$(PREFIX)/libexec/NO-DEVICE.txt; \
-	  echo "  device: none (cmake and a C++ compiler build it)"; \
-	fi
+# Where cargo keeps the registry's sources, which the debug info names.
+CARGO_HOME_DIR := $(or $(CARGO_HOME),$(HOME)/.cargo)
 
 stage-docs:
 	@mkdir -p $(STAGE)/usr/share/doc/braemons-statemachined
@@ -372,75 +235,45 @@ stage-firmware:
 	  echo "  firmware: none (run \`make image\` first to include it)"; \
 	fi
 
-# What makes two builds of one commit the same bytes.
-#
-# Three things drift, and the order below is the fix for all three.
-#
-# uv leaves a `uv_cache.json` in the dist-info holding the wall-clock time of
-# the install, to the nanosecond. It is uv's own bookkeeping and means nothing
-# to an installed package, but it drags RECORD and md5sums along with it.
-#
-# Every mtime in the tree is when the build ran: uv unpacks the interpreter
-# fresh each time, so even the stdlib's timestamps are new on every build.
-# They all become the commit's instead.
-#
-# And a .pyc records the mtime of the source it was compiled from, so
-# normalising mtimes *invalidates every .pyc python-build-standalone shipped* --
-# which would leave the daemon recompiling the stdlib on every start, into a
-# tree its user cannot write. So every .pyc in the tree is rebuilt with
-# hash-based invalidation instead, `unchecked` because the tree is read-only
-# and there is nothing to check against. `-s`/`-p` rewrite the recorded paths
-# from this staging directory to the installed one, so a traceback names
-# /opt/braemons/... rather than somebody's build directory.
+# What makes two builds of one commit the same bytes: every mtime in the tree
+# becomes the commit's. The binary's own bytes are settled at compile time, by
+# --remap-path-prefix above and by the lock.
 .PHONY: stage-deterministic
 stage-deterministic:
-	@find $(STAGE)$(PREFIX)/lib/python*/site-packages -name uv_cache.json -delete
-	@sed -i '/uv_cache\.json/d' \
-	  $(STAGE)$(PREFIX)/lib/python*/site-packages/*.dist-info/RECORD
-	@find $(STAGE) -name __pycache__ -type d -exec rm -rf {} + 2>/dev/null || true
 	@find $(STAGE) -exec touch --no-dereference -d @$(SOURCE_DATE_EPOCH) {} +
-	@$(STAGE)$(PREFIX)/bin/python3 -m compileall -q -f \
-	  --invalidation-mode unchecked-hash \
-	  -s $(STAGE) -p / \
-	  $(STAGE)$(PREFIX)/lib/python$(PYTHON_VERSION) >/dev/null
-	@#  The .pyc files just written carry this moment's mtime; the tar nfpm
-	@#  builds records it, so they go back to the commit's too.
-	@find $(STAGE) -exec touch --no-dereference -d @$(SOURCE_DATE_EPOCH) {} +
-	@echo "  deterministic: mtimes at $(MTIME), hash-based .pyc throughout"
+	@echo "  deterministic: mtimes at $(MTIME)"
 
 # ── Before it is a package ──────────────────────────────────────────────────
 
-# The staged tree, run. Every other test in this repository runs the daemon out
-# of a checkout with uv building the environment; this is the only thing that
-# runs the interpreter that is about to be shipped, with the dependencies that
-# are about to be shipped, and it is where a missing `uvicorn[standard]` extra
-# or a web asset that never made it into the wheel shows up.
-#
-# PYTHONDONTWRITEBYTECODE, or this would drop fresh mtime-based .pyc files into
-# the tree stage-deterministic just finished making reproducible.
-check: stage                ## run the staged daemon: imports, entry point, assets
-	@PYTHONDONTWRITEBYTECODE=1 $(STAGE)$(PREFIX)/bin/python3 \
-	  $(ROOT)/packaging/scripts/check-staged-tree.py
-	@#  The launcher cannot be run by its own shebang here: that shebang is the
-	@#  *installed* interpreter, which is the whole point of writing it by hand,
-	@#  and it does not exist on this machine. So run it through the staged
-	@#  python, and check the shebang separately -- the two together are what
-	@#  `systemctl start` will do.
-	@PYTHONDONTWRITEBYTECODE=1 $(STAGE)$(PREFIX)/bin/python3 \
-	  $(STAGE)$(PREFIX)/bin/statemachined --help >/dev/null
-	@head -1 $(STAGE)$(PREFIX)/bin/statemachined | grep -qxF '#!$(PREFIX)/bin/python3' \
-	  || { echo "error: the launcher's shebang is not $(PREFIX)/bin/python3"; exit 1; }
-	@echo "  the launcher runs, and names $(PREFIX)/bin/python3"
-	@echo "  version $(VERSION)  (python: $(PY_VERSION))"
+# The staged binary, run: its command line, its version, and the panels it
+# serves -- which are embedded, so a panel missing from the build shows up here
+# and not on a rig. On a loopback port and a scratch store, with no board.
+CHECK_PORT ?= 18681
+check: stage                ## run the staged daemon: its version and its panels
+	@$(STAGE)$(BINARY) --help >/dev/null
+	@scratch=$$(mktemp -d); \
+	 $(STAGE)$(BINARY) serve --no-mdns --port $(CHECK_PORT) \
+	   --config $$scratch/absent.toml --storage-dir $$scratch --device loop:// \
+	   >$$scratch/log 2>&1 & daemon=$$!; \
+	 for _ in $$(seq 50); do \
+	   curl -fsS http://127.0.0.1:$(CHECK_PORT)/ >$$scratch/index.html 2>/dev/null && break; \
+	   sleep 0.1; \
+	 done; \
+	 kill $$daemon; wait $$daemon 2>/dev/null; \
+	 grep -q '<html' $$scratch/index.html || { \
+	   echo "error: the staged daemon did not serve its panels"; cat $$scratch/log; exit 1; }; \
+	 rm -rf $$scratch
+	@echo "  the staged daemon serves its panels"
+	@echo "  version $(VERSION)"
 	@echo "  staged tree $$(du -sh $(STAGE) | cut -f1), for $(ARCH)"
 
 # What went in, without installing it. `dpkg -c` is the answer to "did the
-# conffiles land in /etc and the tree in /opt", which is a question worth
+# conffiles land in /etc and the binary in /usr/bin", which is a question worth
 # answering before a Pi does.
 inspect:                    ## list what the built packages contain
 	@for deb in $(DIST_DIR)/*.deb; do \
 	  echo "== $$deb"; dpkg-deb -I "$$deb"; \
-	  dpkg-deb -c "$$deb" | awk '{print $$6}' | grep -v '$(PREFIX)/lib' | sort; \
+	  dpkg-deb -c "$$deb" | awk '{print $$6}' | sort; \
 	done
 
 # The reproducibility claim, checked rather than asserted: build, keep the
@@ -462,6 +295,20 @@ repro:                      ## build the .deb twice and prove the bytes match
 	   echo "  Compare with: diffoscope, or ar x both and diff the tars."; \
 	   exit 1; \
 	 fi
+
+# ── The client's wheel ──────────────────────────────────────────────────────
+#
+# What a script, triald and the family's e2e suite import to talk to the
+# daemon: `client/python/`, a distribution of its own. Architecture-independent,
+# so one serves every rig. Built from a stamped copy because its pyproject
+# carries the 0.0.0 sentinel and a build must never leave the tree dirty.
+wheel:                      ## the client's wheel, stamped, into dist/
+	@test -n "$(RESOLVED_PY_VERSION)" || { echo "no version: see print-version"; exit 1; }
+	@rm -rf $(BUILD)/client && mkdir -p $(BUILD)/client $(DIST_DIR)
+	tar -C $(ROOT)/client/python --exclude=.venv --exclude=build --exclude=dist \
+	  --exclude=__pycache__ --exclude=.pytest_cache -cf - . | tar -C $(BUILD)/client -xf -
+	cd $(BUILD)/client && uv version --frozen $(RESOLVED_PY_VERSION) >/dev/null && \
+	  uv build --wheel --out-dir $(DIST_DIR)
 
 # Fails visibly when the tag situation leaves the build without a version,
 # rather than aborting deep inside a Docker build. The release workflow's first

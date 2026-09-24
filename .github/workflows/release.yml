@@ -83,9 +83,8 @@ jobs:
         with:
           fetch-depth: 0
 
-      # There is nothing to cross-compile -- the daemon is Python -- but the
-      # interpreter vendored into the package is a native artifact, so the arm64
-      # package is built by running the builder image *as* arm64.
+      # The arm64 package is built by running the builder image *as* arm64
+      # rather than by cross-compiling, so one recipe serves both.
       - name: Register binfmt handlers
         if: matrix.arch == 'arm64'
         run: docker run --rm --privileged multiarch/qemu-user-static --reset -p yes
@@ -112,9 +111,56 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # ── The firmware, compiled for the host: a test asset ────────────────────
+  # Not in the package -- a rig checks its install against its board -- but
+  # the family's e2e suite (contracts/e2e-tests) needs a board-less far end,
+  # and takes this one from the release it pins. amd64, which is what that
+  # suite's container is. Built on Ubuntu 24.04, whose glibc the container has.
+  native-device:
+    name: native device (amd64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Build
+        run: |
+          export STATEMACHINED_FIRMWARE_VERSION=$(make -s -C packaging print-version)
+          cmake -S . -B build-native -DCMAKE_BUILD_TYPE=Release \
+            -DSTATEMACHINED_FIRMWARE_VERSION=$STATEMACHINED_FIRMWARE_VERSION
+          cmake --build build-native -j --target statemachined_native_device
+          mkdir -p native
+          cp build-native/statemachined_native_device native/statemachined-native-device-amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-device
+          path: native/*
+          if-no-files-found: error
+          retention-days: 7
+
+  # ── The client's wheel ─────────────────────────────────────────────────────
+  # A release asset rather than a PyPI upload, as triald's is: what triald and
+  # contracts/e2e-tests install to talk to this release's daemon.
+  wheel:
+    name: client wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+      - name: Build
+        run: make -C packaging wheel
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 7
+
   # ── Publish ───────────────────────────────────────────────────────────────
   release:
-    needs: [firmware, packages]
+    needs: [firmware, packages, native-device, wheel]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
@@ -129,7 +175,8 @@ jobs:
         run: |
           mkdir -p release
           find artifacts -type f \( -name '*.deb' -o -name '*.rpm' \
-               -o -name '*.bin' -o -name '*.elf' -o -name 'MANIFEST.txt' \) \
+               -o -name '*.bin' -o -name '*.elf' -o -name 'MANIFEST.txt' \
+               -o -name 'statemachined-native-device-*' -o -name '*.whl' \) \
                -exec cp -v {} release/ \;
           ls -lh release/
 
@@ -150,21 +197,28 @@ jobs:
           the board, and greeting takes the rig, so a board that was running
           trials on its own would stop. Say what the rig is in
           `/etc/braemons/statemachined-rig-config.toml`, then
-          `sudo systemctl start statemachined` and open port 8081.
+          `sudo systemctl start statemachined` and open port 8081. The daemon is
+          one binary, `/usr/bin/statemachined`, with its web UI inside it.
 
           Everything the daemon writes lives under
           `/var/lib/braemons/statemachined/`, which an upgrade or a removal
           never touches.
 
+          ## The client
+
+          `statemachined_client-*.whl` is the Python client for this release's
+          gRPC API: `pip install ./statemachined_client-*.whl`.
+
           ## No board yet?
 
-          The package carries the firmware compiled for the host — the same
-          session, engine and result chunker the board runs, not a mock. Put it
-          on a port and point the daemon at it:
+          `statemachined-native-device-amd64` is the firmware compiled for the
+          host — the same session, engine and result chunker the board runs, not
+          a mock — for tests and a bench. It is not in the package. It listens
+          on a port, and the daemon dials it:
 
           ```
-          statemachined device                              # socket://127.0.0.1:5300
-          statemachined -t socket://127.0.0.1:5300 serve    # then open :8081
+          ./statemachined-native-device-amd64 --port 5300
+          statemachined serve -t socket://127.0.0.1:5300    # then open :8081
           ```
 
           Good for everything but timing: the scan is a `nanosleep` on an
@@ -175,8 +229,7 @@ jobs:
 
           `statemachined-uno_r4_minima.bin` is the image for the board, and is
           also installed at `/usr/share/braemons/statemachined/firmware/` by the
-          packages above — `GET /api/device/firmware` compares a connected
-          board against it. `MANIFEST.txt` records the commit, sizes and
+          packages above, and the daemon compares a connected board against it. `MANIFEST.txt` records the commit, sizes and
           checksums.
 
           Flash it with `bossac -i -e -w -R statemachined-uno_r4_minima.bin`, or

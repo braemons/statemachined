@@ -42,9 +42,9 @@
 #ifndef STATEMACHINED_MAX_TIMERS
 #define STATEMACHINED_MAX_TIMERS 8
 #endif
-#ifndef STATEMACHINED_MAX_LINE
-#define STATEMACHINED_MAX_LINE 512  // one protocol line, newline included. The largest
-#endif                              // single message is one state's worth of graph
+#ifndef STATEMACHINED_MAX_FRAME
+#define STATEMACHINED_MAX_FRAME 512  // one encoded frame, delimiter included. Every
+#endif                               // message the link defines fits, by construction
 // The levels a rig's outputs are safe at, as a bitmask, compiled in. Zero --
 // every line low -- is right for a bench and wrong for any rig with an
 // active-low driver on it, so a rig's image is built with
@@ -103,10 +103,12 @@ constexpr uint8_t kMaxPath = STATEMACHINED_MAX_PATH;
 static_assert(kMaxPath >= 1 && STATEMACHINED_MAX_PATH <= 255,
               "path_len is a uint8_t; 256 breaks record_visit's comparison silently");
 
-/// The protocol's line budget, reported to the host in hello_ack. Every message
-/// is sized to fit inside it -- which is why the graph upload and the trial
-/// result are both chunked. See docs/reference/protocol.md.
-constexpr uint16_t kMaxLine = STATEMACHINED_MAX_LINE;
+/// The protocol's frame budget, reported to the host in hello_ack. Every message
+/// fits inside it -- which is why the graph upload and the trial result are
+/// both chunked -- and that is checked rather than hoped: host_link_session.cpp
+/// static_asserts the largest message nanopb can encode against it. See
+/// docs/reference/protocol.md.
+constexpr uint16_t kMaxFrame = STATEMACHINED_MAX_FRAME;
 
 /// Choice options and their weights live in one shared pool, like everything
 /// else a graph refers to by index, so a distribution can be uploaded without

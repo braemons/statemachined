@@ -1,0 +1,513 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// The link between the daemon and the board: protobuf, carried in COBS frames
+// with a CRC-16. `docs/reference/protocol.md` is the prose; this file is the
+// shape, and both ends are generated from it — nanopb on the board, a
+// descriptor the daemon reads at run time.
+//
+// This is not the API. `proto/statemachined/v1/` is what clients see; this is
+// what a microcontroller with 32 KB of SRAM sees. The package is separate so
+// the two can never share a message by accident.
+//
+// **The names are the NDJSON wire's.** A `oneof body` member is named for the
+// `msg_type` it replaces, and every field keeps its member name, so the
+// daemon's own messages — a `msg_type` and a map of fields — cross unchanged
+// and only the codec below them moved. An enum value is the old token in upper
+// case behind its enum's prefix: `ACTION_KIND_TIMER_START` is `"timer_start"`.
+//
+// Rules the shapes follow:
+//
+// - **Every size is bounded.** Each repeated and string field has a nanopb
+//   limit in `firmware/core/proto/link.options`, so the board decodes into
+//   fixed-size structs and nothing through a callback.
+// - **No floating point**, in any value that crosses this wire.
+// - **`optional` where absence means something.** A plain field that is not
+//   sent reads as zero; a field is `optional` when "not sent" has to be told
+//   apart from zero — `terminal` on a state that is not terminal, a timer's
+//   `loops` whose absence means one and whose zero means forever.
+// - **Unknown fields are ignored and an unknown `body` is refused** with
+//   `error` / `unknown_type`. A new field is how the protocol grows without a
+//   version bump.
+syntax = "proto3";
+
+package statemachined.link.v1;
+
+// ---------------------------------------------------------------- envelopes ---
+
+// Everything the daemon sends is one of these.
+message HostMessage {
+  // The sender's per-direction counter, an unsigned 16-bit value that wraps.
+  // It identifies one message so a resend of it can be recognised; it orders
+  // nothing. See `docs/reference/protocol.md` §1.2.
+  uint32 message_id = 1;
+  oneof body {
+    Hello hello = 10;
+    SetBegin set_begin = 11;
+    SetEnd set_end = 12;
+    GraphBegin graph_begin = 13;
+    GraphDist graph_dist = 14;
+    GraphState graph_state = 15;
+    GraphTransition graph_transition = 16;
+    GraphAction graph_action = 17;
+    GraphTimer graph_timer = 18;
+    GraphEnd graph_end = 19;
+    Configure configure = 20;
+    Start start = 21;
+    Cancel cancel = 22;
+    Ping ping = 23;
+    StateRequest state = 24;
+    Wiring wiring = 25;
+    Timers timers = 26;
+    Pins pins = 27;
+    Autorun autorun = 28;
+    Save save = 29;
+  }
+}
+
+// Everything the board sends is one of these.
+message DeviceMessage {
+  uint32 message_id = 1;
+  // The `message_id` of the command this answers. Absent on everything the
+  // board sends unasked — `visit`, the result, a line-started `started` — and
+  // on a refusal of a frame that could not be read.
+  optional uint32 in_reply_to = 2;
+  oneof body {
+    HelloAck hello_ack = 10;
+    Ack ack = 11;
+    SetOk set_ok = 12;
+    Armed armed = 13;
+    Started started = 14;
+    CancelAck cancel_ack = 15;
+    ResultBegin result_begin = 16;
+    ResultPath result_path = 17;
+    ResultEnd result_end = 18;
+    Event event = 19;
+    Error error = 20;
+    Log log = 21;
+    Pong pong = 22;
+    StateReport state_report = 23;
+    Visit visit = 24;
+    PinMap pin_map = 25;
+    AutorunOk autorun_ok = 26;
+    Saved saved = 27;
+  }
+}
+
+// ------------------------------------------------------------ host → device ---
+
+message Hello {
+  // Protocol version. **2**: the NDJSON wire was 1.
+  uint32 proto = 1;
+  // The session seed. Every per-trial stream is derived from it and the
+  // `trial_id`. A 64-bit integer at last, rather than the hex string a JSON
+  // number could not carry.
+  uint64 seed = 2;
+}
+
+message SetBegin {
+  uint32 set_version = 1;
+  uint32 n_graphs = 2;
+}
+
+message SetEnd {
+  uint32 n_states = 1;
+  uint32 n_transitions = 2;
+  uint32 n_output_actions = 3;
+  // CRC-16/CCITT-FALSE over the protobuf bytes of every upload message since
+  // `set_begin`, `set_begin` included and this one excluded. Catches a missing
+  // message, which no per-frame CRC can see.
+  uint32 checksum = 4;
+}
+
+message GraphBegin {
+  uint32 slot = 1;
+  uint32 n_states = 2;
+  // Within this graph.
+  uint32 entry = 3;
+}
+
+enum DistKind {
+  DIST_KIND_UNSPECIFIED = 0;
+  DIST_KIND_FIXED = 1;
+  DIST_KIND_UNIFORM = 2;
+  DIST_KIND_EXPONENTIAL = 3;
+  DIST_KIND_CHOICE = 4;
+}
+
+message GraphDist {
+  uint32 i = 1;
+  DistKind kind = 2;
+  // Milliseconds. What each means depends on `kind`: see §3.2.
+  sint32 a = 3;
+  sint32 b = 4;
+  sint32 c = 5;
+  // `choice` only.
+  repeated sint32 opts = 6;
+  // `choice` only, and optional: empty means every option weighs 1.
+  repeated uint32 weights = 7;
+}
+
+message Timeout {
+  // A distribution, set-global.
+  uint32 dist = 1;
+  // A state, within this graph.
+  uint32 target = 2;
+}
+
+message GraphState {
+  uint32 i = 1;
+  // The outcome code this state reports. Absent on a state that is not
+  // terminal.
+  optional sint32 terminal = 2;
+  optional Timeout timeout = 3;
+  // Terminal states only: the distribution the dwell before another run is
+  // drawn from. Absent means none.
+  optional uint32 relight = 4;
+}
+
+message GraphTransition {
+  uint32 all = 1;
+  uint32 any = 2;
+  uint32 none = 3;
+  uint32 target = 4;
+  // A distribution. Absent means the predicate fires the scan it holds.
+  optional uint32 hold = 5;
+  bool level = 6;
+}
+
+enum ActionOn {
+  ACTION_ON_UNSPECIFIED = 0;
+  ACTION_ON_ENTRY = 1;
+  ACTION_ON_EXIT = 2;
+}
+
+enum ActionKind {
+  ACTION_KIND_UNSPECIFIED = 0;
+  ACTION_KIND_HIGH = 1;
+  ACTION_KIND_LOW = 2;
+  ACTION_KIND_TOGGLE = 3;
+  ACTION_KIND_PULSE = 4;
+  ACTION_KIND_TIMER_START = 5;
+  ACTION_KIND_TIMER_CANCEL = 6;
+}
+
+message GraphAction {
+  ActionOn on = 1;
+  // An output line. Not read by the timer kinds.
+  uint32 line = 2;
+  ActionKind kind = 3;
+  // `pulse` only.
+  uint32 ms = 4;
+  // `timer_start` / `timer_cancel` only.
+  uint32 timer = 5;
+}
+
+message GraphTimer {
+  uint32 i = 1;
+  uint32 width = 2;
+  optional uint32 delay = 3;
+  optional uint32 gap = 4;
+  optional uint32 line = 5;
+  // Absent means 1; 0 runs until something stops it.
+  optional uint32 loops = 6;
+  uint32 all = 7;
+  uint32 any = 8;
+  uint32 none = 9;
+  bool active_low = 10;
+  bool trial_bound = 11;
+}
+
+message GraphEnd {
+  uint32 n_transitions = 1;
+  uint32 n_output_actions = 2;
+}
+
+enum StartSource {
+  START_SOURCE_UNSPECIFIED = 0;
+  START_SOURCE_SERIAL = 1;
+  START_SOURCE_LINE = 2;
+  START_SOURCE_BOTH = 3;
+}
+
+message Patch {
+  uint32 i = 1;
+  optional sint32 a = 2;
+  optional sint32 b = 3;
+  optional sint32 c = 4;
+}
+
+message Configure {
+  uint32 trial_id = 1;
+  uint32 set_version = 2;
+  uint32 graph_index = 3;
+  sint32 cap_ms = 4;
+  // Unspecified is `serial`.
+  StartSource start = 5;
+  // Required when `start` admits a line.
+  optional uint32 start_line = 6;
+  // Absent leaves the device's own mask in force.
+  optional uint32 timers = 7;
+  repeated Patch patch = 8;
+}
+
+message Start {
+  uint32 trial_id = 1;
+}
+
+enum CancelReason {
+  CANCEL_REASON_UNSPECIFIED = 0;
+  CANCEL_REASON_HOST = 1;
+  CANCEL_REASON_LINK_LOST = 2;
+  CANCEL_REASON_ABORT_LINE = 3;
+  CANCEL_REASON_TRIAL_TIMEOUT = 4;
+}
+
+message Cancel {
+  uint32 trial_id = 1;
+  // Only `host` is the host's to give. Unspecified is `host`.
+  CancelReason reason = 2;
+}
+
+message Ping {}
+
+message StateRequest {}
+
+message Wiring {
+  optional uint32 invert = 1;
+  optional uint32 enable = 2;
+  optional uint32 safe = 3;
+  // Per input line, index = line. Empty leaves the table alone; anything else
+  // replaces all of it, and the lines it does not name get 0.
+  repeated uint32 debounce_ms = 4;
+}
+
+message Timers {
+  uint32 enable = 1;
+}
+
+enum Direction {
+  DIRECTION_UNSPECIFIED = 0;
+  DIRECTION_IN = 1;
+  DIRECTION_OUT = 2;
+}
+
+message Pins {
+  Direction dir = 1;
+}
+
+message Autorun {
+  // Absent makes this a question: nothing changes, and the settings are
+  // reported.
+  optional bool enabled = 1;
+  optional uint32 graph_index = 2;
+  optional sint32 cap_ms = 3;
+  optional uint64 seed = 4;
+  optional uint32 first_trial_id = 5;
+  // Absent means true.
+  optional bool start_now = 6;
+}
+
+message Save {}
+
+// ------------------------------------------------------------ device → host ---
+
+message Caps {
+  // The longest frame the board accepts, in encoded bytes including the
+  // delimiter.
+  uint32 max_frame = 1;
+  uint32 max_states = 2;
+  uint32 max_transitions = 3;
+  uint32 max_output_actions = 4;
+  uint32 max_distributions = 5;
+  uint32 max_choice_options = 6;
+  uint32 max_path = 7;
+  uint32 max_graphs = 8;
+  uint32 max_timers = 9;
+  uint32 first_timer_line = 10;
+}
+
+message HelloAck {
+  uint32 proto = 1;
+  string board = 2;
+  string fw = 3;
+  uint32 n_input_lines = 4;
+  uint32 n_output_lines = 5;
+  uint32 scan_hz = 6;
+  Caps caps = 7;
+  bool has_set = 8;
+  uint32 set_version = 9;
+  uint32 n_graphs = 10;
+  bool has_wiring = 11;
+}
+
+message Ack {
+  // A reply to `timers` only: the mask the device now holds, and how many
+  // timers the committed set declares.
+  optional uint32 enable = 1;
+  optional uint32 n_timers = 2;
+}
+
+message SetOk {
+  uint32 set_version = 1;
+  uint32 n_graphs = 2;
+  uint32 n_states = 3;
+  uint32 n_transitions = 4;
+  uint32 n_output_actions = 5;
+}
+
+message Armed {
+  uint32 trial_id = 1;
+  uint32 set_version = 2;
+  uint32 graph_index = 3;
+}
+
+message Started {
+  uint32 trial_id = 1;
+  uint32 at_us = 2;
+  // `serial` or `line`.
+  StartSource by = 3;
+  // The line, when `by` is `line`.
+  optional uint32 line = 4;
+}
+
+message CancelAck {
+  uint32 trial_id = 1;
+  bool cancelled = 2;
+  sint32 outcome = 3;
+}
+
+enum ExitCause {
+  EXIT_CAUSE_UNSPECIFIED = 0;
+  EXIT_CAUSE_TIMEOUT = 1;
+  EXIT_CAUSE_TRANSITION = 2;
+  EXIT_CAUSE_CANCEL = 3;
+  EXIT_CAUSE_TERMINAL = 4;
+}
+
+// One completed state visit: a `result_path` row, and a `visit`'s `v`.
+message StateVisit {
+  // Within the graph.
+  uint32 state = 1;
+  ExitCause exit = 2;
+  // Which of this state's transitions fired, or 255 for an exit that was not
+  // one.
+  uint32 transition = 3;
+  // The realised draw, in ms.
+  sint32 drawn_ms = 4;
+  // Device clock.
+  uint32 entered_us = 5;
+  uint32 duration_us = 6;
+}
+
+message ResultBegin {
+  uint32 trial_id = 1;
+  sint32 outcome = 2;
+  uint32 cancel_reason = 3;
+  uint32 total_us = 4;
+  uint32 path_len = 5;
+  uint32 first_seq = 6;
+  uint32 total_visits = 7;
+  bool truncated = 8;
+}
+
+message ResultPath {
+  uint32 trial_id = 1;
+  uint32 from = 2;
+  repeated StateVisit p = 3;
+}
+
+message ResultEnd {
+  uint32 trial_id = 1;
+  // CRC-16/CCITT-FALSE over the protobuf bytes of `result_begin` and every
+  // `result_path`, in order.
+  uint32 checksum = 2;
+}
+
+message Event {
+  uint32 us = 1;
+  uint32 word = 2;
+}
+
+message Error {
+  string code = 1;
+  string message = 2;
+  string context = 3;
+}
+
+message Log {
+  string level = 1;
+  string message = 2;
+}
+
+message Pong {
+  uint32 up_us = 1;
+  uint32 us = 2;
+}
+
+message GraphReport {
+  bool has_set = 1;
+  uint32 set_version = 2;
+  uint32 n_graphs = 3;
+  uint32 index = 4;
+}
+
+message IoReport {
+  uint32 in = 1;
+  uint32 out = 2;
+}
+
+message ScanReport {
+  uint32 hz = 1;
+  uint32 overruns = 2;
+  uint32 worst_gap = 3;
+  uint32 tx_stalls = 4;
+  uint32 visits_dropped = 5;
+  uint32 timers_enabled = 6;
+  uint32 timers_running = 7;
+}
+
+message StateReport {
+  uint32 link_state = 1;
+  GraphReport graph = 2;
+  bool has_wiring = 3;
+  bool autorun = 4;
+  uint32 trial_id = 5;
+  bool running = 6;
+  uint32 current_state = 7;
+  uint32 up_us = 8;
+  // Frames the board threw away whole: too long, not COBS, or a CRC that did
+  // not match.
+  uint32 dropped_lines = 9;
+  // Frames that arrived intact and still could not be read as a message.
+  uint32 bad_lines = 10;
+  IoReport io = 11;
+  ScanReport scan = 12;
+}
+
+message Visit {
+  uint32 trial_id = 1;
+  uint32 seq = 2;
+  StateVisit v = 3;
+}
+
+message PinMap {
+  Direction dir = 1;
+  uint32 n = 2;
+  repeated string pins = 3;
+}
+
+message AutorunOk {
+  bool enabled = 1;
+  bool active = 2;
+  uint32 graph_index = 3;
+  sint32 cap_ms = 4;
+  uint32 next_trial_id = 5;
+}
+
+message Saved {
+  bool has_set = 1;
+  uint32 set_version = 2;
+  bool autorun = 3;
+  uint32 write_count = 4;
+  bool written = 5;
+}

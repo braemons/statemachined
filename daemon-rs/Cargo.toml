@@ -1,0 +1,50 @@
+[package]
+name = "statemachined"
+description = "Runs a trial's state machine on the board, and publishes what it did"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "statemachined"
+path = "src/main.rs"
+
+[dependencies]
+# mousewheeld's stack, deliberately: a braemons developer who has read that
+# daemon can read this one, and the packaging is the same.
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "sync", "time", "io-util", "net"] }
+tower-http = { version = "0.6", features = ["cors"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+# Order-preserving maps. A graph's `distributions` are a document somebody
+# reads and diffs, so the order they were written in is theirs, not the
+# alphabet's -- a BTreeMap would rewrite the file on every save.
+indexmap = { version = "2", features = ["serde"] }
+toml = "0.8"
+clap = { version = "4", features = ["derive"] }
+rust-embed = { version = "8", features = ["include-exclude"] }
+# The generated wire types. Runtime only: the generators live in
+# tools/protogen, outside the workspace, and run from `make proto`.
+prost = "0.14"
+prost-types = "0.14"
+tonic = "0.14"
+tonic-prost = "0.14"
+tonic-web = "0.14"
+tonic-reflection = "0.14"
+tower = "0.5"
+tokio-stream = { version = "0.1", features = ["sync"] }
+http = "1"
+mime_guess = "2"
+log = "0.4"
+env_logger = "0.11"
+thiserror = "2"
+# The serial port and the pty behind the board simulator: termios, posix_openpt.
+libc = "0.2"
+mdns-sd = "0.21.4"
+sha2 = "0.11.0"
+prost-reflect = "0.16"
+
+[dev-dependencies]
+tempfile = "3"

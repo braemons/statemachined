@@ -6,25 +6,23 @@ channel: the same servicers, the same refusals and the same streams a rig gets.
 A mock of the daemon would only ever assert that this client agrees with a
 second description of statemachined written by the same hand on the same day.
 
-The daemon lives in `daemon/`, a sibling of this project, and is run with `uv`
-so that it brings its own environment — this client's environment deliberately
-does not have grpcio-the-server, uvicorn, pydantic or the daemon itself in it,
-and a suite that could only pass with those installed would be hiding a
-dependency. The whole suite skips when that is not possible, so a checkout of
-just the client still runs the seam tests.
+The daemon is the Rust binary this repository builds — `cargo build` puts it at
+`target/debug/statemachined` — or whichever one `$STATEMACHINED_BINARY` names.
+The whole suite skips when there is none, so a checkout of just the client
+still runs the seam tests.
 
 **No board, on purpose.** Everything here runs against a daemon with nothing on
 its serial port: the stores, the trace, the session document, the rig config
 and the refusals. That is most of the interface, and the part it is not covers
-is covered by `daemon/tests/e2e/`, which builds the firmware for the host and
-puts it on a socket. What this suite adds there is the one thing that suite
+is covered by the family's e2e suite in `contracts/e2e-tests/`, which puts the
+firmware built for the host on a socket. What this suite adds there is the one thing that suite
 cannot have: **a board that is not attached is a first-class answer**, and
 `NoBoardIsAttached` is asserted here rather than assumed.
 """
 
 from __future__ import annotations
 
-import shutil
+import os
 import socket
 import subprocess
 import tempfile
@@ -33,20 +31,25 @@ from pathlib import Path
 import pytest
 from statemachined_client import DaemonIsUnavailable, StatemachinedClient
 
-#: `daemon/`, three levels up from this file.
-DAEMON_PROJECT = Path(__file__).resolve().parents[3] / "daemon"
+#: The daemon a checkout builds: the workspace's `target/`, three levels up.
+BUILT_DAEMON = Path(__file__).resolve().parents[3] / "target" / "debug" / "statemachined"
 
-#: Generous, because a first run pays for an import of fastapi, uvicorn and
-#: grpcio; finite, because a daemon that never answers should fail this suite
-#: rather than hang it.
-STARTUP_TIMEOUT_SECONDS = 60.0
+#: Finite, because a daemon that never answers should fail this suite rather
+#: than hang it.
+STARTUP_TIMEOUT_SECONDS = 30.0
+
+
+def the_daemon_binary() -> Path | None:
+    named = os.environ.get("STATEMACHINED_BINARY")
+    candidate = Path(named) if named else BUILT_DAEMON
+    return candidate if candidate.is_file() else None
 
 
 def a_free_port() -> int:
     """A free port whose **successor is also free**, and hand both over.
 
-    `statemachined serve` binds two: the panels on `--port` and gRPC on one
-    above it, which is the rule `DEFAULT_PORT` states on this side. Asking the
+    `statemachined serve` answers on two: `--port`, and the one above it, which
+    is the port `DEFAULT_PORT` names on this side. Asking the
     kernel for one port says nothing about the next, and a daemon that comes up
     and then cannot bind its second listener fails this suite for a reason that
     has nothing to do with the client.
@@ -76,14 +79,12 @@ def rig():
     Every store goes under a temporary directory, so a test that writes a graph
     never leaves one in the repository and two runs cannot see each other's.
     """
-    if shutil.which("uv") is None:
-        pytest.skip("no uv on PATH, so the daemon cannot be started")
-    if not (DAEMON_PROJECT / "pyproject.toml").exists():
-        pytest.skip(f"no daemon project at {DAEMON_PROJECT}")
+    binary = the_daemon_binary()
+    if binary is None:
+        pytest.skip(f"no daemon at {BUILT_DAEMON}; `cargo build` makes one")
 
-    # `--port` is the *web* port; gRPC is one above it, which is the rule
-    # `grpc_port_for` states in the daemon and `DEFAULT_PORT` states here.
-    # Asking for one free port and using both is the honest way to say so.
+    # The client dials `--port + 1`, which the daemon also answers on and which
+    # is the port `DEFAULT_PORT` names here.
     port = a_free_port()
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch)
@@ -104,13 +105,7 @@ def rig():
         )
         daemon = subprocess.Popen(
             [
-                "uv",
-                "run",
-                "--directory",
-                str(DAEMON_PROJECT),
-                "--extra",
-                "serve",
-                "statemachined",
+                str(binary),
                 "serve",
                 "--config",
                 str(configuration),
@@ -128,7 +123,7 @@ def rig():
             client.wait_until_ready(timeout_s=STARTUP_TIMEOUT_SECONDS)
         except DaemonIsUnavailable:
             daemon.terminate()
-            pytest.skip("the daemon did not come up; is its environment synced?")
+            pytest.fail(f"{binary} did not come up on 127.0.0.1:{port + 1}")
         try:
             yield client
         finally:
@@ -152,3 +147,14 @@ def empty_stores(rig):
     for graph in rig.list_graphs():
         if graph.name not in before:
             rig.delete_graph(graph.name)
+
+
+def pytest_addoption(parser):
+    # Here, in the top-level conftest, because pytest only takes options from
+    # the conftests it loads before collection. `tests/hardware/` reads it.
+    parser.addoption(
+        "--target",
+        default=None,
+        help="the board for tests/hardware: a device path, a host:port, or `native` for "
+        "the firmware built for this machine. Without it tests/hardware is skipped.",
+    )

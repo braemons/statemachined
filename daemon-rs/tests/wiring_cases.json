@@ -1,0 +1,487 @@
+[
+ {
+  "why": "nothing configured: every mask is zero",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [],
+   "output_lines": []
+  },
+  "answer": {
+   "wiring": {
+    "invert": 0,
+    "enable": 0,
+    "safe": 0,
+    "debounce_ms": []
+   }
+  }
+ },
+ {
+  "why": "one enabled input, the default",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [
+    {
+     "name": "lever",
+     "line_index": 0
+    }
+   ],
+   "output_lines": []
+  },
+  "answer": {
+   "wiring": {
+    "invert": 0,
+    "enable": 1,
+    "safe": 0,
+    "debounce_ms": []
+   }
+  }
+ },
+ {
+  "why": "an input that is not enabled",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [
+    {
+     "name": "lever",
+     "line_index": 0,
+     "is_enabled": false
+    }
+   ],
+   "output_lines": []
+  },
+  "answer": {
+   "wiring": {
+    "invert": 0,
+    "enable": 0,
+    "safe": 0,
+    "debounce_ms": []
+   }
+  }
+ },
+ {
+  "why": "an active-low input sets a bit in invert",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [
+    {
+     "name": "lever",
+     "line_index": 1,
+     "reads_active_low": true
+    }
+   ],
+   "output_lines": []
+  },
+  "answer": {
+   "wiring": {
+    "invert": 2,
+    "enable": 2,
+    "safe": 0,
+    "debounce_ms": []
+   }
+  }
+ },
+ {
+  "why": "debounce lands at the line's own index",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [
+    {
+     "name": "lever",
+     "line_index": 2,
+     "debounce_milliseconds": 20
+    }
+   ],
+   "output_lines": []
+  },
+  "answer": {
+   "wiring": {
+    "invert": 0,
+    "enable": 4,
+    "safe": 0,
+    "debounce_ms": [
+     0,
+     0,
+     20
+    ]
+   }
+  }
+ },
+ {
+  "why": "**the trailing zeros are dropped**, so a lone line 0 sends one entry",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [
+    {
+     "name": "lever",
+     "line_index": 0,
+     "debounce_milliseconds": 5
+    }
+   ],
+   "output_lines": []
+  },
+  "answer": {
+   "wiring": {
+    "invert": 0,
+    "enable": 1,
+    "safe": 0,
+    "debounce_ms": [
+     5
+    ]
+   }
+  }
+ },
+ {
+  "why": "a debounce on the last line sends the whole array",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [
+    {
+     "name": "lever",
+     "line_index": 3,
+     "debounce_milliseconds": 1
+    }
+   ],
+   "output_lines": []
+  },
+  "answer": {
+   "wiring": {
+    "invert": 0,
+    "enable": 8,
+    "safe": 0,
+    "debounce_ms": [
+     0,
+     0,
+     0,
+     1
+    ]
+   }
+  }
+ },
+ {
+  "why": "no debounce anywhere sends an empty array",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [
+    {
+     "name": "lever",
+     "line_index": 3
+    }
+   ],
+   "output_lines": []
+  },
+  "answer": {
+   "wiring": {
+    "invert": 0,
+    "enable": 8,
+    "safe": 0,
+    "debounce_ms": []
+   }
+  }
+ },
+ {
+  "why": "a safe-high output sets a bit in safe",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [],
+   "output_lines": [
+    {
+     "name": "valve",
+     "line_index": 1,
+     "safe_level_is_high": true
+    }
+   ]
+  },
+  "answer": {
+   "wiring": {
+    "invert": 0,
+    "enable": 0,
+    "safe": 2,
+    "debounce_ms": []
+   }
+  }
+ },
+ {
+  "why": "a safe-low output sets none",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [],
+   "output_lines": [
+    {
+     "name": "valve",
+     "line_index": 1
+    }
+   ]
+  },
+  "answer": {
+   "wiring": {
+    "invert": 0,
+    "enable": 0,
+    "safe": 0,
+    "debounce_ms": []
+   }
+  }
+ },
+ {
+  "why": "the input and output masks are over different numberings",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [
+    {
+     "name": "lever",
+     "line_index": 2,
+     "reads_active_low": true
+    }
+   ],
+   "output_lines": [
+    {
+     "name": "valve",
+     "line_index": 2,
+     "safe_level_is_high": true
+    }
+   ]
+  },
+  "answer": {
+   "wiring": {
+    "invert": 4,
+    "enable": 4,
+    "safe": 4,
+    "debounce_ms": []
+   }
+  }
+ },
+ {
+  "why": "a line resolved by pin masks at the board's index, not the config's order",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [
+    {
+     "name": "lever",
+     "pin_label": "A1",
+     "reads_active_low": true
+    }
+   ],
+   "output_lines": []
+  },
+  "answer": {
+   "wiring": {
+    "invert": 8,
+    "enable": 8,
+    "safe": 0,
+    "debounce_ms": []
+   }
+  }
+ },
+ {
+  "why": "several lines at once",
+  "pin_map": {
+   "input_pin_labels": [
+    "D2",
+    "D3",
+    "A0",
+    "A1"
+   ],
+   "output_pin_labels": [
+    "D8",
+    "D9",
+    "D10"
+   ],
+   "source": "device"
+  },
+  "line_map": {
+   "input_lines": [
+    {
+     "name": "start",
+     "line_index": 0,
+     "debounce_milliseconds": 20
+    },
+    {
+     "name": "abort",
+     "line_index": 1,
+     "reads_active_low": true
+    },
+    {
+     "name": "lever",
+     "line_index": 2,
+     "is_enabled": false
+    }
+   ],
+   "output_lines": [
+    {
+     "name": "valve",
+     "line_index": 0
+    },
+    {
+     "name": "lamp",
+     "line_index": 2,
+     "safe_level_is_high": true
+    }
+   ]
+  },
+  "answer": {
+   "wiring": {
+    "invert": 2,
+    "enable": 3,
+    "safe": 4,
+    "debounce_ms": [
+     20
+    ]
+   }
+  }
+ }
+]

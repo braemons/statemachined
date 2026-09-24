@@ -2,8 +2,8 @@
 #
 # nfpm rather than a debian/ directory plus a hand-written .spec: the two would
 # be the same list of files written twice, and the second copy is the one that
-# is wrong. vstimd needs cargo-deb and a .spec because it is Rust; this is a
-# Python tree and a handful of unit files, and nfpm packs both from here.
+# is wrong. The daemon is one binary with its panels embedded, and nfpm packs it
+# and a handful of unit files from here -- mousewheeld's packaging, in shape.
 #
 # Everything ${LIKE_THIS} is filled in from the environment by
 # packaging/Makefile. Paths are not: nfpm substitutes in scalar metadata but not
@@ -43,7 +43,7 @@ maintainer: ${STATEMACHINED_MAINTAINER}
 description: |
   The host side of one statemachined device.
   Owns the serial link to a state machine board: uploads graphs, arms trials,
-  reassembles outcomes, keeps the trace, and serves an HTTP API and a web UI
+  reassembles outcomes, keeps the trace, and serves a gRPC API and a web UI
   for all of it. One daemon per device.
 vendor: braemons
 homepage: https://github.com/braemons/statemachined
@@ -70,16 +70,14 @@ recommends:
   - udev
 
 contents:
-  # The vendored interpreter and the package inside it. Per-architecture despite
-  # being pure Python, which is the price of not depending on whatever Python
-  # the distribution ships -- and worth it on a rig, where an OS upgrade that
-  # moves Python must not be able to stop an experiment.
-  - src: build/package/root/opt/braemons/statemachined
-    dst: /opt/braemons/statemachined
-    type: tree
+  # The daemon: one binary, its panels embedded.
+  - src: build/package/root/usr/bin/statemachined
+    dst: /usr/bin/statemachined
+    file_info:
+      mode: 0755
 
   # The flashable images and their MANIFEST.txt, so a box can be asked which
-  # firmware it is supposed to have. GET /api/device/firmware compares the
+  # firmware it is supposed to have. The daemon compares the
   # running `fw` against this.
   - src: build/package/root/usr/share/braemons/statemachined/firmware
     dst: /usr/share/braemons/statemachined/firmware
@@ -88,11 +86,6 @@ contents:
   - src: build/package/root/usr/share/doc/braemons-statemachined
     dst: /usr/share/doc/braemons-statemachined
     type: tree
-
-  # One name on PATH for the operator, pointing into the vendored tree.
-  - src: /opt/braemons/statemachined/bin/statemachined
-    dst: /usr/bin/statemachined
-    type: symlink
 
   - src: packaging/systemd/statemachined.service
     dst: /usr/lib/systemd/system/statemachined.service

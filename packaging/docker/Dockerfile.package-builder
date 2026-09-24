@@ -1,24 +1,18 @@
 # Build the package inside the OS it targets, so the artifact is a function of
 # this file rather than of whoever's laptop ran it.
 #
-# vstimd's Dockerfile.deb-builder is the model, and one thing about it does not
-# carry over. vstimd is Rust: it *cross*-compiles, one image producing an arm64
-# binary on an amd64 host. Almost nothing is cross-compiled here -- the daemon
-# is Python -- but two things in the package are native artifacts of the
-# architecture: the interpreter that gets vendored, and the firmware built for
-# the host that `statemachined device` runs. So the arm64 package is built by
-# running this image *as* arm64 under qemu:
+# vstimd's Dockerfile.deb-builder is the model, with one difference: this image
+# is run *as* the target architecture rather than cross-compiling, so the arm64
+# package is built under qemu:
 #
 #   docker build --platform linux/arm64 ...
 #
-# Slower than a cross-compile and much simpler. uv downloads a
-# python-build-standalone interpreter and prebuilt wheels for the platform it is
-# running as; the emulation compiles one small C++17 binary, runs pip-shaped
-# work, and runs the check at the end.
+# Slower than a cross-compile and much simpler: one recipe, packaging/Makefile's
+# `packages-here`, builds both architectures, and the check at its end runs the
+# binary it is about to pack.
 #
-# One image produces both formats. vstimd needs a builder per format because
-# cargo-deb and rpmbuild are different tools; nfpm packs a .deb and a .rpm from
-# the same staged tree, so the matrix here is by architecture alone.
+# One image produces both formats. nfpm packs a .deb and a .rpm from the same
+# staged tree, so the matrix here is by architecture alone.
 #
 # Usage -- via `make -C packaging packages-amd64` / `packages-arm64`, which pass
 # the version and the timestamp the host computed:
@@ -31,27 +25,26 @@
 # Pinned by digest, not by tag. `bookworm-slim` names a moving target, and a
 # builder image that drifts is a build that is reproducible only until somebody
 # pushes to Docker Hub. Bookworm because that is what Raspberry Pi OS 12 is, so
-# the glibc the interpreter is fetched against is the one the Pi 5 has.
+# the glibc the daemon links against is the one the Pi 5 has.
 ARG BASE_IMAGE=debian:bookworm-slim@sha256:88200866dfff7ea7f5cbcb6ec7c8a701889efe6fe859fe64d6990e4b07ea4171
-ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.11.13@sha256:841c8e6fe30a8b07b4478d12d0c608cba6de66102d29d65d1cc423af86051563
-
-FROM ${UV_IMAGE} AS uv
 FROM ${BASE_IMAGE}
 
 ARG NFPM_VERSION=2.43.1
+# The compiler, pinned: a different rustc is a different binary.
+ARG RUST_VERSION=1.98.0
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Everything the build needs and nothing else. The compiler and cmake are here
-# for one target -- statemachined_native_device, the firmware built for the host
-# -- and they are here rather than optional because a released package must
-# always carry it: packaging/Makefile will happily pack a package without one,
-# which is right for a developer's machine and wrong for a release.
+# Everything the build needs and nothing else. gcc for the linker; curl for
+# rustup and for the check that fetches the staged daemon's panels.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        make git curl ca-certificates xz-utils file cmake g++ \
+        make git curl ca-certificates xz-utils file gcc libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=uv /uv /usr/local/bin/uv
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+RUN curl -fsSL https://sh.rustup.rs \
+      | sh -s -- -y --no-modify-path --profile minimal --default-toolchain ${RUST_VERSION} \
+    && rustc --version
 
 # nfpm's release assets say x86_64 but arm64, which is neither uname's spelling
 # nor dpkg's consistently -- hence the map rather than a substitution.
@@ -69,53 +62,26 @@ RUN set -eux; \
 
 WORKDIR /src
 
-# The build recipes live in packaging/Makefile rather than being restated here,
-# so there is one definition of how the package is assembled.
-COPY Makefile              ./
-COPY README.md LICENSE NOTICE ./
+# What the package is built from, and nothing else, so an unrelated edit does
+# not invalidate the layers below.
+COPY Makefile README.md LICENSE NOTICE ./
+COPY Cargo.toml Cargo.lock ./
+COPY daemon-rs/            daemon-rs/
+COPY client/web/           client/web/
+COPY docs/                 docs/
 COPY dev/                  dev/
 COPY packaging/            packaging/
-COPY daemon/               daemon/
 
-# The firmware's portable core, its host HAL, and the host entry point that
-# joins them -- the three things CMakeLists.txt needs to build
-# statemachined_native_device. tests/ comes with it because CMakeLists.txt calls
-# add_subdirectory(tests) unconditionally; configuring would fail without it,
-# and nothing here builds or runs them.
-COPY CMakeLists.txt        ./
-COPY firmware/             firmware/
-COPY tests/                tests/
-
-# The flashable firmware, when the caller has built it. `make image` needs
-# PlatformIO and an ARM toolchain, which this image deliberately does not carry
-# -- the firmware is built once by whoever has that, and dropped in here, the
-# same one image going into the amd64 and the arm64 package because a firmware
-# binary has nothing to do with the host that serves it.
-#
-# packaging/Makefile creates the directory before it calls docker, so this COPY
-# always has something to copy; an empty one is a package whose firmware
-# directory holds the note saying `make image` was not run.
+# Built by `make image` on the host, or an empty directory the Makefile made so
+# this COPY has something to copy. packaging/Makefile says which.
 COPY image/ image/
 
-# Declared *here* rather than beside the other ARGs at the top, because an ARG
-# invalidates its own layer and every layer after it. The version changes with
-# every commit -- git describe appends a distance suffix -- so declaring it
-# early would re-run apt, the nfpm download and the interpreter fetch on every
-# single build. Everything above this line is version-independent and stays
-# cached.
-#
-# There is no default on purpose, and the build context has no .git: an unset
-# value makes packaging/scripts/git-version.sh abort rather than invent one.
 ARG STATEMACHINED_VERSION
 ENV STATEMACHINED_VERSION=${STATEMACHINED_VERSION}
 
-# The commit's own timestamp, so every mtime in the package is a property of
-# the commit rather than of when somebody ran the build. Without it two builds
-# of one commit differ in every file's mtime and share not a single byte.
 ARG SOURCE_DATE_EPOCH
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
-# `packages` = stage the vendored tree, run it, and pack both formats.
 RUN make -C packaging packages-here \
     && mkdir -p /out \
     && find dist -maxdepth 1 \( -name '*.deb' -o -name '*.rpm' \) -exec cp {} /out/ \;

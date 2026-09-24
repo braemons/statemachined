@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Assembles a GraphSet from the upload messages, one message at a time.
 //
-// The upload is chunked because the device has 32 KB and a whole set as JSON
-// does not fit -- peak parse buffer is one message, never the document. See
-// docs/reference/protocol.md 3.2.
+// The upload is chunked because the device has 32 KB and a whole set does not
+// fit in one frame -- peak decode buffer is one message, never the document.
+// See docs/reference/protocol.md 3.2.
 //
 // Three invariants live here rather than in the protocol document alone:
 //
@@ -34,7 +34,7 @@
 
 #include "config.h"
 #include "graph/graph_set.h"
-#include "protocol/json.h"
+#include "protocol/link_messages.h"
 
 namespace statemachined {
 
@@ -59,29 +59,29 @@ class GraphBuilder {
   /// the top of this file about what that costs and what it buys.
   explicit GraphBuilder(GraphSet& target) : g_(target) {}
 
-  /// Open a set upload, discarding whatever the target held. `covered` is the
-  /// CRC-covered prefix of the line, which is what the running checksum folds
-  /// in -- see docs/reference/protocol.md 1.1.
-  UploadError begin_set(const JsonObject& m, JsonSpan covered);
+  /// Open a set upload, discarding whatever the target held. `payload` is the
+  /// protobuf the message arrived as, which is what the running checksum folds
+  /// in -- see docs/reference/protocol.md 3.2, `set_end`.
+  UploadError begin_set(const link::SetBegin& m, link::PayloadSpan payload);
 
   /// Open one graph within the set. Its `slot` must be the next one: a set
   /// arrives in order, so that a graph's states are a contiguous slice.
-  UploadError begin_graph(const JsonObject& m, JsonSpan covered);
+  UploadError begin_graph(const link::GraphBegin& m, link::PayloadSpan payload);
 
-  UploadError add_distribution(const JsonObject& m, JsonSpan covered);
-  UploadError add_state(const JsonObject& m, JsonSpan covered);
-  UploadError add_transition(const JsonObject& m, JsonSpan covered);
-  UploadError add_action(const JsonObject& m, JsonSpan covered);
+  UploadError add_distribution(const link::GraphDist& m, link::PayloadSpan payload);
+  UploadError add_state(const link::GraphState& m, link::PayloadSpan payload);
+  UploadError add_transition(const link::GraphTransition& m, link::PayloadSpan payload);
+  UploadError add_action(const link::GraphAction& m, link::PayloadSpan payload);
   /// `graph_timer`: one global timer. Set-scope despite the nesting -- see the
   /// note on the definition.
-  UploadError add_timer(const JsonObject& m, JsonSpan covered);
+  UploadError add_timer(const link::GraphTimer& m, link::PayloadSpan payload);
 
   /// Close one graph and check its own totals.
-  UploadError end_graph(const JsonObject& m, JsonSpan covered);
+  UploadError end_graph(const link::GraphEnd& m, link::PayloadSpan payload);
 
   /// Check the set's totals and the checksum, then validate the whole set.
   /// `set_end` is not folded into the checksum -- it carries it.
-  UploadError end_set(const JsonObject& m);
+  UploadError end_set(const link::SetEnd& m);
 
   /// Throw away a partial upload: a `hello`, or a second `set_begin`. The
   /// target is left invalid, which is the point.
@@ -106,7 +106,7 @@ class GraphBuilder {
   /// The half of add_action that reads an ordinary output line, split out so
   /// the timer kinds and the line kinds share one copy of the entry/exit slice
   /// bookkeeping. Sets `context_` and returns false on a bad field.
-  bool parse_line_action(const JsonObject& m, JsonSpan kind, OutputAction* out);
+  bool parse_line_action(const link::GraphAction& m, OutputAction* out);
 
  public:
   /// Set when end_set() returned Invalid, so the caller can report which rule
@@ -115,7 +115,7 @@ class GraphBuilder {
 
  private:
   UploadError fail(UploadError e, const char* what);
-  void fold(JsonSpan covered);
+  void fold(link::PayloadSpan payload);
 
   GraphSet& g_;
   uint16_t checksum_ = 0xFFFF;

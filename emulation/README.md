@@ -1,11 +1,15 @@
 # Emulation
 
-The reference board under [Renode](https://renode.io/), so `firmware/hal/` has
-tests.
+The reference board under [Renode](https://renode.io/), for running the
+firmware's HAL with no board.
 
-```sh
-make emulate          # in the devcontainer; builds the SCI firmware and runs the suite
-```
+> **The test suite that lived here is gone.** It was a Robot Framework suite
+> with a Python keyword library that spoke the board's NDJSON wire, and it went
+> when the link moved to protobuf and the Python daemon was retired. What is
+> left is the platform: `renode statemachined.resc` boots the `uno_r4_minima_sci`
+> build. The way back is the one `make test-hardware` takes -- Renode's SCI2 on a
+> server socket (`emulation CreateServerSocketTerminal`), the daemon dialling
+> it, and the client driving it -- which is not written yet.
 
 ## What this is for
 
@@ -23,7 +27,7 @@ nothing:
   that a trial can therefore end on its own timeout.
 - **the protocol over a real UART peripheral**, rather than over a `std::string`.
 
-It has already earned its keep: it found that `HostLinkSession::on_start()`
+That is what the suite covered. It earned its keep: it found that `HostLinkSession::on_start()`
 discarded the entry state's output actions, so "house light on at trial start"
 did nothing at all on a board. Every host test passed, because they call
 `TrialRunner::start()` and read the update themselves — nothing asked whether
@@ -44,19 +48,12 @@ Nothing in this directory should ever grow an assertion about microseconds.
 |---|---|
 | `statemachined-uno-r4.repl` | Renode's own `arduino_uno_r4_minima.repl`, plus a USB boot shim |
 | `statemachined.resc` | loads the platform and the ELF |
-| `tests/statemachined.robot` | the suite |
-| `tests/statemachined_protocol.py` | the wire protocol, as Robot keywords |
 
 It runs the **`uno_r4_minima_sci`** build, where the host is on SCI2 (D0/D1)
 rather than USB CDC. tinyusb against an emulated `USBFS` is by far the most
 fragile thing in the picture, and the point is to test our code. That build is
 independently useful for a rig that wants a hardware serial bridge, so it is not
 a test-only artefact.
-
-`tests/statemachined_protocol.py` is deliberately a **second implementation** of the
-framing rules, written from `docs/reference/protocol.md` rather than bound to
-`firmware/core/protocol/`. If both ends were the same code, these tests could
-only prove the device agreed with itself.
 
 ## Three things that cost an afternoon
 
@@ -73,7 +70,7 @@ delivers a whole line into a receive FIFO that the CPU never gets to drain.
 Every byte past the FIFO is lost, and a Robot-side `Sleep` does not help because
 it does not advance *virtual* time. Each byte is followed by an explicit
 `emulation RunFor`. The symptom is a `bad_crc` reply to a line that was built
-correctly — or, for a longer line, `line is not a JSON object`.
+correctly — or, for a longer frame, `bad_cobs`.
 
 **`emulation RunFor` requires a paused emulation**, hence the `Advance` keyword,
 which brackets it with `pause`/`start`.

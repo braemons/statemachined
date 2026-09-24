@@ -5588,19 +5588,6 @@ function codeToString(value) {
   }
   return name[0].toLowerCase() + name.substring(1).replace(/[A-Z]/g, (c) => "_" + c.toLowerCase());
 }
-var stringToCode;
-function codeFromString(value) {
-  if (!stringToCode) {
-    stringToCode = {};
-    for (const value2 of Object.values(Code)) {
-      if (typeof value2 == "string") {
-        continue;
-      }
-      stringToCode[codeToString(value2)] = value2;
-    }
-  }
-  return stringToCode[value];
-}
 
 // node_modules/@connectrpc/connect/dist/esm/connect-error.js
 var ConnectError = class _ConnectError extends Error {
@@ -5683,14 +5670,16 @@ function createMessage(message, code) {
 }
 
 // node_modules/@connectrpc/connect/dist/esm/http-headers.js
-function appendHeaders(...headers) {
-  const h = new Headers();
-  for (const e of headers) {
-    e.forEach((value, key) => {
-      h.append(key, value);
-    });
+function decodeBinaryHeader(value, desc, options) {
+  try {
+    const bytes = base64Decode(value);
+    if (desc) {
+      return fromBinary(desc, bytes, options);
+    }
+    return bytes;
+  } catch (e) {
+    throw ConnectError.from(e, Code.DataLoss);
   }
-  return h;
 }
 
 // node_modules/@connectrpc/connect/dist/esm/any-client.js
@@ -6139,6 +6128,41 @@ function createContextValues() {
   };
 }
 
+// node_modules/@connectrpc/connect/dist/esm/protocol-grpc-web/trailer.js
+var trailerFlag = 128;
+function trailerParse(data) {
+  const headers = new Headers();
+  const lines = new TextDecoder().decode(data).split("\r\n");
+  for (const line of lines) {
+    if (line === "") {
+      continue;
+    }
+    const i = line.indexOf(":");
+    if (i > 0) {
+      const name = line.substring(0, i).trim();
+      const value = line.substring(i + 1).trim();
+      headers.append(name, value);
+    }
+  }
+  return headers;
+}
+
+// node_modules/@connectrpc/connect/dist/esm/protocol-grpc/headers.js
+var headerContentType = "Content-Type";
+var headerTimeout = "Grpc-Timeout";
+var headerGrpcStatus = "Grpc-Status";
+var headerGrpcMessage = "Grpc-Message";
+var headerStatusDetailsBin = "Grpc-Status-Details-Bin";
+var headerUserAgent = "User-Agent";
+
+// node_modules/@connectrpc/connect/dist/esm/protocol-grpc-web/headers.js
+var headerXUserAgent = "X-User-Agent";
+var headerXGrpcWeb = "X-Grpc-Web";
+
+// node_modules/@connectrpc/connect/dist/esm/protocol-grpc-web/content-type.js
+var contentTypeProto = "application/grpc-web+proto";
+var contentTypeJson = "application/grpc-web+json";
+
 // node_modules/@bufbuild/protobuf/dist/esm/codegenv2/service.js
 function serviceDesc(file, path, ...paths) {
   if (paths.length > 0) {
@@ -6147,14 +6171,45 @@ function serviceDesc(file, path, ...paths) {
   return file.services[path];
 }
 
-// node_modules/@connectrpc/connect/dist/esm/protocol-connect/headers.js
-var headerContentType = "Content-Type";
-var headerUnaryContentLength = "Content-Length";
-var headerUnaryEncoding = "Content-Encoding";
-var headerUnaryAcceptEncoding = "Accept-Encoding";
-var headerTimeout = "Connect-Timeout-Ms";
-var headerProtocolVersion = "Connect-Protocol-Version";
-var headerUserAgent = "User-Agent";
+// node_modules/@connectrpc/connect/dist/esm/protocol-grpc/gen/status_pb.js
+var file_status = /* @__PURE__ */ fileDesc("CgxzdGF0dXMucHJvdG8SCmdvb2dsZS5ycGMiTgoGU3RhdHVzEgwKBGNvZGUYASABKAUSDwoHbWVzc2FnZRgCIAEoCRIlCgdkZXRhaWxzGAMgAygLMhQuZ29vZ2xlLnByb3RvYnVmLkFueUJeCg5jb20uZ29vZ2xlLnJwY0ILU3RhdHVzUHJvdG9QAVo3Z29vZ2xlLmdvbGFuZy5vcmcvZ2VucHJvdG8vZ29vZ2xlYXBpcy9ycGMvc3RhdHVzO3N0YXR1c6ICA1JQQ2IGcHJvdG8z", [file_google_protobuf_any]);
+var StatusSchema = /* @__PURE__ */ messageDesc(file_status, 0);
+
+// node_modules/@connectrpc/connect/dist/esm/protocol-grpc/trailer-status.js
+var grpcStatusOk = "0";
+function findTrailerError(headerOrTrailer) {
+  var _a;
+  const statusBytes = headerOrTrailer.get(headerStatusDetailsBin);
+  if (statusBytes != null) {
+    const status = decodeBinaryHeader(statusBytes, StatusSchema);
+    if (status.code == 0) {
+      return void 0;
+    }
+    const error = new ConnectError(status.message, status.code, headerOrTrailer);
+    error.details = status.details.map((any) => ({
+      type: any.typeUrl.substring(any.typeUrl.lastIndexOf("/") + 1),
+      value: any.value
+    }));
+    error.isWireError = true;
+    return error;
+  }
+  const grpcStatus = headerOrTrailer.get(headerGrpcStatus);
+  if (grpcStatus != null) {
+    if (grpcStatus === grpcStatusOk) {
+      return void 0;
+    }
+    const code = parseInt(grpcStatus, 10);
+    let error;
+    if (code in Code) {
+      error = new ConnectError(decodeURIComponent((_a = headerOrTrailer.get(headerGrpcMessage)) !== null && _a !== void 0 ? _a : ""), code, headerOrTrailer);
+    } else {
+      error = new ConnectError(`invalid grpc-status: ${grpcStatus}`, Code.Internal, headerOrTrailer);
+    }
+    error.isWireError = true;
+    return error;
+  }
+  return void 0;
+}
 
 // node_modules/@connectrpc/connect/dist/esm/protocol/create-method-url.js
 function createMethodUrl(baseUrl, method) {
@@ -6260,209 +6315,6 @@ function createJsonSerialization(desc, options) {
   };
 }
 
-// node_modules/@connectrpc/connect/dist/esm/protocol-connect/content-type.js
-var contentTypeRegExp = /^application\/(connect\+)?(?:(json)(?:; ?charset=utf-?8)?|(proto))$/i;
-var contentTypeUnaryProto = "application/proto";
-var contentTypeUnaryJson = "application/json";
-var contentTypeStreamProto = "application/connect+proto";
-var contentTypeStreamJson = "application/connect+json";
-function parseContentType(contentType) {
-  const match = contentType === null || contentType === void 0 ? void 0 : contentType.match(contentTypeRegExp);
-  if (!match) {
-    return void 0;
-  }
-  const stream = !!match[1];
-  const binary = !!match[3];
-  return { stream, binary };
-}
-
-// node_modules/@connectrpc/connect/dist/esm/protocol-connect/error-json.js
-function errorFromJson(jsonValue, metadata, fallback) {
-  var _a;
-  if (metadata) {
-    new Headers(metadata).forEach((value, key) => fallback.metadata.append(key, value));
-  }
-  if (typeof jsonValue !== "object" || jsonValue == null || Array.isArray(jsonValue)) {
-    throw fallback;
-  }
-  let code = fallback.code;
-  if ("code" in jsonValue && typeof jsonValue.code === "string") {
-    code = (_a = codeFromString(jsonValue.code)) !== null && _a !== void 0 ? _a : code;
-  }
-  const message = jsonValue.message;
-  if (message != null && typeof message !== "string") {
-    throw fallback;
-  }
-  const error = new ConnectError(message !== null && message !== void 0 ? message : "", code, metadata);
-  error.isWireError = true;
-  if ("details" in jsonValue && Array.isArray(jsonValue.details)) {
-    for (const detail of jsonValue.details) {
-      if (detail === null || typeof detail != "object" || Array.isArray(detail) || typeof detail.type != "string" || typeof detail.value != "string") {
-        throw fallback;
-      }
-      try {
-        error.details.push({
-          type: detail.type,
-          value: base64Decode(detail.value),
-          debug: detail.debug
-        });
-      } catch (e) {
-        throw fallback;
-      }
-    }
-  }
-  return error;
-}
-
-// node_modules/@connectrpc/connect/dist/esm/protocol-connect/end-stream.js
-var endStreamFlag = 2;
-function endStreamFromJson(data) {
-  const parseErr = new ConnectError("invalid end stream", Code.Unknown);
-  let jsonValue;
-  try {
-    jsonValue = JSON.parse(typeof data == "string" ? data : new TextDecoder().decode(data));
-  } catch (e) {
-    throw parseErr;
-  }
-  if (typeof jsonValue != "object" || jsonValue == null || Array.isArray(jsonValue)) {
-    throw parseErr;
-  }
-  const metadata = new Headers();
-  if ("metadata" in jsonValue) {
-    if (typeof jsonValue.metadata != "object" || jsonValue.metadata == null || Array.isArray(jsonValue.metadata)) {
-      throw parseErr;
-    }
-    for (const [key, values] of Object.entries(jsonValue.metadata)) {
-      if (!Array.isArray(values) || values.some((value) => typeof value != "string")) {
-        throw parseErr;
-      }
-      for (const value of values) {
-        metadata.append(key, value);
-      }
-    }
-  }
-  const error = "error" in jsonValue && jsonValue.error != null ? errorFromJson(jsonValue.error, metadata, parseErr) : void 0;
-  return { metadata, error };
-}
-
-// node_modules/@connectrpc/connect/dist/esm/protocol-connect/http-status.js
-function codeFromHttpStatus(httpStatus) {
-  switch (httpStatus) {
-    case 400:
-      return Code.Internal;
-    case 401:
-      return Code.Unauthenticated;
-    case 403:
-      return Code.PermissionDenied;
-    case 404:
-      return Code.Unimplemented;
-    case 429:
-      return Code.Unavailable;
-    case 502:
-      return Code.Unavailable;
-    case 503:
-      return Code.Unavailable;
-    case 504:
-      return Code.Unavailable;
-    default:
-      return Code.Unknown;
-  }
-}
-
-// node_modules/@connectrpc/connect/dist/esm/protocol-connect/trailer-mux.js
-function trailerDemux(header) {
-  const h = new Headers(), t = new Headers();
-  header.forEach((value, key) => {
-    if (key.toLowerCase().startsWith("trailer-")) {
-      t.append(key.substring(8), value);
-    } else {
-      h.append(key, value);
-    }
-  });
-  return [h, t];
-}
-
-// node_modules/@connectrpc/connect/dist/esm/protocol-connect/version.js
-var protocolVersion = "1";
-
-// node_modules/@connectrpc/connect/dist/esm/protocol-connect/request-header.js
-function requestHeader(methodKind, useBinaryFormat, timeoutMs, userProvidedHeaders, setUserAgent) {
-  const result = new Headers(userProvidedHeaders !== null && userProvidedHeaders !== void 0 ? userProvidedHeaders : {});
-  if (timeoutMs !== void 0) {
-    result.set(headerTimeout, `${timeoutMs}`);
-  }
-  result.set(headerContentType, methodKind == "unary" ? useBinaryFormat ? contentTypeUnaryProto : contentTypeUnaryJson : useBinaryFormat ? contentTypeStreamProto : contentTypeStreamJson);
-  result.set(headerProtocolVersion, protocolVersion);
-  if (!result.has(headerUserAgent) && setUserAgent) {
-    result.set(headerUserAgent, "connect-es/2.2.0");
-  }
-  return result;
-}
-
-// node_modules/@connectrpc/connect/dist/esm/protocol-connect/validate-response.js
-function validateResponse(methodKind, useBinaryFormat, status, headers) {
-  const mimeType = headers.get(headerContentType);
-  const parsedType = parseContentType(mimeType);
-  if (status !== 200) {
-    const errorFromStatus = new ConnectError(`HTTP ${status}`, codeFromHttpStatus(status), headers);
-    if (methodKind == "unary" && parsedType && !parsedType.binary) {
-      return { isUnaryError: true, unaryError: errorFromStatus };
-    }
-    throw errorFromStatus;
-  }
-  const allowedContentType = {
-    binary: useBinaryFormat,
-    stream: methodKind !== "unary"
-  };
-  if ((parsedType === null || parsedType === void 0 ? void 0 : parsedType.binary) !== allowedContentType.binary || parsedType.stream !== allowedContentType.stream) {
-    throw new ConnectError(`unsupported content type ${mimeType}`, parsedType === void 0 ? Code.Unknown : Code.Internal, headers);
-  }
-  return { isUnaryError: false };
-}
-
-// node_modules/@connectrpc/connect/dist/esm/protocol-connect/get-request.js
-var contentTypePrefix = "application/";
-function encodeMessageForUrl(message, useBase64) {
-  if (useBase64) {
-    return base64Encode(message, "url");
-  }
-  return encodeURIComponent(new TextDecoder().decode(message));
-}
-function transformConnectPostToGetRequest(request, message, useBase64) {
-  let query = `?connect=v${protocolVersion}`;
-  let compressionQuery = "";
-  const compression = request.header.get(headerUnaryEncoding);
-  if (compression !== null && compression !== "identity") {
-    compressionQuery = "&compression=" + encodeURIComponent(compression);
-    useBase64 = true;
-  }
-  if (useBase64) {
-    query += "&base64=1";
-  }
-  query += compressionQuery;
-  const contentType = request.header.get(headerContentType);
-  if ((contentType === null || contentType === void 0 ? void 0 : contentType.indexOf(contentTypePrefix)) === 0) {
-    query += "&encoding=" + encodeURIComponent(contentType.slice(contentTypePrefix.length));
-  }
-  query += "&message=" + encodeMessageForUrl(message, useBase64);
-  const url = request.url + query;
-  const header = new Headers(request.header);
-  for (const h of [
-    headerProtocolVersion,
-    headerContentType,
-    headerUnaryContentLength,
-    headerUnaryEncoding,
-    headerUnaryAcceptEncoding
-  ]) {
-    header.delete(h);
-  }
-  return Object.assign(Object.assign({}, request), {
-    requestMethod: "GET",
-    url,
-    header
-  });
-}
-
 // node_modules/@connectrpc/connect/dist/esm/protocol/run-call.js
 function runUnaryCall(opt) {
   const next = applyInterceptors(opt.next, opt.interceptors);
@@ -6538,7 +6390,74 @@ function assertFetchApi() {
   }
 }
 
-// node_modules/@connectrpc/connect-web/dist/esm/connect-transport.js
+// node_modules/@connectrpc/connect/dist/esm/protocol-grpc/validate-trailer.js
+function validateTrailer(trailer, header) {
+  const err = findTrailerError(trailer);
+  if (err) {
+    header.forEach((value, key) => {
+      err.metadata.append(key, value);
+    });
+    throw err;
+  }
+  if (!header.has(headerGrpcStatus) && !trailer.has(headerGrpcStatus)) {
+    throw new ConnectError("protocol error: missing status", Code.Internal);
+  }
+}
+
+// node_modules/@connectrpc/connect/dist/esm/protocol-grpc-web/request-header.js
+function requestHeader(useBinaryFormat, timeoutMs, userProvidedHeaders, setUserAgent) {
+  var _a, _b;
+  const result = new Headers(userProvidedHeaders !== null && userProvidedHeaders !== void 0 ? userProvidedHeaders : {});
+  result.set(headerContentType, useBinaryFormat ? contentTypeProto : contentTypeJson);
+  result.set(headerXGrpcWeb, "1");
+  const userAgent = (_b = (_a = result.get(headerUserAgent)) !== null && _a !== void 0 ? _a : result.get(headerXUserAgent)) !== null && _b !== void 0 ? _b : "connect-es/2.2.0";
+  result.set(headerXUserAgent, userAgent);
+  if (setUserAgent) {
+    result.set(headerUserAgent, userAgent);
+  }
+  if (timeoutMs !== void 0) {
+    result.set(headerTimeout, `${timeoutMs}m`);
+  }
+  return result;
+}
+
+// node_modules/@connectrpc/connect/dist/esm/protocol-grpc/http-status.js
+function codeFromHttpStatus(httpStatus) {
+  switch (httpStatus) {
+    case 400:
+      return Code.Internal;
+    case 401:
+      return Code.Unauthenticated;
+    case 403:
+      return Code.PermissionDenied;
+    case 404:
+      return Code.Unimplemented;
+    case 429:
+      return Code.Unavailable;
+    case 502:
+      return Code.Unavailable;
+    case 503:
+      return Code.Unavailable;
+    case 504:
+      return Code.Unavailable;
+    default:
+      return Code.Unknown;
+  }
+}
+
+// node_modules/@connectrpc/connect/dist/esm/protocol-grpc-web/validate-response.js
+function validateResponse(status, headers) {
+  var _a;
+  if (status >= 200 && status < 300) {
+    return {
+      foundStatus: headers.has(headerGrpcStatus),
+      headerError: findTrailerError(headers)
+    };
+  }
+  throw new ConnectError(decodeURIComponent((_a = headers.get(headerGrpcMessage)) !== null && _a !== void 0 ? _a : `HTTP ${status}`), codeFromHttpStatus(status), headers);
+}
+
+// node_modules/@connectrpc/connect-web/dist/esm/grpc-web-transport.js
 var __await3 = function(v) {
   return this instanceof __await3 ? (this.v = v, this) : new __await3(v);
 };
@@ -6586,10 +6505,10 @@ var __asyncGenerator3 = function(thisArg, _arguments, generator) {
 var fetchOptions = {
   redirect: "error"
 };
-function createConnectTransport(options) {
+function createGrpcWebTransport(options) {
   var _a;
   assertFetchApi();
-  const useBinaryFormat = (_a = options.useBinaryFormat) !== null && _a !== void 0 ? _a : false;
+  const useBinaryFormat = (_a = options.useBinaryFormat) !== null && _a !== void 0 ? _a : true;
   return {
     async unary(method, signal, timeoutMs, header, message, contextValues) {
       const { serialize, parse } = createClientMethodSerializers(method, useBinaryFormat, options.jsonOptions, options.binaryOptions);
@@ -6604,72 +6523,102 @@ function createConnectTransport(options) {
           method,
           requestMethod: "POST",
           url: createMethodUrl(options.baseUrl, method),
-          header: requestHeader(method.methodKind, useBinaryFormat, timeoutMs, header, false),
+          header: requestHeader(useBinaryFormat, timeoutMs, header, false),
           contextValues: contextValues !== null && contextValues !== void 0 ? contextValues : createContextValues(),
           message
         },
         next: async (req) => {
           var _a2;
-          const useGet = options.useHttpGet === true && method.idempotency === MethodOptions_IdempotencyLevel.NO_SIDE_EFFECTS;
-          let body = null;
-          if (useGet) {
-            req = transformConnectPostToGetRequest(req, serialize(req.message), useBinaryFormat);
-          } else {
-            body = serialize(req.message);
-          }
           const fetch = (_a2 = options.fetch) !== null && _a2 !== void 0 ? _a2 : globalThis.fetch;
-          const response = await fetch(req.url, Object.assign(Object.assign({}, fetchOptions), { method: req.requestMethod, headers: req.header, signal: req.signal, body }));
-          const { isUnaryError, unaryError } = validateResponse(method.methodKind, useBinaryFormat, response.status, response.headers);
-          if (isUnaryError) {
-            throw errorFromJson(await response.json(), appendHeaders(...trailerDemux(response.headers)), unaryError);
+          const response = await fetch(req.url, Object.assign(Object.assign({}, fetchOptions), { method: req.requestMethod, headers: req.header, signal: req.signal, body: encodeEnvelope(0, serialize(req.message)) }));
+          const { headerError } = validateResponse(response.status, response.headers);
+          if (!response.body) {
+            if (headerError !== void 0)
+              throw headerError;
+            throw "missing response body";
           }
-          const [demuxedHeader, demuxedTrailer] = trailerDemux(response.headers);
+          const reader = createEnvelopeReadableStream(response.body).getReader();
+          let trailer;
+          let message2;
+          for (; ; ) {
+            const r = await reader.read();
+            if (r.done) {
+              break;
+            }
+            const { flags, data } = r.value;
+            if ((flags & compressedFlag) === compressedFlag) {
+              throw new ConnectError(`protocol error: received unsupported compressed output`, Code.Internal);
+            }
+            if (flags === trailerFlag) {
+              if (trailer !== void 0) {
+                throw "extra trailer";
+              }
+              trailer = trailerParse(data);
+              continue;
+            }
+            if (message2 !== void 0) {
+              throw new ConnectError("extra message", Code.Unimplemented);
+            }
+            message2 = parse(data);
+          }
+          if (trailer === void 0) {
+            if (headerError !== void 0)
+              throw headerError;
+            throw new ConnectError("missing trailer", response.headers.has(headerGrpcStatus) ? Code.Unimplemented : Code.Unknown);
+          }
+          validateTrailer(trailer, response.headers);
+          if (message2 === void 0) {
+            throw new ConnectError("missing message", trailer.has(headerGrpcStatus) ? Code.Unimplemented : Code.Unknown);
+          }
           return {
             stream: false,
             service: method.parent,
             method,
-            header: demuxedHeader,
-            message: useBinaryFormat ? parse(new Uint8Array(await response.arrayBuffer())) : fromJson(method.output, await response.json(), getJsonOptions(options.jsonOptions)),
-            trailer: demuxedTrailer
+            header: response.headers,
+            message: message2,
+            trailer
           };
         }
       });
     },
     async stream(method, signal, timeoutMs, header, input, contextValues) {
       const { serialize, parse } = createClientMethodSerializers(method, useBinaryFormat, options.jsonOptions, options.binaryOptions);
-      function parseResponseBody(body, trailerTarget, header2, signal2) {
+      function parseResponseBody(body, foundStatus, trailerTarget, header2, signal2) {
         return __asyncGenerator3(this, arguments, function* parseResponseBody_1() {
           const reader = createEnvelopeReadableStream(body).getReader();
-          let endStreamReceived = false;
+          if (foundStatus) {
+            if (!(yield __await3(reader.read())).done) {
+              throw "extra data for trailers-only";
+            }
+            return yield __await3(void 0);
+          }
+          let trailerReceived = false;
           for (; ; ) {
             const result = yield __await3(reader.read());
             if (result.done) {
               break;
             }
             const { flags, data } = result.value;
-            if ((flags & compressedFlag) === compressedFlag) {
-              throw new ConnectError(`protocol error: received unsupported compressed output`, Code.Internal);
-            }
-            if ((flags & endStreamFlag) === endStreamFlag) {
-              endStreamReceived = true;
-              const endStream = endStreamFromJson(data);
-              if (endStream.error) {
-                const error = endStream.error;
-                header2.forEach((value, key) => {
-                  error.metadata.append(key, value);
-                });
-                throw error;
+            if ((flags & trailerFlag) === trailerFlag) {
+              if (trailerReceived) {
+                throw "extra trailer";
               }
-              endStream.metadata.forEach((value, key) => trailerTarget.set(key, value));
+              trailerReceived = true;
+              const trailer = trailerParse(data);
+              validateTrailer(trailer, header2);
+              trailer.forEach((value, key) => trailerTarget.set(key, value));
               continue;
+            }
+            if (trailerReceived) {
+              throw "extra message";
             }
             yield yield __await3(parse(data));
           }
           if ("throwIfAborted" in signal2) {
             signal2.throwIfAborted();
           }
-          if (!endStreamReceived) {
-            throw "missing EndStreamResponse";
+          if (!trailerReceived) {
+            throw "missing trailer";
           }
         });
       }
@@ -6684,17 +6633,17 @@ function createConnectTransport(options) {
         return encodeEnvelope(0, serialize(r.value));
       }
       timeoutMs = timeoutMs === void 0 ? options.defaultTimeoutMs : timeoutMs <= 0 ? void 0 : timeoutMs;
-      return await runStreamingCall({
+      return runStreamingCall({
         interceptors: options.interceptors,
-        timeoutMs,
         signal,
+        timeoutMs,
         req: {
           stream: true,
           service: method.parent,
           method,
           requestMethod: "POST",
           url: createMethodUrl(options.baseUrl, method),
-          header: requestHeader(method.methodKind, useBinaryFormat, timeoutMs, header, false),
+          header: requestHeader(useBinaryFormat, timeoutMs, header, false),
           contextValues: contextValues !== null && contextValues !== void 0 ? contextValues : createContextValues(),
           message: input
         },
@@ -6702,12 +6651,15 @@ function createConnectTransport(options) {
           var _a2;
           const fetch = (_a2 = options.fetch) !== null && _a2 !== void 0 ? _a2 : globalThis.fetch;
           const fRes = await fetch(req.url, Object.assign(Object.assign({}, fetchOptions), { method: req.requestMethod, headers: req.header, signal: req.signal, body: await createRequestBody(req.message) }));
-          validateResponse(method.methodKind, useBinaryFormat, fRes.status, fRes.headers);
-          if (fRes.body === null) {
+          const { foundStatus, headerError } = validateResponse(fRes.status, fRes.headers);
+          if (headerError != void 0) {
+            throw headerError;
+          }
+          if (!fRes.body) {
             throw "missing response body";
           }
           const trailer = new Headers();
-          const res = Object.assign(Object.assign({}, req), { header: fRes.headers, trailer, message: parseResponseBody(fRes.body, trailer, fRes.headers, req.signal) });
+          const res = Object.assign(Object.assign({}, req), { header: fRes.headers, trailer, message: parseResponseBody(fRes.body, foundStatus, trailer, fRes.headers, req.signal) });
           return res;
         }
       });
@@ -6756,6 +6708,7 @@ var file_statemachined_v1_common = /* @__PURE__ */ fileDesc("Ch1zdGF0ZW1hY2hpbmV
 var ErrorSchema = /* @__PURE__ */ messageDesc(file_statemachined_v1_common, 0);
 
 // src/daemon_api_client.js
+var REFUSAL_METADATA_KEY = "statemachined-error-bin";
 function wordFor(enumSchema, value) {
   const found = enumSchema.values.find((each) => each.name === value || each.localName === value);
   if (found === void 0) return value ?? "";
@@ -6774,7 +6727,7 @@ var DaemonRefusedTheRequest = class _DaemonRefusedTheRequest extends Error {
   ///
   /// A daemon that is not running, a CORS rejection and a cancelled stream all
   /// arrive here too. They have no `statemachined.v1.Error` — nothing refused
-  /// anything, the call never landed — so the code is the Connect one and the
+  /// anything, the call never landed — so the code is the gRPC one and the
   /// detail is what the browser said.
   static from(thrown) {
     if (thrown instanceof _DaemonRefusedTheRequest) return thrown;
@@ -6792,14 +6745,21 @@ var DaemonRefusedTheRequest = class _DaemonRefusedTheRequest extends Error {
   }
 };
 function refusalIn(failure) {
-  const [refusal] = failure.findDetails(ErrorSchema);
-  if (refusal === void 0) return null;
-  return toJson(ErrorSchema, refusal, { alwaysEmitImplicit: true });
+  const encoded = failure.metadata?.get(REFUSAL_METADATA_KEY);
+  if (!encoded) return null;
+  try {
+    const padded = encoded + "=".repeat((4 - encoded.length % 4) % 4);
+    const binary = atob(padded.replace(/-/g, "+").replace(/_/g, "/"));
+    const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+    return toJson(ErrorSchema, fromBinary(ErrorSchema, bytes), { alwaysEmitImplicit: true });
+  } catch {
+    return null;
+  }
 }
 var DaemonApiClient = class {
   constructor(baseUrl) {
     this.baseUrl = (baseUrl || "").replace(/\/+$/, "");
-    const transport = createConnectTransport({ baseUrl: this.baseUrl || "/" });
+    const transport = createGrpcWebTransport({ baseUrl: this.baseUrl || "/" });
     this.state = createClient(State, transport);
     this.trial = createClient(Trial, transport);
     this.device = createClient(Device, transport);

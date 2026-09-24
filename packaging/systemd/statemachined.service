@@ -23,7 +23,7 @@ Group=statemachined
 # takes the last of a repeated option, so `--port 9000` there wins over the one
 # here without this file being edited.
 EnvironmentFile=-/etc/braemons/statemachined.env
-ExecStart=/opt/braemons/statemachined/bin/statemachined serve \
+ExecStart=/usr/bin/statemachined serve \
   --config /etc/braemons/statemachined-rig-config.toml \
   --host 0.0.0.0 --port 8081 $STATEMACHINED_EXTRA_ARGS
 

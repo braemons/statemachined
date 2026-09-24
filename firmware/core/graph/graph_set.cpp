@@ -45,6 +45,13 @@ void GraphSet::assign(const GraphSet& other) {
   for (uint8_t i = 0; i < n_states; ++i) states[i] = other.states[i];
   for (uint8_t i = 0; i < n_transitions; ++i) transitions[i] = other.transitions[i];
   for (uint8_t i = 0; i < n_output_actions; ++i) output_actions[i] = other.output_actions[i];
+
+  // Every pool, the timers included. Leaving one out is not a smaller copy but
+  // a wrong one: `g_ = GraphSet{}` is how set_begin clears the live set, so an
+  // uncopied count outlives it and refuses the next set's first timer.
+  n_timers = other.n_timers;
+  for (uint8_t i = 0; i < n_timers && i < kMaxTimers; ++i) timers[i] = other.timers[i];
+
   for (uint8_t i = 0; i < n_choice_options; ++i) {
     choice_options[i] = other.choice_options[i];
     choice_weights[i] = other.choice_weights[i];
