@@ -653,7 +653,7 @@ impl DaemonState {
         self.trace.append(
             KIND_LINK_CONNECTED,
             trace_fields(serde_json::json!({
-                "target": self.configuration.device_target,
+                "target": self.configuration().device_target,
                 "board": hello_ack.get("board"),
                 "firmware_version": hello_ack.get("fw"),
                 "installed_firmware_version": firmware.installed,
@@ -675,7 +675,7 @@ impl DaemonState {
     /// was deleted, or a board was unplugged, would take the API down with it
     /// — and the API is how somebody finds out.
     pub fn start(&self) {
-        let config_name = self.configuration.startup_state_machine_config.clone();
+        let config_name = self.configuration().startup_state_machine_config.clone();
         if !config_name.is_empty() {
             let loaded = self
                 .configs
@@ -689,7 +689,7 @@ impl DaemonState {
                 ));
             }
         }
-        if self.configuration.connect_on_startup {
+        if self.configuration().connect_on_startup {
             if let Err(problem) = self.connect() {
                 self.note_an_error(refusal::detail_of(&problem));
             }
@@ -725,7 +725,7 @@ impl DaemonState {
         let device = self.device.lock().map_err(poisoned)?;
         Ok(device_state_to_wire(
             &device,
-            &self.configuration.device_target,
+            &self.configuration().device_target,
             &state_report,
             last_error,
         ))
@@ -846,6 +846,74 @@ impl DaemonState {
             }
             Ok(device.is_connected())
         })?
+    }
+
+    /// Change the rig configuration, and do whatever the change implies.
+    ///
+    /// Only the fields that were set: `expected_board = ""` is a real setting
+    /// meaning "accept whatever answers". A changed target or expectation
+    /// re-greets the device now rather than at the next reconnect — a board
+    /// that is no longer the expected one has to be found out about now, and
+    /// the greeting is where that is refused. Returns whether the link was
+    /// reopened.
+    fn apply_configuration_changes(
+        &self,
+        patch: &wire::RigConfigurationPatch,
+    ) -> Result<bool, tonic::Status> {
+        let graph_mode = match patch.graph_mode.as_deref() {
+            None => None,
+            Some("set") => Some(crate::rig_configuration::GraphMode::Set),
+            Some("per_trial") => Some(crate::rig_configuration::GraphMode::PerTrial),
+            Some(other) => {
+                return Err(Refusal::new(
+                    Category::BadRequest,
+                    "bad_request",
+                    format!("graph_mode is '{other}'; it is one of: set, per_trial"),
+                    "graph_mode",
+                )
+                .into())
+            }
+        };
+        let before = self.configuration();
+        let reopen = patch.device_target.as_ref().is_some_and(|t| *t != before.device_target)
+            || patch.expected_board.as_ref().is_some_and(|b| *b != before.expected_board);
+        self.change_configuration(|configuration| {
+            if let Some(target) = &patch.device_target {
+                configuration.device_target = target.clone();
+            }
+            if let Some(baud) = patch.device_baud {
+                configuration.device_baud = baud;
+            }
+            if let Some(board) = &patch.expected_board {
+                configuration.expected_board = board.clone();
+            }
+            if let Some(mode) = graph_mode {
+                configuration.graph_mode = mode;
+            }
+            if let Some(name) = &patch.startup_state_machine_config {
+                configuration.startup_state_machine_config = name.clone();
+            }
+            if let Some(seed) = &patch.session_seed {
+                configuration.session_seed = seed.clone();
+            }
+        });
+        // Every setting the device reads, not only the two that reopen the
+        // link: the seed and the baud are read at the next connection.
+        let now = self.configuration();
+        let connected = {
+            let mut device = self.device.lock().map_err(poisoned)?;
+            device.target = now.device_target.clone();
+            device.expected_board = now.expected_board.clone();
+            device.baud = now.device_baud.max(0) as u32;
+            device.configured_session_seed =
+                (!now.session_seed.is_empty()).then(|| now.session_seed.clone());
+            device.is_connected()
+        };
+        if reopen && connected {
+            self.connect()?;
+            return Ok(true);
+        }
+        Ok(false)
     }
 
     /// No board, said before anything is loaded or compiled.
@@ -1759,15 +1827,38 @@ impl service::configuration_server::Configuration for DaemonServices {
         _request: tonic::Request<crate::wire::statemachined::v1::ReadConfigurationRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::RigConfiguration>, tonic::Status> {
         Ok(tonic::Response::new(rig_configuration_to_wire(
-            &self.state.configuration,
+            &self.state.configuration(),
         )))
     }
 
     async fn patch_configuration(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::RigConfigurationPatch>,
+        request: tonic::Request<crate::wire::statemachined::v1::RigConfigurationPatch>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::RigConfigurationUpdate>, tonic::Status> {
-        unported!("Configuration/patch_configuration")
+        // Refused while a trial is armed or running: a changed target means a
+        // *different device*, and swapping it under a running trial would move
+        // the thing the trial is measured against. **Until the daemon
+        // restarts**: nothing here writes `/etc/braemons`.
+        let state = self.state.clone();
+        let patch = request.into_inner();
+        off_the_runtime(move || {
+            if state.a_trial_is_armed_or_running()? {
+                return Err(Refusal::new(
+                    Category::WrongMoment,
+                    "busy",
+                    "a trial is armed or running",
+                    "configuration",
+                )
+                .into());
+            }
+            let reconnected = state.apply_configuration_changes(&patch)?;
+            Ok(tonic::Response::new(wire::RigConfigurationUpdate {
+                configuration: Some(rig_configuration_to_wire(&state.configuration())),
+                reconnected,
+                until_restart: true,
+            }))
+        })
+        .await
     }
 
     /// Is the daemon up, and does it have a board.

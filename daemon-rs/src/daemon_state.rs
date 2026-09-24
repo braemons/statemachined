@@ -26,7 +26,9 @@ pub struct DaemonState {
     /// both want the board must queue, and the queue is the honest shape for
     /// it. The Python daemon calls the same thing `device_lock`.
     pub device: Mutex<StatemachinedDevice>,
-    pub configuration: RigConfiguration,
+    /// The box's own settings. Behind a lock because `PatchConfiguration`
+    /// changes some of them — until the daemon restarts, and never on disk.
+    configuration: Mutex<RigConfiguration>,
     pub graphs: Store<GraphDefinition>,
     pub configs: Store<StateMachineConfig>,
     /// What this rig is wired like and what it can run, or `None` before
@@ -100,8 +102,22 @@ impl DaemonState {
             last_trial_result: Mutex::new(None),
             last_visit_sequence_number: Mutex::new(None),
             stopping: std::sync::atomic::AtomicBool::new(false),
-            configuration,
+            configuration: Mutex::new(configuration),
         }
+    }
+
+    /// The configuration as it stands now: a copy, so nobody holds the lock
+    /// while they use it.
+    pub fn configuration(&self) -> RigConfiguration {
+        self.configuration
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+
+    /// Change it, for as long as the daemon runs.
+    pub fn change_configuration(&self, change: impl FnOnce(&mut RigConfiguration)) {
+        change(&mut self.configuration.lock().unwrap_or_else(|poisoned| poisoned.into_inner()));
     }
 
     /// The name of the loaded config, or empty — which is how the proto spells

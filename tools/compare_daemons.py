@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 import shutil
 import socket
 import subprocess
@@ -44,7 +45,10 @@ from statemachined.device.native_device_on_a_socket import (  # noqa: E402
     the_native_device_is_built,
 )
 from statemachined_client import StatemachinedClient  # noqa: E402
-from statemachined_client.api_types import DistributionPatch  # noqa: E402
+from statemachined_client.api_types import (  # noqa: E402
+    DistributionPatch,
+    RigConfigurationPatch,
+)
 from statemachined_client.daemon_refusals import DaemonRefusedTheRequest  # noqa: E402
 
 RUST_DAEMON = HERE / "target" / "debug" / "statemachined"
@@ -207,8 +211,16 @@ class Daemon:
         self.device.stop()
 
 
+#: What is each daemon's own in any string: its scratch directory and its
+#: device's port.
+OWN_PATH = re.compile(r"/tmp/[^/\s]+/(python|rust)(?=/)")
+OWN_SOCKET = re.compile(r"(socket://127\.0\.0\.1):\d+")
+
+
 def plain(value):
     """An answer as plain data, with what differs by run taken out."""
+    if isinstance(value, str):
+        return OWN_SOCKET.sub(r"\1", OWN_PATH.sub("<scratch>", value))
     if dataclasses.is_dataclass(value):
         value = dataclasses.asdict(value)
     if isinstance(value, dict):
@@ -278,12 +290,12 @@ def answer(call):
             return {"refused": {"status": refusal.status, "error": refusal.error,
                                 "context": refusal.context, "detail": "(the parser's)"}}
         return {
-            "refused": {
+            "refused": plain({
                 "status": refusal.status,
                 "error": refusal.error,
                 "context": refusal.context,
                 "detail": refusal.detail,
-            }
+            })
         }
 
 
@@ -451,6 +463,24 @@ TRIALS = [
     ("closing, with trial 3 still the armed one", lambda c: c.close_session()),
     ("what closing left in the device", lambda c: c.read_device().link),
     ("the trace, every trial in it", lambda c: c.read_trace()),
+    ("a patch that changes nothing", lambda c: c.patch_configuration(RigConfigurationPatch())),
+    ("a graph mode the daemon has not got",
+     lambda c: c.patch_configuration(RigConfigurationPatch(graph_mode="banana"))),
+    ("a seed, a baud and a mode",
+     lambda c: c.patch_configuration(RigConfigurationPatch(
+         session_seed="0000000000000042", device_baud=57600, graph_mode="per_trial"))),
+    ("expecting the board that is there, which re-greets it",
+     lambda c: c.patch_configuration(RigConfigurationPatch(expected_board="native"))),
+    ("the link, after the re-greeting", lambda c: c.read_device().link),
+    # Greeted with the patched seed, so this trial draws from it.
+    ("arming trial 4 on the patched seed", lambda c: c.configure_trial(4, graph="timed-walk")),
+    ("starting it", lambda c: c.start_trial(4)),
+    ("its result", the_result_of(4)),
+    ("expecting a board that is not there",
+     lambda c: c.patch_configuration(RigConfigurationPatch(expected_board="teensy41"))),
+    ("the configuration it left", lambda c: c.read_configuration()),
+    ("the device it left", lambda c: c.read_device().connected),
+    ("the trace's last entries", lambda c: [e.kind for e in c.read_trace().entries[-6:]]),
 ]
 
 #: Each run: how the daemons start, and what to ask them.

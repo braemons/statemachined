@@ -159,7 +159,7 @@ impl DaemonState {
         std::thread::Builder::new()
             .name("statemachined-link".into())
             .spawn(move || {
-                let heartbeat = Duration::from_secs_f64(state.configuration.heartbeat_seconds);
+                let heartbeat = Duration::from_secs_f64(state.configuration().heartbeat_seconds);
                 let mut last_heartbeat: Option<Instant> = None;
                 while !state.stopping.load(Ordering::Relaxed) {
                     if !state.device_connected() {
@@ -167,6 +167,12 @@ impl DaemonState {
                         continue;
                     }
                     let pass = state.with_device(|device| {
+                        // Asked again under the lock: a request may have
+                        // closed the link on purpose since the check above,
+                        // and pumping it would be written down as lost.
+                        if !device.is_connected() {
+                            return Ok(());
+                        }
                         device.pump_incoming_lines(PUMP_BUDGET)?;
                         if last_heartbeat.is_none_or(|at| at.elapsed() >= heartbeat) {
                             last_heartbeat = Some(Instant::now());

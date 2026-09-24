@@ -15,7 +15,7 @@ still calls `unported!`, so it cannot drift from the proto.
 
 ## Done
 
-**35 of 50 rpcs.** The stores, the graph-set upload, the session around it,
+**36 of 50 rpcs.** The stores, the graph-set upload, the session around it,
 the trace, and trials: arming one, starting it, cancelling it, and reading back
 what it did.
 
@@ -75,7 +75,7 @@ green differential test that cannot go red is not evidence.
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
 | Trace | `test_state_visit_trace.py`, ported one test for one, and the day's file line against Python's `json.dumps` | 11 tests |
-| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree | 103 calls |
+| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree | 115 calls |
 | Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
 
 ### Bugs this found in the Python daemon
@@ -103,6 +103,19 @@ regression test:
 4. **A startup config that did not load said why in a repr**: the reason
    arrived in `ReadDevice` wrapped in double quotes, because the store's
    "not stored" is a `KeyError`.
+
+### And three more in the Python daemon, from the later rpcs
+
+5. **A patched seed or baud never reached the device.** Only the target and
+   the expected board were passed on; `PATCHABLE` promised the seed "takes
+   effect on the next connection", and it did not.
+6. **`graph_mode` took any string.** The model's `Literal` is not checked on
+   assignment, so "banana" was kept and reported back as the rig's mode.
+7. **A link the daemon closed itself was written down as lost.** The link
+   thread checked for a connection outside the lock; a re-greeting that found
+   the wrong board closed it in between, and the next pump's
+   `DeviceNotConnected` became a `link_lost` entry. The Rust thread had the
+   same shape and now asks again under the lock too.
 
 ### And in the firmware
 
@@ -182,14 +195,13 @@ not, and found `line_map.rs` answering two refusals differently from Python:
 
 ## Left
 
-**15 rpcs**, and none of them waits on anything but its own module now.
+**14 rpcs**, and none of them waits on anything but its own module now.
 
 | Module | Lines | Unblocks |
 |---|---|---|
 | `daemon/event_recording.py` | 431 | `Recording/*` (9 rpcs) |
 | `statemachined_device.py` — autorun, settings, timers | ~110 | `Device/ReadAutorun`, `WriteAutorun`, `SaveSettings` |
 | `device/device_line_monitor.py` | 112 | `Device/ReadSerialMonitor`, `WatchSerialMonitor` |
-| the servicer alone | — | `Configuration/PatchConfiguration` |
 
 **Not exercised by the comparison yet:** a gap in the visit stream's `seq`
 (the `sequence_gap` entry), a link that drops mid-session (`link_lost`, and
