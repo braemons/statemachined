@@ -29,8 +29,8 @@ struct Arguments {
     #[arg(value_enum)]
     mode: Option<Mode>,
 
-    /// Do not advertise `_statemachined._tcp`. Accepted as the Python daemon
-    /// accepts it; the API is served either way.
+    /// Do not advertise `_statemachined._tcp`. The API is served either way; a
+    /// console then needs this rig's address by hand.
     #[arg(long)]
     no_mdns: bool,
 
@@ -121,7 +121,7 @@ async fn main() {
     // Then the thread that reads the board between requests: visits, results,
     // and the heartbeat the device's link-loss watchdog waits for.
     let _link = state.read_the_link_forever();
-    let services = DaemonServices::new(state);
+    let services = DaemonServices::new(state.clone());
 
     let address = format!("{}:{}", arguments.bind, arguments.port);
     let listener = match tokio::net::TcpListener::bind(&address).await {
@@ -219,6 +219,18 @@ async fn main() {
                 .await
         }
     };
+    // Advertised once the port is bound, so a console that finds the record
+    // finds a daemon; withdrawn before the process ends.
+    let mut advertisement = (!arguments.no_mdns).then(|| {
+        let mut advertisement = statemachined::mdns_service_advertisement::MdnsServiceAdvertisement::new(
+            arguments.port,
+            &state.configuration().device_target,
+            env!("CARGO_PKG_VERSION"),
+        );
+        advertisement.start();
+        advertisement
+    });
+
     let mut main = tokio::spawn(serve(listener));
     let second = next.map(|listener| tokio::spawn(serve(listener)));
     tokio::select! {
@@ -231,6 +243,9 @@ async fn main() {
             }
             std::process::exit(1);
         }
+    }
+    if let Some(advertisement) = advertisement.as_mut() {
+        advertisement.stop();
     }
     let _ = stopping.0.send(true);
     let _ = main.await;

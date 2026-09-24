@@ -57,6 +57,7 @@ daemon's answer by `tools/compare_daemons.py`. That is not the cutover: see
 | `firmware_manifest.rs` | `daemon/firmware_manifest.py` | 55 |
 | `device/device_line_monitor.rs` | `device/device_line_monitor.py` | 112 |
 | `event_recording.rs` | `daemon/event_recording.py` | 431 |
+| `mdns_service_advertisement.rs` | `daemon/mdns_service_advertisement.py` — `mdns-sd` where Python uses `zeroconf`; the rig identifier hashed identically | 174 |
 | `device/graph_set_upload.rs` | `device/graph_set_upload.py` — **the daemon's half**; the hand-built uploaders stay with the hardware suite | 206 (part) |
 
 ### What the port is held to
@@ -222,8 +223,6 @@ suite call them.
 
 ### Not started
 
-* **mDNS.** `daemon/mdns_service_advertisement.py`. See the note below about
-  the `/api` record. Without it a console has to be given the rig's address.
 * **Packaging.** `packaging/` builds a Python wheel into a `.deb`. A Rust binary
   is still a `.deb` and `packages/` does not change, but the Makefile does.
 

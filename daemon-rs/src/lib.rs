@@ -22,6 +22,7 @@ pub mod event_recording;
 pub mod firmware_manifest;
 pub mod graph_set_compiler;
 pub mod grpc;
+pub mod mdns_service_advertisement;
 pub mod model;
 pub mod observer_registry;
 pub mod rig_configuration;
