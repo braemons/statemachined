@@ -427,6 +427,8 @@ TRIALS = [
          DistributionPatch(name="wait", minimum_ms=5, maximum_ms=5)])),
     ("starting it", lambda c: c.start_trial(3)),
     ("its result", the_result_of(3)),
+    ("deleting a graph the board is holding", lambda c: c.delete_graph("timed-walk")),
+    ("deleting one it is not", lambda c: c.delete_graph("state-walk")),
     ("the rig after", lambda c: c.read_state()),
     ("closing, with trial 3 still the armed one", lambda c: c.close_session()),
     ("what closing left in the device", lambda c: c.read_device().link),

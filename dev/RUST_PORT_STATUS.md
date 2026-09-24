@@ -126,6 +126,10 @@ which the firmware does not send; the device clock is `us` (protocol.md 4.5).
 So no visit could ever have had a host time. Found porting the visit stream,
 which is the first thing to use the correlation.
 
+**`DeleteGraph` would delete a graph the board was running.** Python refuses
+with `graph_in_use` while the committed set holds it; the port had the delete
+and not the guard. Harmless until there was a committed set to guard.
+
 **`graph_named`'s refusal quoted the name with Rust's `{:?}`**, double quotes
 where Python's `!r` gives single. The compiler's cases never reached it; the
 trials run did, and the compiler test now holds the whole sentence.

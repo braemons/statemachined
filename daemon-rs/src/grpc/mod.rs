@@ -1348,7 +1348,27 @@ impl service::graph_store_server::GraphStore for DaemonServices {
         &self,
         request: tonic::Request<crate::wire::statemachined::v1::DeleteFileRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::GraphSummaries>, tonic::Status> {
+        // **Refused while the board holds it.** Deleting the file does not
+        // stop a trial; what it does is make the paradigm that ran
+        // unreproducible, halfway through the session that ran it.
         let name = request.into_inner().name;
+        let in_use = self
+            .state
+            .device
+            .lock()
+            .map_err(poisoned)?
+            .committed_graph_set
+            .as_ref()
+            .is_some_and(|committed| committed.graphs_by_slot.iter().any(|graph| graph.name == name));
+        if in_use {
+            return Err(Refusal::new(
+                Category::WrongMoment,
+                "graph_in_use",
+                format!("'{name}' is in the committed set and a trial could still name it"),
+                "name",
+            )
+            .into());
+        }
         self.state.graphs.delete(&name).map_err(graph_problem)?;
         Ok(tonic::Response::new(graph_summaries(&self.state.graphs)))
     }
