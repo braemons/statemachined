@@ -341,8 +341,8 @@ image:                      ## build the flashable image, with a manifest
 # The installable package
 # --------------------------------------------------------------------------
 #
-# `.deb` and `.rpm` for a rig: a vendored interpreter under
-# /opt/braemons/statemachined, a systemd unit, a udev rule naming the board, a
+# `.deb` and `.rpm` for a rig: the daemon at /usr/bin/statemachined, its panels
+# embedded, a systemd unit, a udev rule naming the board, a
 # conffile describing the box, and the flashable firmware `make image` builds.
 # It lives in packaging/ rather than here because it is a build of its own --
 # see packaging/README.md and docs/developer/daemon.md §6 -- and these lines exist so that

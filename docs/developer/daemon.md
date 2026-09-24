@@ -1,6 +1,14 @@
 # statemachined — the daemon
 
-> **Status:** plan. Nothing here is built. It is the concrete shape of
+> **The daemon is Rust now, in `daemon-rs/`, and this document is its design
+> history.** It was written for the Python daemon, which the Rust one replaced
+> rpc for rpc (`dev/RUST_PORT.md`, `dev/RUST_PORT_STATUS.md`) before the board's
+> link moved to protobuf and the Python went. What it argues — what a daemon is
+> for, the trace, the session, the refusals, the panels — holds for the Rust one.
+> Where it names Python modules, FastAPI routes or a vendored interpreter, it is
+> describing the daemon that came before; §6 is current.
+
+> **Original status:** plan. Nothing here is built. It is the concrete shape of
 > [`PLAN.md`](https://github.com/braemons/statemachined/blob/main/dev/PLAN.md)'s **M4**, which that document leaves as one line — _"bridge
 > to triald"_ — and an empty `bridge/` directory. It also answers two of
 > PLAN.md's open questions and contradicts one of its statements; both are
@@ -1198,64 +1206,37 @@ record, both above.
 
 ## 6. Packaging
 
-The braemons pattern for a Python daemon is already written down, in
-`triald/packaging/README.md`, and is a skeleton there too. **statemachined is
-the first Python braemons daemon to actually build packages**, and triald
-inherits whatever this gets right.
+`packaging/` builds the packages: `make packages` produces both architectures
+and both formats out of a pinned builder container, and
+`.github/workflows/release.yml` is vstimd's. `packaging/README.md` is the
+operator's half of it. What is _not_ done is the last step: **nothing has been
+installed on the Pi 5 yet**, which is the only thing that can find out whether
+any of this is right.
 
-`packaging/` builds them now. `make packages` produces both architectures and
-both formats out of a pinned builder container, `.github/workflows/release.yml`
-is vstimd's, and what is below describes what that produces rather than what it
-should. `packaging/README.md` is the operator's half of it. What is _not_ done
-is the last step: **nothing has been installed on the Pi 5 yet**, which is the
-only thing that can find out whether any of this is right.
+The package is mousewheeld's shape: **one binary**, `/usr/bin/statemachined`,
+with the web UI embedded in it, plus the unit files, the conffiles, the docs and
+the flashable firmware. nfpm packs a `.deb` and a `.rpm` from one staged tree,
+so the matrix is by architecture alone, and the arm64 package is built by
+running the builder image _as_ arm64 under qemu rather than by cross-compiling.
 
-Two departures from vstimd's pipeline, both because this daemon is Python.
+**The build is reproducible, and that is checked rather than asserted.** The
+base image is pinned by digest and rustc and nfpm by version; dependencies come
+from `Cargo.lock` (`--locked`); `--remap-path-prefix` keeps the machine that
+built it out of the debug info; every mtime comes from the commit. `make -C
+packaging repro` builds twice and compares, and CI runs it. It is
+reproducibility _for a given builder_: the container and a native build on a
+developer's machine differ, which is the argument for the container being what
+a release publishes.
 
-Its matrix is by format _and_ architecture, because cargo-deb and rpmbuild are
-different tools; nfpm packs a `.deb` and a `.rpm` from one staged tree, so this
-one is by architecture alone. And vstimd _cross_-compiles, one image producing
-an arm64 binary on an amd64 host. Nothing here is compiled — uv fetches a
-prebuilt interpreter and prebuilt wheels — but that interpreter is a native
-artifact, so the arm64 package is built by running the builder image _as_ arm64
-under qemu. Slower than a cross toolchain and much simpler, because the
-emulation only has to run pip-shaped work.
-
-**The build is reproducible, and that is checked rather than asserted.** Four
-things had to be nailed down, and every one of them was found by building twice
-and diffing rather than by predicting it: the base image is pinned by digest and
-the tools by version; dependencies are installed from `daemon/uv.lock` with
-hashes instead of being resolved against PyPI at build time, or a release of
-fastapi between two builds changes the artifact; every mtime comes from the
-commit rather than the clock; and every `.pyc` is rebuilt with hash-based
-invalidation, because normalising those mtimes otherwise invalidates the ones
-python-build-standalone shipped and leaves the daemon recompiling the stdlib on
-every start into a tree its user cannot write. uv's `uv_cache.json`, which
-records the nanosecond of the install in the dist-info, is deleted.
-
-`make -C packaging repro` builds twice and compares; CI runs it. Worth a job
-rather than a good intention, because it fails silently — the package still
-installs perfectly. It is reproducibility _for a given builder_: the container
-and a native build on a developer's machine differ, which is the argument for
-the container being what a release publishes.
-
-One thing the shape below did not anticipate, and it is worth writing down
-because it is the only part of this repository that runs the artifact rather
-than the source: `make -C packaging check` starts the vendored interpreter,
-imports every runtime dependency out of it, builds the application, and asserts
-the web UI's files are in the wheel. Every package target depends on it. The
-failures peculiar to packaging — a `[standard]` extra that resolved differently,
-package data that never made it into the wheel, a launcher whose shebang names
-the build machine — are invisible to every other test here, because every other
-test runs the daemon out of a checkout.
+`make -C packaging check` runs the staged binary before anything is packed: its
+command line, and a daemon on a loopback port that has to serve its panels —
+which are embedded, so one missing from the build shows up there and not on a
+rig.
 
 ### 6.1 Shape
 
-- **Vendored interpreter.** `uv` plus python-build-standalone build a
-  self-contained tree at `/opt/braemons/statemachined`, so the artifact does not
-  depend on whatever Python the distribution ships and behaves like a compiled
-  binary. This is why the packages are per-architecture despite being pure
-  Python.
+- **One binary, no runtime dependency but glibc**, so an operating system
+  upgrade cannot stop an experiment by moving an interpreter.
 - **Named `braemons-statemachined`,** like every package in the braemons
   archive. The prefix belongs to the archive rather than to the daemon: it makes
   `apt search braemons` the answer to "what is on this rig", and keeps a name as
@@ -1264,31 +1245,24 @@ test runs the daemon out of a checkout.
   the logrotate entry are plain `statemachined`, because that is what an
   operator types.
 - **One `nfpm` config → both formats.** `.deb` for amd64/arm64, `.rpm` for
-  x86_64/aarch64. Simpler than vstimd's split, which needs `cargo-deb` for Debian
-  and a hand-written `.spec` for RPM.
-- **Dependencies are small**: fastapi, uvicorn, pydantic, pyserial, httpx —
-  what M4f actually installed, and no pydantic-settings: the config is one TOML
-  file read with the standard library's `tomllib`, and a settings framework for
-  one file would be a dependency bought to save four lines. Nothing like
-  triald's numpy/scipy problem.
+  x86_64/aarch64.
 - **Version from the git tag.** `packaging/scripts/git-version.sh`, lifted
-  verbatim from triald/vstimd; `pyproject.toml` carries the `0.0.0` sentinel, so
-  a `0.0.0` artifact means the stamping was bypassed.
+  verbatim from triald/vstimd, stamped into the binary at compile time; a binary
+  built from a checkout reports the crate's own version.
 
 ### 6.2 Paths
 
-|                                                            |                                                                                                                                                                                                     |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/opt/braemons/statemachined/`                             | the vendored interpreter and the package                                                                                                                                                            |
-| `/opt/braemons/statemachined/libexec/statemachined-device` | the firmware compiled for the host, which `statemachined device` runs. §6.4                                                                                                                         |
-| `/etc/braemons/statemachined-rig-config.toml`              | conffile: the box — device target, expected board, triald URL, directories. Hand-edited, **never written by the daemon**                                                                            |
-| `/var/lib/braemons/statemachined/configs/`                 | state-machine configs: the line map and the graphs, written by the web UI                                                                                                                           |
-| `/var/lib/braemons/statemachined/graphs/`                  | the graph store                                                                                                                                                                                     |
-| `/var/lib/braemons/statemachined/trace/`                   | the NDJSON tail of the trace                                                                                                                                                                        |
-| `/var/lib/braemons/statemachined/recordings/`              | recordings: named pieces of the trace, kept until somebody deletes them. Separate from `trace/` because the two have opposite lifetimes — the trace is rotated by logrotate and is nobody's to keep |
-| `/var/log/statemachined/`                                  | the unit's `LogsDirectory=`. The daemon's own output goes to the journal (`journalctl -u statemachined`); what logrotate actually rotates is the NDJSON trace tail, daily, thirty days              |
-| `/usr/share/braemons/statemachined/firmware/`              | the flashable images and `MANIFEST.txt`                                                                                                                                                             |
-| `/usr/share/doc/braemons-statemachined/`                   | the documentation that ships with the package, named after the package rather than the daemon — dpkg and rpm both expect that                                                                       |
+|                                               |                                                                                                                                                                                                     |
+| --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/usr/bin/statemachined`                      | the daemon, its web UI embedded                                                                                                                                                                     |
+| `/etc/braemons/statemachined-rig-config.toml` | conffile: the box — device target, expected board, directories. Hand-edited, **never written by the daemon**                                                                                        |
+| `/var/lib/braemons/statemachined/configs/`    | state-machine configs: the line map and the graphs, written by the web UI                                                                                                                           |
+| `/var/lib/braemons/statemachined/graphs/`     | the graph store                                                                                                                                                                                     |
+| `/var/lib/braemons/statemachined/trace/`      | the NDJSON tail of the trace                                                                                                                                                                        |
+| `/var/lib/braemons/statemachined/recordings/` | recordings: named pieces of the trace, kept until somebody deletes them. Separate from `trace/` because the two have opposite lifetimes — the trace is rotated by logrotate and is nobody's to keep |
+| `/var/log/statemachined/`                     | the unit's `LogsDirectory=`. The daemon's own output goes to the journal (`journalctl -u statemachined`); what logrotate actually rotates is the NDJSON trace tail, daily, thirty days              |
+| `/usr/share/braemons/statemachined/firmware/` | the flashable images and `MANIFEST.txt`                                                                                                                                                             |
+| `/usr/share/doc/braemons-statemachined/`      | the documentation that ships with the package, named after the package rather than the daemon — dpkg and rpm both expect that                                                                       |
 
 Runs as its own unprivileged user via sysusers, with the same systemd hardening
 triald's unit uses (`ProtectSystem=strict`, `ProtectHome`, `PrivateTmp`,
@@ -1319,48 +1293,14 @@ pulling in `bossac`/`dfu-util`, because it means dropping the port, flashing, an
 waiting for re-enumeration mid-session — which is a different risk from anything
 else the daemon does.
 
-### 6.4 A device in the package, for the box that has no board yet
+### 6.4 No device in the package
 
-A box that has just run `apt install braemons-statemachined` has a daemon and
-nothing to point it at, and the first question anybody asks is whether the thing
-works. Until now the answer needed a checkout, a compiler and `make
-bench-device`, which is a strange thing to require of somebody who installed a
-package.
-
-So the package carries the firmware built for the host —
-`firmware/native/statemachined_native_device.cpp`, the same session, engine and
-result chunker the board runs — at
-`/opt/braemons/statemachined/libexec/statemachined-device`, and
-`statemachined device` puts it on a TCP port:
-
-```
-statemachined device                      # one terminal: socket://127.0.0.1:5300
-statemachined -t socket://127.0.0.1:5300 serve   # the other
-```
-
-Three things about this are worth being explicit about.
-
-**It is not a mock.** A mock answers what its author believed the protocol says;
-this answers what `firmware/core/protocol` says, refuses what it refuses, and
-reassembles a result with the same chunker. That is why the daemon's integration
-suite has always talked to it, and why it is the same binary and the same bridge
-here rather than a second one — `statemachined.device.native_device_on_a_socket`
-is imported by `statemachined device`, by `make bench-device`, and by
-`daemon/tests/integration/conftest.py`. Two bridges that drift are two different
-devices.
-
-**It is not a timing test.** The scan is a `nanosleep` on a preemptible desktop
-kernel. Durations are honest to about a millisecond, which is what an
-integration test needs; `docs/operations/hardware.md`'s numbers come from a board and
-`make test-hardware`.
-
-**It is a compiled artifact, so it is per-architecture,** like the vendored
-interpreter beside it. `packaging/docker/Dockerfile.package-builder` carries
-`cmake` and `g++` for it. A `make -C packaging deb` on a machine without a
-compiler still produces a package, with a `libexec/NO-DEVICE.txt` saying so
-rather than silence — and `packaging/scripts/check-staged-tree.py` greets the
-device it staged, which is the only thing in the build that can catch a binary
-compiled against the wrong libstdc++ or for the wrong architecture.
+The package used to carry the firmware compiled for the host, and a
+`statemachined device` command to put it on a port, so a fresh install with no
+board could be checked against something real. It no longer does: that binary
+is for tests and a bench, it listens on its own port
+(`build/statemachined_native_device --port 5300`, or `make bench-device`), and a
+rig checks its install against its board.
 
 ### 6.5 Release and the archive
 

@@ -3,37 +3,35 @@
 Companion to [`RUST_PORT.md`](RUST_PORT.md), which is the plan. This is the
 state of the work.
 
-**Nothing here runs on a rig.** `daemon/` is the Python daemon and stays the one
-that does until every rpc is ported — the board is a serial port and two
-processes cannot own one, so there is no split where both run
-(`RUST_PORT.md` §5.2).
-
-`make ported` prints the number. It reads the generated trait and counts what
-still calls `unported!`, so it cannot drift from the proto.
+**The Rust daemon is the daemon now.** The Python one is gone from the
+repository, and so is every Python module that was not the client; the package
+is the Rust binary at `/usr/bin/statemachined`. It has still not run a session
+on a rig (open question 1).
 
 ---
 
-## The board link is protobuf now, and only the Rust daemon speaks it
+## The board link is protobuf, and the Python is retired
 
 The firmware and `daemon-rs` talk COBS-framed protobuf with a CRC-16, as
-mousewheeld does: `proto/statemachined/link/v1/link.proto`, nanopb on the board,
-the descriptor in the daemon. The Python daemon was retired from the board link
-rather than moved with it. So from here on:
+mousewheeld does: `proto/statemachined/link/v1/link.proto`, nanopb on the
+board, the descriptor in the daemon. The Python daemon was retired rather than
+moved to it, and with it went everything in Python but the client:
 
-* **The differential comparison is over.** `tools/compare_daemons.py` drives
-  both daemons against the native device, and the Python one can no longer
-  talk to it. The 170 of 170 it last reported were against the NDJSON wire.
-  What still holds the Rust daemon to Python is the compiler: the upload test
-  checks that what a board decodes is the message Python uploaded, for every
-  case `tools/graph_set_cases.py` recorded.
-* **What still works:** the firmware's own tests, `daemon-rs`'s, `make
-  e2e-rust` (24 passed, 5 skipped, 1 xfail, as before), and the Python unit
-  tier (366, which touches no board).
-* **What does not:** everything in Python that speaks to a board —
-  `daemon/tests/{integration,e2e,runs,hardware}`, the bench commands behind
-  `make bringup`, `emulation/tests/` under Renode, and so `make test-python`
-  and the CI job that runs it. `statemachined device`, the bridge the e2e suite
-  uses, still works: it only pumps bytes.
+* **The differential comparison is over.** `tools/compare_daemons.py` last
+  reported 170 of 170 against the NDJSON wire. What still holds the Rust daemon
+  to Python is the recorded corpora in `daemon-rs/tests/` — the compiler's
+  messages, the documents' verdicts, the line maps, the clock — which are
+  fixtures now, and the upload test, which checks that what a board decodes is
+  the message Python uploaded for every compiled case.
+* **Board tests go through the client.** `client/python/tests/hardware/` is the
+  hardware suite, driving the board through the daemon; `make test-hardware
+  TARGET=native` runs it against the firmware built for this machine, in CI.
+* **The native device listens on its own port.** `statemachined device` and its
+  bridge are gone; `build/statemachined_native_device --port N` is the far end
+  for tests and a bench, and it is not packaged.
+* **What was lost:** the Renode Robot suite, which covered the HAL under
+  emulation (`emulation/README.md` says how it could come back through the
+  client), and the tests of the NDJSON framing, which have nothing left to test.
 
 ## Done
 
@@ -234,53 +232,42 @@ not, and found `line_map.rs` answering two refusals differently from Python:
 
 ## Left
 
-**No rpcs.** What is left is what stands between a daemon that answers like
-the Python one and a daemon a rig can run on.
+**Not exercised by any test:** a gap in the visit stream's `seq` (the
+`sequence_gap` entry), which needs a board that drops a frame on purpose.
+`reconnect_and_restore` and `wait_for_line_start` are not reachable through any
+rpc.
 
-**Not exercised by the comparison:** a gap in the visit stream's `seq` (the
-`sequence_gap` entry), which needs a board that drops a line on purpose.
-`reconnect_and_restore` and `wait_for_line_start` are ported and are not
-reachable through any rpc in either daemon — only the bench and the hardware
-suite call them.
-
-### Not started
-
-* **Packaging.** `packaging/` builds a Python wheel into a `.deb`. A Rust binary
-  is still a `.deb` and `packages/` does not change, but the Makefile does.
+**Outside this repository:** `contracts/e2e-tests` still installs
+`statemachined/daemon[serve,device]` in `make test-local`, runs `statemachined
+device --port N` for its no-board fixture, and its container names
+`/opt/braemons/statemachined/bin/statemachined`. Each has to follow: the Rust
+binary on PATH (as this repository's `make e2e` arranges), the native device
+run as `statemachined_native_device --port N`, and `/usr/bin/statemachined`.
 
 ---
 
 ## Open questions
 
-1. **A rig running this for a real session before `daemon/` is retired.**
-   Without it the cutover has no safety net beyond the test suites. This is
+1. **A rig running this for a real session.** The Python daemon is retired
+   without one, so the cutover has no safety net beyond the test suites. This is
    about lab time, not code, and it is the question that decides whether the
    plan is safe (`RUST_PORT.md` §8.1).
 2. **The `/api` mDNS TXT record is vestigial.** statemachined writes it,
    `console/discovery.mjs:117` passes it through with a default, and nothing
    reads it. Safe to drop, but it crosses two repositories.
-3. **Something leaks `statemachined_native_device` processes.** Around fifteen
-   were alive across several days, and they respawn when killed. Pre-existing
-   and not blocking, but it accumulates across test runs.
-4. **How the package carries two commands.** The `.deb` installs one
-   `statemachined`, and today that is the Python one: the daemon, the bench
-   tools (`hello`, `pins`, `monitor`, …) and `statemachined device`, the
-   native device's bridge, which the e2e suite starts. The Rust binary is only
-   the daemon. Swapping the file would take the bench tools with it; shipping
-   both — the Rust daemon beside a Python CLI under another name, or `serve`
-   dispatched to Rust as `tools/e2e_rust/statemachined` does — is a choice
-   about what an operator types, and it is theirs. The unit file needs no
-   change either way: the Rust binary takes its command line as written.
-5. **The second port.** The Rust daemon answers on `--port + 1` as well, so no
+3. **Leaked `statemachined_native_device` processes** came from the Python
+   bridge, which left its device running whenever it was killed rather than
+   stopped. The bridge is gone; the tests that start the device now kill it.
+4. **The second port.** The Rust daemon answers on `--port + 1` as well, so no
    client changes at the cutover. Dropping it later means moving
    `statemachined-client`'s default, triald's executor setting and the e2e
    fixtures' arithmetic together, in `contracts/DAEMON_LAYOUT.md`.
-6. **`OpenLink` does not restore a board's set.** After a board resets, both
+5. **`OpenLink` does not restore a board's set.** After a board resets, both
    daemons re-greet and keep believing in the set they uploaded; the board
    refuses the next trial until a session is opened again.
    `reconnect_and_restore` exists for exactly this and nothing calls it — in
    either daemon. Ported as it is; worth deciding whether `OpenLink` (or the
    link thread, on a lost link) should use it.
-7. **Two defaults differ on purpose.** With no `--host` the Rust daemon binds
-   loopback where Python binds every interface, and mDNS advertises the
-   crate's version until packaging stamps the release's.
+6. **One default differs on purpose.** With no `--host` the Rust daemon binds
+   loopback where Python bound every interface; the packaged unit says
+   `--host 0.0.0.0`.

@@ -1,10 +1,13 @@
-# statemachined — the HTTP API
+# statemachined — the API
 
-> **Status:** specification. Milestone M4f in [`daemon.md`](../developer/daemon.md); the
-> daemon is being written against this document, not the other way round —
-> which is the same order [`protocol.md`](protocol.md) was written in, and for
-> the same reason: an interface argued for after the fact is an interface whose
-> shape is an accident of the first implementation.
+> **Status: out of date.** The API is gRPC now, and its definition is
+> [`proto/statemachined/v1/`](https://github.com/braemons/statemachined/blob/main/proto/statemachined/v1/) —
+> eight services, every rpc commented where it is declared. The client for it is
+> `client/python/` (`statemachined-client`, and `statemachinectl`), and the
+> panels speak gRPC-Web to the same port. What follows is the HTTP API that came
+> before it: the reasoning about who calls what, the refusal rule and the stream
+> rules carried over; the routes, the JSON shapes and the Python modules it
+> names did not.
 
 Two callers and they want different things.
 

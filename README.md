@@ -6,10 +6,9 @@
 > subject in it, and it is not yet something a rig should depend on.
 >
 > What *is* real: the portable core, the wire protocol and the Uno R4 Minima HAL
-> are implemented and tested — on the host, under sanitizers, on an emulated
-> board under Renode, and on a physical R4, which measured **122 767 Hz**
-> against the 10 kHz target. The daemon, its HTTP API and its web UI exist and
-> drive whole trials against a board.
+> are implemented and tested — on the host, under sanitizers, and on a physical
+> R4, which measured **122 767 Hz** against the 10 kHz target. The daemon, its
+> gRPC API and its web UI exist and drive whole trials against a board.
 >
 > What has **not** happened, and matters:
 >
@@ -87,16 +86,17 @@ That is the fastest feedback loop in the repo and it needs no board attached.
 
 ```sh
 make test        # build and run the core unit tests
-make test-python # the Python package: unit, integration, and the shipped commands
-make sanitize    # the same, under ASan and UBSan
+make rust-check  # the daemon: its tests, its generated types, clippy
+make client      # the Python client: its stubs, lint, types, and against the daemon
+make test-hardware TARGET=native   # the board suite, against the firmware built for this machine
+make sanitize    # the core tests, under ASan and UBSan
 make golden      # the tests at -O0 and -O3, for reproducibility
 make firmware    # build for the Uno R4 Minima
 make upload      # flash it
-make emulate     # run the firmware under Renode
 make format      # clang-format in place
 make image       # the flashable image, with a manifest
 make deb         # an installable package: the daemon, a unit, a udev rule
-make ci          # everything CI runs, except emulation
+make ci          # everything CI runs
 make help        # the full list
 ```
 
@@ -107,11 +107,9 @@ and flags are pinned in one place, so a job that goes red can be reproduced with
 CI runs the unit tests under gcc and clang, under sanitizers, at `-O0` and `-O3`
 (the cheapest way to catch a dependence on undefined behaviour), compiles the
 firmware for the reference board, checks the portable core has not reached for
-`Arduino.h`, and boots the firmware on an **emulated** Uno R4 Minima under Renode
-so that `firmware/hal/` is covered too — the pin map, the port registers, the
-timer ISR and a whole session over a real UART peripheral. Emulation runs on
-virtual time, so it makes the HAL correct; only a board makes the timing true.
-See [`emulation/README.md`](emulation/README.md).
+`Arduino.h`, runs the daemon's tests and the client's against it, and runs the
+hardware suite against the firmware built for the host. Only a board makes the
+timing true: `make test-hardware TARGET=/dev/ttyACM0`.
 
 [`BUILD.md`](BUILD.md) has toolchain setup for Ubuntu 24.04, Fedora 44+ and WSL,
 and a devcontainer that pins the same versions CI uses.
@@ -168,82 +166,34 @@ the same thing locally.
 
 ## Drive it from Python
 
-`daemon/` is one package with three tiers, and which one you install says how
-you mean to drive a board.
-
-```sh
-pip install statemachined            # the documents, and talking to a daemon
-pip install 'statemachined[device]'  # + open the serial port yourself
-pip install 'statemachined[serve]'   # + be the daemon
-```
-
-**Through a daemon**, when something other than your script owns the board — a
-rig, where `statemachined serve` is holding it and a web UI and triald are
-watching too:
+The daemon owns the board; a script talks to the daemon. The client is
+`client/python/`, published as `statemachined-client`, and it is the only
+Python here:
 
 ```python
-from statemachined.client import StatemachinedClient
+from statemachined_client import StatemachinedClient
 
-with StatemachinedClient("http://rig-3.local:8081") as rig:
-    rig.session.upload_graph_set(["go-nogo", "2afc"])
+rig = StatemachinedClient("rig-3.local")      # gRPC, on 8082
+rig.upload_graph_set(["go-nogo", "two-alternative-forced-choice"])
 
-    with rig.trace.subscribe("my-experiment") as stream:
-        rig.trial.configure(1, graph="go-nogo", cap_milliseconds=30_000)
-        rig.trial.start(1)
-        stream.wait_for_trial(1, timeout_seconds=35)
+rig.configure_trial(1, graph="go-nogo", cap_milliseconds=30_000)
+rig.start_trial(1)
+rig.wait_for_trial(1, timeout_s=35)
 
-    for entry in rig.trace.for_trial(1):
-        print(entry["kind"], entry.get("state_name"), entry.get("outcome"))
+result = rig.read_trial_result(1)
+print(result.outcome, [visit.state_name for visit in result.visits])
 ```
 
-**Or straight at the board**, on a bench, with no daemon anywhere:
-
-```python
-from statemachined.device import StatemachinedDevice
-from statemachined.model.graph_definition import GraphDefinition
-from statemachined.model.line_map import LineMap
-
-board = StatemachinedDevice("/dev/ttyACM0", line_map=LineMap.model_validate(wiring))
-board.connect_and_greet()
-board.push_wiring()
-board.upload_graph_set([GraphDefinition.model_validate(go_nogo)], set_version=1)
-
-result = board.run_trial_to_completion(1, "go-nogo", cap_milliseconds=30_000)
-# `.name`, not the member: TrialOutcome is an IntEnum and since Python 3.11
-# those print as their number. The `.tdr` taxonomy crosses the wire by name.
-print(result.outcome.name, [visit.state_name for visit in result.visits])
-```
-
-**Two classes and not one facade with two backends**, because the difference is
-not the transport. A daemon keeps a trace ring, takes named recordings off it,
-holds a graph store and saved configs on disk, and can say who else is watching
-— all of which exist because it *outlives the script that spoke to it*. A direct
-connection has no ring to record from: your process was the only listener, and
-what it did not keep is gone. One facade would have to answer
-`rig.recordings.start()` on both, and on one of them the answer would be a
-fiction.
-
-What they do share is the trial loop, the graph set, the wiring, autorun and
-save — because those are the board's, not the daemon's. A paradigm moves between
-them. A record-keeping strategy does not.
-
-**And `statemachined.model` is the same pydantic in both**, and the same the
-daemon validates with, so a graph is refused where you wrote it rather than
-after a round trip. That is the reason this is one distribution: every place the
-package could have been split leaves those models described twice, and a second
-description is right until the day it is not.
-
-```sh
-make test-unit          # host-only: no daemon, no device, no socket
-make test-integration   # against the firmware built for this machine
-make test-e2e-local     # `statemachined serve` and `device`, two processes, a socket
-make test-python        # all three
-```
+It installs `statemachinectl` as well, which is the bench instrument: `make
+bringup ARGS="device"` asks a daemon what board it has, `ARGS="state"` what the
+board is doing. On a bench with no board, `make bench-device` runs the firmware
+built for this machine on `127.0.0.1:5300` and `make bench
+TARGET=socket://127.0.0.1:5300` puts a daemon in front of it.
 
 ## Install it on a rig
 
-`make packages` builds installable packages — the daemon and a vendored Python
-under `/opt/braemons/statemachined`, a systemd unit, a udev rule that names the
+`make packages` builds installable packages — the daemon, one binary at
+`/usr/bin/statemachined` with its web UI inside it, a systemd unit, a udev rule that names the
 board by VID/PID instead of granting the daemon every serial port on the box, a
 conffile describing what the rig is, and the flashable firmware. `.deb` and
 `.rpm`, amd64 and arm64, the last of those being a Raspberry Pi 5 running
@@ -283,17 +233,13 @@ Also: **VStim** (Andreas Kreiter, Cognitive Neurophysiology Lab, Bremen), whose
 ## License
 
 **Firmware, core, tests and tools: [GPLv3-or-later](LICENSE).
-The importable Python library — `model/`, `device/`, `graph_set_compiler.py`,
-and the client in `client/python/`: [LGPLv3-or-later](daemon/LICENSE)**, so an
-experiment importing it is not placed under copyleft — the same split, and the
-same reason, as vstimd's client. **The daemon — `daemon/src/statemachined/daemon/`
-and the panels in `client/web/` it serves, and the command line that serves
-them: [AGPLv3-or-later](daemon/LICENSE.AGPL)**, like vstimd and triald: it is a
-network service, and whoever runs a modified one for others owes them its
-source. The split is by *what the code is*, not by directory: `daemon/tests/` is
-a test suite and stays GPL, and `client/python/` is a distribution of its own
-that a script imports, so it takes the library's licence rather than the
-daemon's. Every source file carries an
+The Python client, `client/python/`: [LGPLv3-or-later](client/python/LICENSE)**,
+so an experiment importing it is not placed under copyleft — the same split, and
+the same reason, as vstimd's client. **The daemon — `daemon-rs/`, and the panels
+in `client/web/` it serves: [AGPLv3-or-later](daemon-rs/LICENSE.AGPL)**, like
+vstimd and triald: it is a network service, and whoever runs a modified one for
+others owes them its source. The split is by *what the code is*, not by
+directory. Every source file carries an
 `SPDX-License-Identifier`.
 
 The GPL here is a *choice*, not an inheritance: no Bpod source is copied,

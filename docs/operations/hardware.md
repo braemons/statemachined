@@ -187,8 +187,8 @@ the bench lamps freely.
 `hal::set_native_loopback(width, shift)`, switched on with
 `STATEMACHINED_LOOPBACK=8` — so a suite that drives transitions from predicates
 runs unchanged with a board and without one. That is what
-`daemon/tests/runs/` relies on: the far end is a fixture, and the same session
-runs against silicon and against the host build. The software half reproduces
+`make test-hardware TARGET=native` relies on: the far end is a fixture, and the
+same suite runs against silicon and against the host build. The software half reproduces
 *which line a level arrives on and that it arrives a scan later*; it reproduces
 nothing about timing, and no timing assertion is made against it.
 
@@ -266,7 +266,7 @@ Three things follow, and they are the point of measuring rather than estimating:
 
 ### Scan rate and link cost — measured 2026-09-03
 
-On the board, with `python/` driving it over USB CDC.
+On the board, with the Python bench tool of the time driving it over USB CDC.
 
 | | |
 |---|---|
@@ -300,8 +300,7 @@ else. It is bounded by our own code rather than by the USB stack's behaviour,
 which is the property worth having.
 
 These numbers are also a test now, rather than only a record: `make test-hardware`
-budgets a ping at 8 periods and a `state_report` at 20, against the 3.0 and 9.1
-measured here. Reverting the handoff fails it on the first assertion, which is
+budgets a `state_report` at 20 periods, against the 9.1 measured here. Reverting the handoff fails it on the first assertion, which is
 the point — a measurement written down once is a measurement that quietly stops
 being true.
 
@@ -361,15 +360,15 @@ by the board against itself, through the loopback harness: 228 µs mid-trial,
 with a further ~1.1 ms on the trial's first state only. See "Response latency
 and duration accuracy" below.
 
-**What *is* verified without a board:** the pin map above, the port-register
-reads and writes, the timer ISR, and a whole session over a real UART, all under
-Renode in CI. See `emulation/README.md` — and note that it proves the HAL
-correct and says nothing whatever about how long a scan takes.
+**What is not verified without a board:** the HAL. The Renode suite that ran
+the pin map, the port registers, the timer ISR and a session over a real UART
+went with the Python that drove it; `emulation/` still has the platform for
+running the firmware under Renode by hand.
 
 ### Response latency and duration accuracy — measured 2026-09-09
 
 Through the loopback harness, on an Uno R4 Minima, asserted from now on by
-`daemon/tests/hardware/test_timing_accuracy.py`.
+`client/python/tests/hardware/test_timing_accuracy.py`.
 
 **Duration accuracy.** A fixed dwell, ten trials at each of five scales:
 

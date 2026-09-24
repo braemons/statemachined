@@ -35,9 +35,9 @@ gh run download --name statemachined-uno_r4_minima-<sha>
 ```
 
 Check `MANIFEST.txt` against the version you believe you are testing. Once
-flashed, the board reports the same version as `fw` in its `hello_ack`
-(`statemachined hello`), and the daemon compares the two at
-`GET /api/device/firmware`.
+flashed, the board reports the same version in its `hello_ack`
+(`make bringup ARGS="device"`, §4), and the daemon compares the two
+(`ARGS="firmware"`).
 
 There is one image. There used to be two -- a bench build carrying a demo
 paradigm and a rig build with it compiled out -- and there is now nothing to
@@ -139,74 +139,68 @@ Erratic or self-starting chases are the pull-downs, not the firmware.
 
 ## 4. Talk to it
 
-Every line carries a CRC-16/CCITT-FALSE, so typing JSON into a serial monitor
-gets no reply. Use the repository's own bench instrument, which frames commands
-with the same helper CI drives the emulated board with
-([`daemon/`](https://github.com/braemons/statemachined/blob/main/daemon/README.md)):
+The board speaks COBS-framed protobuf, so a serial monitor shows nothing
+readable and typing into one does nothing. Talk to it the way a rig does: put
+the daemon in front of it, and ask the daemon.
 
 ```sh
-make bringup ARGS="hello"
+make bench                       # /dev/ttyACM0, or make bench TARGET=...
 ```
 
-`uv` builds its environment on first use; nothing lands in the system Python.
-The board is `/dev/ttyACM0` unless you say otherwise —
-`make bringup TARGET=... ARGS=...`, and `TARGET` also takes a `host:port` or a
-`socket://` URL for a device that is on a network rather than a cable.
+leaves a daemon running in front of the board (§7 has what else it gives you).
+In a second terminal:
 
-```
-hello_ack
-  seed           443ADD5C803378B8
-  board          uno_r4_minima   fw 0.1.0   proto 1
-  lines          8 in, 8 out
-  scan_hz        11234  (above the 10000 Hz target)
-  graph          none
-  caps           {"max_line": 512, ...}
+```sh
+make bringup ARGS="device"
 ```
 
-> **`scan_hz` in the `hello_ack` is what the board actually achieves.**
+`bringup` is `statemachinectl`, the client's command line, pointed at that
+daemon; everything it prints is JSON. `TARGET` takes a device path, a
+`host:port`, or a `socket://` URL for a device on a network rather than a
+cable.
+
+```
+{
+  "connected": true,
+  "target": "/dev/ttyACM0",
+  "board": "uno_r4_minima",
+  "firmware_version": "0.3.0",
+  "protocol_version": 2,
+  "measured_scan_hz": 11234,
+  "capacities": { "max_line": 512, "max_graphs": 20, ... },
+  ...
+}
+```
+
+> **`measured_scan_hz` is what the board actually achieves.**
 
 It is measured at boot rather than declared — 2000 repetitions of reading and
 conditioning the pins, timed — so it is what the board actually achieves, not
 what the design hoped for. It is a _floor_: it covers the pins only, and
 evaluating a state's transitions sits on top of it and depends on the graph.
-Renode reports something in the hundreds of kHz here and it means nothing, since
-virtual time is not time.
 
-Sending `hello` also **takes the rig**: a board that was arming its own trials
-out of its own storage (§7) stops doing so, the run in flight is cancelled
-through the ordinary exit path, and its result is still reported. The stored
-setting survives, so the next boot comes up self-driving again; restarting it in
-this session takes another `autorun`. That asymmetry is deliberate — a daemon
-that crashed must not be able to leave a board rewarding an animal nobody is
-watching. Note that _opening_ the port is not enough — a serial monitor does
-that — it is the greeting that hands over. Only `hello` and `report` greet the
-board; `make bringup ARGS="monitor"` watches the link and sends nothing, which
-is how you look at a board that is still running.
+Starting the daemon also **takes the rig**: the daemon greets the board, and a
+board that was arming its own trials out of its own storage (§7) stops doing
+so; the run in flight is cancelled through the ordinary exit path, and its
+result is still reported. The stored setting survives, so the next boot comes up
+self-driving again. That asymmetry is deliberate — a daemon that crashed must
+not be able to leave a board rewarding an animal nobody is watching. Opening the
+port is not enough to take it — a serial monitor does that — it is the greeting
+that hands over.
 
 ---
 
 ## 5. Prove the pins reach the line numbers
 
 First, ask the board which pin each line _is_. It answers out of the same table
-its firmware calls `pinMode()` over, so this is the board's own word and not
-this tool's:
+its firmware calls `pinMode()` over, so this is the board's own word:
 
 ```sh
-make bringup ARGS="--hello pins"
+make bringup ARGS="lines"
 ```
 
-```
-  inputs
-    line 0   D2
-    ...
-  outputs
-    line 3   A0
-```
-
-Firmware older than `PROTOCOL.md` §3.6 answers `no_pin_map` here, which is not
-a failure — it means the daemon will fall back to its own table and label every
-pin it shows as **assumed**. Flash current firmware if you would rather it were
-checked.
+`board_input_pins` and `board_output_pins` are the labels, line 0 first:
+`D2 … D9` in, `D10 D11 D12 A0 … A4` out on the reference board.
 
 Then watch the lines move:
 
@@ -214,39 +208,26 @@ Then watch the lines move:
 make bringup ARGS="state"
 ```
 
-If the board has not been greeted since it was reset it answers `not_ready`,
-because nothing but `hello` is accepted before a session exists. Use
-`ARGS="--hello state"` — which takes the rig, as §4 says.
-
-`"io":{"in":N,"out":M}` is the only way anything outside the device can check
-that a graph's line numbers reach the pins somebody wired, because there is no
-read-back path. The tool prints both as a row of bits with line 0 on the left
-and names the pins from `HARDWARE.md`:
-
-```
-  in             1.......   high: 0 (D2)
-  out            .......1   high: 7 (A4)
-```
-
-Hold the start switch and ask again: `in` goes from `0` to `1`. Hold both
-switches: `3`. **This is the only check that cannot be done in software**: the
-`pins` command settles what the firmware believes, and this settles whether the
-wire is in that hole. `ARGS="watch"` polls it a few times a second so you can do that
-with both hands on the wires.
+`input_word` and `output_word` are the only way anything outside the device can
+check that a graph's line numbers reach the pins somebody wired, because there
+is no read-back path. Hold the start switch and ask again: `input_word` goes
+from `0` to `1`. Hold both switches: `3`. **This is the only check that cannot
+be done in software**: the pin table settles what the firmware believes, and
+this settles whether the wire is in that hole. `ARGS="watch"` follows it as it
+changes, so you can do that with both hands on the wires.
 
 The same reply carries `scan.overruns` and `scan.worst_gap` — scan periods that
-went by with no scan in them, counted rather than absorbed. `ARGS="load"` reads
-them, sends 200 pings back to back, and reads them again; it exits non-zero if
-the count moved.
+went by with no scan in them, counted rather than absorbed.
 
 > **If overruns climb steeply under link traffic, that is a finding.**
 
 They did, on the reference board, and the fix is in: the scan runs in the timer
-ISR and the foreground holds the engine only while it is parsing a command. What
+ISR and the foreground holds the engine only while it handles a command. What
 remains is that hold — about **3 periods per command** on an Uno R4 Minima,
-against 9.9 before — and it is bounded by our own parse rather than by whatever
+against 9.9 before — and it is bounded by our own work rather than by whatever
 the USB stack is doing. The measurement, and the reasoning, are at the top of
 `firmware/src/main.cpp`; the numbers are in [`hardware.md`](hardware.md).
+`make test-hardware` (§5a) puts the link under load and checks it.
 
 A board reporting _far_ more than that, or a `worst_gap` in the hundreds, is
 still a finding. So is any non-zero `scan.tx_stalls`, which means a reply had to
@@ -259,15 +240,18 @@ wait for the wire because the outbound queue was full.
 Everything from §4 and §5 that does not need a person's eyes is a test suite:
 
 ```sh
-make test-hardware                      # or TARGET=host:5000, as above
+make test-hardware TARGET=/dev/ttyACM0   # or TARGET=host:5000, as above
 ```
 
-Connect the board and run it. It greets the device once — **which takes the
-rig**, as §4 says — and then asserts what the sections above ask you to read:
-`scan_hz` against the 10 kHz target, what a command costs the scan, a drawn
-duration against the board's own clock, the framing rules against lines a
-well-behaved host would never send, and a whole trial's result arriving intact
-while the scan runs in the timer ISR.
+Stop `make bench` first: one daemon owns the port at a time, and this suite
+starts its own. It greets the device once — **which takes the rig**, as §4
+says — and then asserts what the sections above ask you to read, driving the
+board through the daemon and the client the way a session does: `scan_hz`
+against the 10 kHz target, what link traffic costs the scan, drawn durations
+against the board's own clock, the response path through the loopback harness,
+and whole trials arriving intact while the scan runs in the timer ISR. It lives
+in `client/python/tests/hardware/`; `TARGET=native` runs it against the
+firmware built for this machine, which is what CI does.
 
 It is **not** part of `make ci`. A target that fails on every machine without a
 board attached is a target people learn to ignore.
@@ -311,22 +295,6 @@ the bench lamps is harmless: a pin drives an LED and a jumper equally well.
 
 A run takes about 90 seconds and leaves the device idle.
 
-### Whole sessions, against this board
-
-`make test-hardware` drives the board one command at a time, the way a bench
-instrument does. To run whole _sessions_ against it — several trials, through
-the daemon's HTTP API and through `StatemachinedDevice`, with the paradigms
-answering their own response windows through the harness above:
-
-```sh
-make test-runs-hardware TARGET=/dev/ttyACM0
-```
-
-Those are the same tests `make test-runs` runs with no board attached, against
-the firmware built for this machine. That is the point of them: the far end is
-a fixture, so a session that passes in CI and fails here has found something
-about the board rather than about the test.
-
 ---
 
 ## 6. Fail-safe, physically
@@ -349,10 +317,10 @@ explicit `autorun` to get there.
 
 ## 7. The daemon and the web UI, in front of the board
 
-Everything above talks to the board with one command at a time. This runs the
-whole host half against it -- the API of [`api.md`](../reference/api.md), the trace, and the
-six panels of [`daemon.md`](../developer/daemon.md) §5 -- so that what you are looking at in
-a browser is a real device.
+This is the daemon §4 started, and what else it serves: the API of
+[`api.md`](../reference/api.md), the trace, and the six panels of
+[`daemon.md`](../developer/daemon.md) §5 -- so that what you are looking at in a
+browser is a real device.
 
 ```sh
 make bench                       # /dev/ttyACM0, or make bench TARGET=...
@@ -360,7 +328,7 @@ make bench                       # /dev/ttyACM0, or make bench TARGET=...
 
 Then open **http://127.0.0.1:8081/**. The daemon greets the board on startup,
 pushes the wiring from the line map in
-`daemon/bench/statemachined_bench_rig_config.toml`, and seeds its graph store
+`tools/bench/statemachined_bench_rig_config.toml`, and seeds its graph store
 from `graphs/` into `build/bench/graphs` -- a copy, so deleting a graph in the
 browser does not delete an example from the repository. Greeting takes the rig,
 as it does anywhere else.
@@ -371,7 +339,7 @@ is `max_graphs` missing from `caps`, and `max_path` at 64 rather than 255.
 `make upload` fixes it.
 
 ```sh
-make bringup ARGS="hello"        # caps, before wondering why an upload failed
+make bringup ARGS="device"       # caps, before wondering why an upload failed
 ```
 
 ### 7a. Give it a graph, and let go of it
@@ -399,13 +367,14 @@ The reply to a save carries `write_count`. That is flash wear made visible --
 the RA4M1's data flash is good for about 100,000 erase cycles -- and it is worth
 glancing at on a board that has been through a lot of bring-ups.
 
-If you would rather do it without the browser:
+If you would rather do it without the browser, the client does the same:
 
-```sh
-curl -X PUT localhost:8081/api/device/autorun \
-     -H 'content-type: application/json' \
-     -d '{"enabled":true,"graph_name":"state-walk","start_now":false}'
-curl -X POST localhost:8081/api/device/save
+```python
+from statemachined_client import StatemachinedClient
+
+rig = StatemachinedClient("127.0.0.1:8082")
+rig.write_autorun(True, graph_name="state-walk", start_now=False)
+rig.save_settings()
 ```
 
 `start_now: false` is the order that works while setting a rig up: a save is
@@ -420,7 +389,7 @@ a second protocol implementation, but `firmware/native/` driven by an ordinary
 loop instead of a timer ISR. Two terminals:
 
 ```sh
-make bench-device                             # socket://127.0.0.1:5300
+make bench-device                             # listens on 127.0.0.1:5300
 make bench TARGET=socket://127.0.0.1:5300
 ```
 
