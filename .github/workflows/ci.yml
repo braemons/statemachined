@@ -116,6 +116,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The image records its version, which comes from the last `v*` tag;
+          # a shallow checkout has none and `make image` refuses to guess.
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
       - name: Cache PlatformIO
         uses: actions/cache@v4
