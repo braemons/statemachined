@@ -90,6 +90,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .btree_map(["."]);
     config.compile_protos(&files, &[&proto_root])?;
 
+    // The board's link: a separate package, and only its descriptor. The daemon
+    // does not compile the link into types; it reads this at run time and
+    // carries each message as the `msg_type` and fields it has always handled,
+    // so only the codec under them had to change. See
+    // `daemon-rs/src/device/link_codec.rs`.
+    let scratch = std::env::temp_dir().join(format!("protogen-link-{}", std::process::id()));
+    std::fs::create_dir_all(&scratch)?;
+    prost_build::Config::new()
+        .out_dir(&scratch)
+        .file_descriptor_set_path(out_dir.join("link_descriptor.bin"))
+        .compile_protos(
+            &[proto_root.join("statemachined/link/v1/link.proto")],
+            &[&proto_root],
+        )?;
+    std::fs::remove_dir_all(&scratch)?;
+
     println!("wrote {}", out_dir.display());
     Ok(())
 }

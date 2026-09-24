@@ -20,7 +20,8 @@ use std::time::Duration;
 
 use serde_json::{Map, Value};
 
-use crate::device::message_framing::{command_line, covered_bytes, crc16_ccitt, CRC_INIT};
+use crate::device::link_codec::encode_host_message;
+use crate::device::message_framing::{crc16_ccitt, CRC_INIT};
 use crate::device::message_vocabulary::MsgType;
 use crate::device::request_response_session::{RequestProblem, RequestResponseSession, Sink};
 use crate::graph_set_compiler::UploadMessage;
@@ -32,10 +33,10 @@ use crate::graph_set_compiler::UploadMessage;
 /// exist yet.
 ///
 /// This is the seam. The compiler knows what a name means and nothing about
-/// framing; this knows the framing and nothing about names. The checksum is the
-/// reason the two have to meet somewhere: it is folded over the CRC-covered
-/// bytes of every message actually sent, so it can only be computed by whoever
-/// sent them.
+/// encoding; this knows the encoding and nothing about names. The checksum is
+/// the reason the two have to meet somewhere: it is folded over the protobuf of
+/// every message actually sent, so it can only be computed by whoever encoded
+/// them.
 pub fn send_compiled_upload_messages<S: Sink>(
     session: &mut RequestResponseSession<S>,
     upload_messages: &[UploadMessage],
@@ -47,24 +48,22 @@ pub fn send_compiled_upload_messages<S: Sink>(
         let mut fields = upload_message.fields.clone();
         let is_set_end = upload_message.msg_type == MsgType::SetEnd;
         if is_set_end {
-            fields.insert(
-                "checksum".into(),
-                Value::String(format!("{rolling_checksum:04X}")),
-            );
+            fields.insert("checksum".into(), Value::from(rolling_checksum));
         }
 
         let message_id = session.next_message_id();
-        let pairs: Vec<(&str, Value)> = fields
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.clone()))
-            .collect();
-        let line = command_line(upload_message.msg_type.as_str(), message_id as u64, &pairs);
+        let payload = encode_host_message(upload_message.msg_type.as_str(), message_id, &fields)
+            .map_err(RequestProblem::Unsendable)?;
         if !is_set_end {
             // set_end carries the checksum and so cannot be inside it.
-            rolling_checksum = crc16_ccitt(covered_bytes(&line), rolling_checksum);
+            rolling_checksum = crc16_ccitt(&payload, rolling_checksum);
         }
-        reply =
-            session.request_line(&line, message_id, timeout, upload_message.msg_type.as_str())?;
+        reply = session.request_payload(
+            &payload,
+            message_id,
+            timeout,
+            upload_message.msg_type.as_str(),
+        )?;
     }
     Ok(reply)
 }

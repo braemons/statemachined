@@ -8,7 +8,7 @@
 
 use serde_json::Value;
 
-use super::message_framing::{covered_bytes, crc16_ccitt, CRC_INIT};
+use super::message_framing::{crc16_ccitt, CRC_INIT};
 use super::message_vocabulary::{field, MsgType};
 
 /// A trial's result, reassembled, with the checksum this side computed.
@@ -24,8 +24,8 @@ impl ReassembledTrialResult {
     pub fn checksum_matches(&self) -> bool {
         self.end
             .get("checksum")
-            .and_then(Value::as_str)
-            .is_some_and(|claimed| claimed.to_ascii_uppercase() == format!("{:04X}", self.computed))
+            .and_then(Value::as_u64)
+            .is_some_and(|claimed| claimed == self.computed as u64)
     }
 }
 
@@ -55,10 +55,11 @@ impl TrialResultCollector {
         self.begin.is_some()
     }
 
-    /// Take one already-parsed line. The result, when this line completes it.
+    /// Take one decoded message, with the protobuf it arrived as. The result,
+    /// when this message completes it.
     pub fn feed(
         &mut self,
-        line: &str,
+        payload: &[u8],
         message: &Value,
     ) -> Result<Option<ReassembledTrialResult>, String> {
         let kind = message
@@ -69,7 +70,7 @@ impl TrialResultCollector {
             Some(MsgType::ResultBegin) => {
                 self.begin = Some(message.clone());
                 self.rows.clear();
-                self.rolling_checksum = crc16_ccitt(covered_bytes(line), CRC_INIT);
+                self.rolling_checksum = crc16_ccitt(payload, CRC_INIT);
                 Ok(None)
             }
             Some(MsgType::ResultPath) => {
@@ -84,7 +85,7 @@ impl TrialResultCollector {
                         self.rows.len()
                     ));
                 }
-                self.rolling_checksum = crc16_ccitt(covered_bytes(line), self.rolling_checksum);
+                self.rolling_checksum = crc16_ccitt(payload, self.rolling_checksum);
                 if let Some(rows) = message.get("p").and_then(Value::as_array) {
                     self.rows.extend(rows.iter().cloned());
                 }

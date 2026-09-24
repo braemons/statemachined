@@ -51,3 +51,8 @@ pub mod braemons {
 /// every rpc, argument and return types — without having the `.proto` to hand.
 /// The Python daemon does not offer this.
 pub const DESCRIPTOR: &[u8] = include_bytes!("descriptor_for_reflection.bin");
+
+/// The board's link, `proto/statemachined/link/v1/link.proto`, as a descriptor
+/// set. Not the API: nothing here is served, and `device/link_codec.rs` is the
+/// only reader.
+pub const LINK_DESCRIPTOR: &[u8] = include_bytes!("link_descriptor.bin");

@@ -44,6 +44,7 @@ thiserror = "2"
 libc = "0.2"
 mdns-sd = "0.21.4"
 sha2 = "0.11.0"
+prost-reflect = "0.16"
 
 [dev-dependencies]
 tempfile = "3"

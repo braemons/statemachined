@@ -1,21 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The graph-set upload, byte for byte, and then against the firmware itself.
+//! The graph-set upload, message for message, and then against the firmware.
 //!
 //! **The rolling checksum is the part that can be wrong silently.** It folds
-//! over the CRC-covered bytes of every line sent, so a line built one member
-//! out of order still uploads, still carries a valid CRC — and makes `set_end`
+//! over the protobuf of every message sent, so a checksum folded over anything
+//! else still uploads, still passes every frame's CRC — and makes `set_end`
 //! disagree with the device, which then refuses a set that was fine.
 //!
 //! Two checks, because they catch different things:
 //!
-//! * `tools/graph_set_cases.py` records every line Python puts on the wire for
-//!   each compiled case. Rust has to put the same bytes on a real socket.
+//! * `tools/graph_set_cases.py` records every message Python uploaded for each
+//!   compiled case. What a board decodes off a real socket has to be those
+//!   messages, and `set_end` has to carry the fold of the bytes that arrived.
 //! * `build/statemachined_native_device` — the firmware's own session and
 //!   engine, built for this machine — has to answer `set_ok`. That is the
 //!   device's word that its fold agrees, and it needs no Python to say so.
 //!   Skipped, and says so, when `make integration-device` has not been run.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -23,9 +24,10 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 use statemachined::device::graph_set_upload::send_compiled_upload_messages;
-use statemachined::device::message_framing::{parse_reply, statemachined_line};
+use statemachined::device::link_codec::{decode_host_message, encode_device_message};
+use statemachined::device::message_framing::{crc16_ccitt, open_frame, seal_frame, CRC_INIT};
 use statemachined::device::request_response_session::{
     Discard, RequestProblem, RequestResponseSession,
 };
@@ -53,19 +55,59 @@ struct Answer {
 
 #[derive(Debug, Deserialize)]
 struct Compiled {
-    framed_lines: Vec<String>,
+    upload_messages: Vec<PythonMessage>,
 }
 
-fn compiled_cases() -> Vec<(Case, Vec<String>)> {
+#[derive(Debug, Deserialize)]
+struct PythonMessage {
+    msg_type: String,
+    fields: Map<String, Value>,
+}
+
+fn compiled_cases() -> Vec<(Case, Vec<PythonMessage>)> {
     let cases: Vec<Case> = serde_json::from_str(include_str!("graph_set_cases.json"))
         .expect("the cases tools/graph_set_cases.py writes");
     cases
         .into_iter()
         .filter_map(|mut case| {
-            let lines = case.answer.compiled.take()?.framed_lines;
-            Some((case, lines))
+            let messages = case.answer.compiled.take()?.upload_messages;
+            Some((case, messages))
         })
         .collect()
+}
+
+/// A command frame off the socket, as its protobuf and as the message it is.
+fn next_command(reader: &mut impl Read) -> Option<(Vec<u8>, Value)> {
+    let mut stuffed = Vec::new();
+    let mut byte = [0u8];
+    loop {
+        if reader.read(&mut byte).ok()? == 0 {
+            return None;
+        }
+        if byte[0] == 0 {
+            if stuffed.is_empty() {
+                continue;
+            }
+            break;
+        }
+        stuffed.push(byte[0]);
+    }
+    let payload = open_frame(&stuffed).expect("a frame the device could read");
+    let command = decode_host_message(&payload).expect("a command the device could read");
+    Some((payload, command))
+}
+
+/// A reply, framed the way the device frames one.
+fn reply(writer: &mut impl Write, msg_type: &str, answering: &Value, fields: Value) {
+    let in_reply_to = answering["message_id"].as_u64().unwrap() as u16;
+    let payload = encode_device_message(
+        msg_type,
+        900,
+        Some(in_reply_to),
+        fields.as_object().unwrap(),
+    )
+    .expect("a DeviceMessage");
+    writer.write_all(&seal_frame(&payload)).unwrap();
 }
 
 fn session_on(address: &str) -> RequestResponseSession<Discard> {
@@ -73,42 +115,60 @@ fn session_on(address: &str) -> RequestResponseSession<Discard> {
     RequestResponseSession::new(link, Discard)
 }
 
-/// A board that says yes to everything and keeps every line it was sent.
+/// A board that says yes to everything and keeps every command it was sent,
+/// with the checksum it folded over them by itself.
 ///
 /// `set_ok` for `set_end`, `ack` for the rest, each naming the command it
 /// answers. Whether the set is any good is the firmware's question, below.
-fn an_agreeable_board() -> (String, JoinHandle<Vec<String>>) {
+fn an_agreeable_board() -> (String, JoinHandle<(Vec<Value>, u16)>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("a port");
     let address = listener.local_addr().unwrap().to_string();
     let board = std::thread::spawn(move || {
         let (stream, _) = listener.accept().expect("the link connects");
         let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
         let mut received = Vec::new();
-        for line in BufReader::new(stream).lines() {
-            let Ok(line) = line else { break };
-            let command = parse_reply(&line).expect("a command the device could read");
-            let reply = if command["msg_type"] == "set_end" {
-                "set_ok"
+        let mut folded = CRC_INIT;
+        while let Some((payload, command)) = next_command(&mut reader) {
+            if command["msg_type"] == "set_end" {
+                reply(&mut writer, "set_ok", &command, json!({}));
             } else {
-                "ack"
-            };
-            let body = format!(
-                // Without its closing brace: the framing puts the crc before it.
-                "{{\"msg_type\":\"{reply}\",\"in_reply_to\":{}",
-                command["message_id"]
-            );
-            writer
-                .write_all(format!("{}\n", statemachined_line(&body)).as_bytes())
-                .unwrap();
-            received.push(line);
+                folded = crc16_ccitt(&payload, folded);
+                reply(&mut writer, "ack", &command, json!({}));
+            }
+            received.push(command);
         }
-        received
+        (received, folded)
     });
     (address, board)
 }
 
+/// Where a decoded command differs from the message Python uploaded, if it
+/// does. A `null` Python sent is an absent field now; a field Python left out
+/// may come back at its zero, since a plain protobuf field always does.
+fn difference(mine: &Value, python: &PythonMessage) -> Option<String> {
+    if mine["msg_type"] != python.msg_type.as_str() {
+        return Some(format!(
+            "{} where python sent {}",
+            mine["msg_type"], python.msg_type
+        ));
+    }
+    for (key, theirs) in &python.fields {
+        let ours = mine.get(key);
+        let agrees = match (theirs, ours) {
+            (Value::Null, None) => true,
+            (theirs, Some(ours)) => theirs == ours,
+            _ => false,
+        };
+        if !agrees {
+            return Some(format!("{key}: rust {ours:?}, python {theirs}"));
+        }
+    }
+    None
+}
+
 #[test]
-fn every_line_is_the_line_python_sent() {
+fn every_message_the_board_decodes_is_the_one_python_uploaded() {
     let cases = compiled_cases();
     assert!(cases.len() > 15, "only {} compiled cases", cases.len());
     let mut disagreed = Vec::new();
@@ -126,23 +186,35 @@ fn every_line_is_the_line_python_sent() {
             .expect("an agreeable board agrees");
         assert_eq!(reply["msg_type"], "set_ok", "{}", case.why);
         drop(session);
-        let ours = board.join().unwrap();
-        if let Some((position, (mine, python))) = ours
-            .iter()
-            .zip(&theirs)
-            .enumerate()
-            .find(|(_, (mine, python))| mine != python)
-        {
+        let (ours, folded) = board.join().unwrap();
+        if ours.len() != theirs.len() {
             disagreed.push(format!(
-                "{}: line {position}\n    rust:   {mine}\n    python: {python}",
-                case.why
-            ));
-        } else if ours.len() != theirs.len() {
-            disagreed.push(format!(
-                "{}: {} lines, python sent {}",
+                "{}: {} messages, python sent {}",
                 case.why,
                 ours.len(),
                 theirs.len()
+            ));
+            continue;
+        }
+        if let Some((position, why)) =
+            ours.iter()
+                .zip(&theirs)
+                .enumerate()
+                .find_map(|(position, (mine, python))| {
+                    difference(mine, python).map(|why| (position, why))
+                })
+        {
+            disagreed.push(format!("{}: message {position}: {why}", case.why));
+            continue;
+        }
+        // The checksum set_end carries is the fold of what the board actually
+        // received -- computed here from the bytes off the socket, not taken
+        // from the daemon's word for it.
+        let claimed = ours.last().and_then(|end| end["checksum"].as_u64());
+        if claimed != Some(folded as u64) {
+            disagreed.push(format!(
+                "{}: set_end carries {claimed:?}, the bytes that arrived fold to {folded}",
+                case.why
             ));
         }
     }
@@ -171,25 +243,20 @@ fn a_refusal_mid_upload_stops_it_and_names_the_message() {
     let board = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
         let mut seen = 0;
-        for line in BufReader::new(stream).lines() {
-            let Ok(line) = line else { break };
+        while let Some((_, command)) = next_command(&mut reader) {
             seen += 1;
-            let command = parse_reply(&line).unwrap();
-            let body = if command["msg_type"] == "graph_state" {
-                format!(
-                    "{{\"msg_type\":\"error\",\"in_reply_to\":{},\"code\":\"bad_state\",\"context\":\"i\"",
-                    command["message_id"]
-                )
+            if command["msg_type"] == "graph_state" {
+                reply(
+                    &mut writer,
+                    "error",
+                    &command,
+                    json!({"code": "bad_state", "context": "i"}),
+                );
             } else {
-                format!(
-                    "{{\"msg_type\":\"ack\",\"in_reply_to\":{}",
-                    command["message_id"]
-                )
-            };
-            writer
-                .write_all(format!("{}\n", statemachined_line(&body)).as_bytes())
-                .unwrap();
+                reply(&mut writer, "ack", &command, json!({}));
+            }
         }
         seen
     });

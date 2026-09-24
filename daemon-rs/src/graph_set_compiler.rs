@@ -86,7 +86,8 @@ fn refuse<T>(sentence: impl Into<String>) -> Result<T, CompileError> {
 /// constant would mean a graph that fits in the tests and not on the bench.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceCapabilities {
-    pub max_line: i64,
+    /// The longest frame the board accepts, encoded, delimiter included.
+    pub max_frame: i64,
     pub max_states: i64,
     pub max_transitions: i64,
     pub max_output_actions: i64,
@@ -123,7 +124,7 @@ impl DeviceCapabilities {
         // board holds zero states then a set that needs one does not fit, which
         // is answered by the fit check rather than asserted here.
         DeviceCapabilities {
-            max_line: number("max_line", 0),
+            max_frame: number("max_frame", 0),
             max_states: number("max_states", 1),
             max_transitions: number("max_transitions", 0),
             max_output_actions: number("max_output_actions", 0),

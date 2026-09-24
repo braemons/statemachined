@@ -8,15 +8,15 @@
 
 use std::time::{Duration, Instant};
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use super::message_framing::{
-    command_line, parse_reply, DeviceRefusedTheCommand, FramingError,
-};
+use super::link_codec::{decode_device_message, encode_host_message};
+use super::message_framing::DeviceRefusedTheCommand;
 use super::message_vocabulary::{field, MsgType};
-use super::serial_link::SerialLink;
+use super::serial_link::{ReceivedFrame, SerialLink};
 
-pub const PROTOCOL_VERSION: i64 = 1;
+/// 2: the protobuf link. 1 was the NDJSON wire, which no board speaks now.
+pub const PROTOCOL_VERSION: i64 = 2;
 
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -29,6 +29,10 @@ pub enum RequestProblem {
     Refused(DeviceRefusedTheCommand),
     /// The link itself failed.
     Link(std::io::Error),
+    /// The command could not be put into link.proto's shape: a field it does
+    /// not have, a value out of its range. A daemon bug, caught before a byte
+    /// was sent rather than after the board ignored half of it.
+    Unsendable(String),
 }
 
 impl std::fmt::Display for RequestProblem {
@@ -37,6 +41,7 @@ impl std::fmt::Display for RequestProblem {
             Self::NoReplyInTime(sentence) => f.write_str(sentence),
             Self::Refused(refusal) => write!(f, "{refusal}"),
             Self::Link(problem) => write!(f, "{problem}"),
+            Self::Unsendable(problem) => write!(f, "cannot send that to the board: {problem}"),
         }
     }
 }
@@ -49,16 +54,13 @@ impl From<std::io::Error> for RequestProblem {
     }
 }
 
-/// A session seed as `hex64`: 16 hex digits, **never a JSON number**.
-///
-/// 64 bits do not survive a double, and a seed that silently changes is a
-/// reproducibility bug nobody would find.
-pub fn random_seed() -> String {
+/// A session seed: 64 bits, which the link carries as a `uint64`.
+pub fn random_seed() -> u64 {
     // Two words out of the OS, rather than a PRNG this would then have to seed
     // from somewhere. A session seed is drawn once per connection.
     let mut bytes = [0u8; 8];
     getrandom(&mut bytes);
-    format!("{:016X}", u64::from_be_bytes(bytes))
+    u64::from_be_bytes(bytes)
 }
 
 fn getrandom(bytes: &mut [u8]) {
@@ -70,23 +72,24 @@ fn getrandom(bytes: &mut [u8]) {
 
 /// What to do with a message that is not the reply being waited for.
 pub trait Sink {
-    /// A message the device sent unprompted, **with the raw line**.
+    /// A message the device sent unprompted, **with the protobuf it came as**.
     ///
-    /// The line is needed because a result's rolling checksum is over bytes, so
-    /// a reader that only saw parsed messages could not check it — and the
+    /// The bytes are needed because a result's rolling checksum is over them,
+    /// so a reader that only saw decoded messages could not check it — and the
     /// result chunks are exactly the messages that arrive unsolicited.
-    fn unsolicited(&mut self, message: &Value, line: &str);
+    fn unsolicited(&mut self, message: &Value, payload: &[u8]);
 
-    /// A line that is not a message, or is one nobody asked for, and why.
-    fn junk(&mut self, line: &str, why: &str);
+    /// A frame that is not a message, or one nobody asked for, and why.
+    /// `text` is what the serial monitor would show for it.
+    fn junk(&mut self, text: &str, why: &str);
 }
 
 /// A sink that drops everything, for a caller with nothing to do with it.
 pub struct Discard;
 
 impl Sink for Discard {
-    fn unsolicited(&mut self, _message: &Value, _line: &str) {}
-    fn junk(&mut self, _line: &str, _why: &str) {}
+    fn unsolicited(&mut self, _message: &Value, _payload: &[u8]) {}
+    fn junk(&mut self, _text: &str, _why: &str) {}
 }
 
 pub struct RequestResponseSession<S: Sink> {
@@ -149,25 +152,30 @@ impl<S: Sink> RequestResponseSession<S> {
         fields: &[(&str, Value)],
     ) -> Result<Value, RequestProblem> {
         let message_id = self.next_message_id();
-        let line = command_line(msg_type.as_str(), message_id as u64, fields);
-        self.request_line(&line, message_id, timeout, msg_type.as_str())
+        let fields: Map<String, Value> = fields
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.clone()))
+            .collect();
+        let payload = encode_host_message(msg_type.as_str(), message_id, &fields)
+            .map_err(RequestProblem::Unsendable)?;
+        self.request_payload(&payload, message_id, timeout, msg_type.as_str())
     }
 
-    /// The same, for a command already framed by the caller.
+    /// The same, for a command already encoded by the caller.
     ///
     /// A graph upload folds a rolling checksum over the exact bytes it sent, so
-    /// it has to build the line itself and cannot let `request` build one it
-    /// never sees. Everything below the framing — matching on `in_reply_to`,
-    /// routing the unsolicited aside, failing on a refusal, not retrying — is
-    /// the same and is not re-decided there.
-    pub fn request_line(
+    /// it has to encode the message itself and cannot let `request` encode one
+    /// it never sees. Everything below the encoding — matching on
+    /// `in_reply_to`, routing the unsolicited aside, failing on a refusal, not
+    /// retrying — is the same and is not re-decided there.
+    pub fn request_payload(
         &mut self,
-        line: &str,
+        payload: &[u8],
         message_id: u16,
         timeout: Duration,
         what: &str,
     ) -> Result<Value, RequestProblem> {
-        self.link.write_line(line)?;
+        self.link.write_frame(payload)?;
         let deadline = Instant::now() + timeout;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -178,17 +186,17 @@ impl<S: Sink> RequestResponseSession<S> {
                     trimmed(timeout.as_secs_f64())
                 )));
             }
-            let Some(raw) = self.link.read_line(Some(remaining))? else {
+            let Some(frame) = self.link.read_frame(Some(remaining))? else {
                 continue;
             };
-            let Some(message) = self.receive(&raw) else {
+            let Some(message) = self.receive(frame) else {
                 continue;
             };
             if Self::answers(&message, message_id) {
                 if msg_type_of(&message) == Some(MsgType::Error) {
                     if message.get(field::IN_REPLY_TO).is_none() {
                         self.sink.junk(
-                            &raw,
+                            &message.to_string(),
                             "an error naming no message_id; taken as the reply anyway",
                         );
                     }
@@ -204,26 +212,34 @@ impl<S: Sink> RequestResponseSession<S> {
                 .get(field::IN_REPLY_TO)
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "none".into());
-            self.sink
-                .junk(&raw, &format!("reply to message_id {named}, expected {message_id}"));
+            self.sink.junk(
+                &message.to_string(),
+                &format!("reply to message_id {named}, expected {message_id}"),
+            );
         }
     }
 
-    /// Parse one received line, routing what is not a reply.
-    pub fn receive(&mut self, line: &str) -> Option<Value> {
-        if line.trim().is_empty() {
-            return None;
-        }
-        let message = match parse_reply(line) {
+    /// Decode one received frame, routing what is not a reply.
+    pub fn receive(&mut self, frame: ReceivedFrame) -> Option<Value> {
+        let payload = match frame {
+            Ok(payload) => payload,
+            Err(problem) => {
+                self.sink
+                    .junk(&format!("<{problem}>"), &problem.to_string());
+                return None;
+            }
+        };
+        let message = match decode_device_message(&payload) {
             Ok(message) => message,
-            Err(FramingError(why)) => {
-                self.sink.junk(line, &why);
+            Err(why) => {
+                let hex: String = payload.iter().map(|byte| format!("{byte:02x}")).collect();
+                self.sink.junk(&format!("<bad_message: {hex}>"), &why);
                 return None;
             }
         };
         let kind = msg_type_of(&message);
         if kind.is_some_and(|kind| kind.is_unsolicited()) {
-            self.sink.unsolicited(&message, line);
+            self.sink.unsolicited(&message, &payload);
             return None;
         }
         // A `started` with nothing to reply to is a trial the *line* began. It
@@ -231,7 +247,7 @@ impl<S: Sink> RequestResponseSession<S> {
         if kind.is_some_and(|kind| kind.is_unsolicited_when_unprompted())
             && message.get(field::IN_REPLY_TO).is_none()
         {
-            self.sink.unsolicited(&message, line);
+            self.sink.unsolicited(&message, &payload);
             return None;
         }
         Some(message)
@@ -242,12 +258,8 @@ impl<S: Sink> RequestResponseSession<S> {
     ///
     /// **Opening the port does not do that; the greeting does.** It is the
     /// whole point of the handover that a serial monitor cannot trigger it.
-    pub fn hello(
-        &mut self,
-        seed: Option<&str>,
-        timeout: Duration,
-    ) -> Result<Value, RequestProblem> {
-        let seed = seed.map(str::to_string).unwrap_or_else(random_seed);
+    pub fn hello(&mut self, seed: Option<u64>, timeout: Duration) -> Result<Value, RequestProblem> {
+        let seed = seed.unwrap_or_else(random_seed);
         let ack = self.request(
             MsgType::Hello,
             timeout,

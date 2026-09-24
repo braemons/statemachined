@@ -993,7 +993,9 @@ fn graph_names_of(compiled: &CompiledGraphSet) -> Vec<&str> {
 /// `max_states = 0` and a board that has not greeted are different situations.
 fn capacities_to_wire(capabilities: &DeviceCapabilities) -> wire::DeviceCapacities {
     wire::DeviceCapacities {
-        max_line: capabilities.max_line as i32,
+        // The API's name from the NDJSON wire, where the budget was a line;
+        // it is the same budget, now for a frame.
+        max_line: capabilities.max_frame as i32,
         max_states: capabilities.max_states as i32,
         max_transitions: capabilities.max_transitions as i32,
         max_output_actions: capabilities.max_output_actions as i32,

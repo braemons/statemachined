@@ -1,204 +1,107 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The framing, against the bytes the device agrees to.
+//! The framing: COBS, the CRC, and a frame read back.
 //!
-//! `daemon/tests/unit/wire_vectors.json` is **data, not code**, and it is the
-//! authority: every CRC in it was produced by the emulator's independent copy
-//! and verified against `firmware/core/protocol/crc16.cpp`. So this is not a
-//! test that the Rust framing agrees with the Python framing — it is a test
-//! that it agrees with the board, which is the thing that matters and the
-//! stronger of the two.
-//!
-//! The same file is what `daemon/tests/unit/test_message_framing.py` asserts
-//! against, so the two daemons are held to one set of bytes rather than to each
-//! other.
+//! The board's side is `firmware/core/protocol/framing.cpp`, and the two are
+//! held to each other end to end in `tests/upload.rs`, where the daemon talks to
+//! the firmware compiled for this machine. What this holds them to is the
+//! arithmetic both are written from: the published COBS vectors, the published
+//! CRC check values, and the frame the protocol document draws.
 
-use serde::Deserialize;
 use statemachined::device::message_framing::{
-    covered_bytes, crc16_ccitt, parse_reply, rolling_checksum, statemachined_line, CRC_INIT,
+    cobs_decode, cobs_encode, crc16_ccitt, open_frame, seal_frame, CRC_INIT,
 };
 
-#[derive(Debug, Deserialize)]
-struct Vectors {
-    lines: Vec<LineVector>,
-    rolling: RollingVector,
-}
-
-#[derive(Debug, Deserialize)]
-struct LineVector {
-    why: String,
-    /// A message without its closing brace.
-    body: String,
-    /// What must go on the wire.
-    line: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RollingVector {
-    why: String,
-    /// Indices into `lines`.
-    over: Vec<usize>,
-    checksum: String,
-}
-
-fn vectors() -> Vectors {
-    serde_json::from_str(include_str!(
-        "../../daemon/tests/unit/wire_vectors.json"
-    ))
-    .expect("the golden vectors")
+#[test]
+fn crc16_ccitt_false_matches_its_published_check_values() {
+    assert_eq!(crc16_ccitt(b"123456789", CRC_INIT), 0x29B1);
+    assert_eq!(crc16_ccitt(b"", CRC_INIT), 0xFFFF);
+    assert_eq!(crc16_ccitt(b"A", CRC_INIT), 0xB915);
 }
 
 #[test]
-fn the_vectors_are_there() {
-    // A guard on the guard: an empty file would make every test below pass.
-    let vectors = vectors();
-    assert!(!vectors.lines.is_empty(), "no line vectors");
-    assert!(!vectors.rolling.over.is_empty(), "no rolling vector");
+fn the_seed_makes_the_crc_an_accumulator() {
+    // set_end's and result_end's checksums fold many messages without keeping
+    // any of them, which only works if a split is invisible.
+    let whole = crc16_ccitt(b"123456789", CRC_INIT);
+    let folded = crc16_ccitt(b"56789", crc16_ccitt(b"1234", CRC_INIT));
+    assert_eq!(folded, whole);
 }
 
 #[test]
-fn every_golden_line_is_framed_exactly() {
-    for vector in vectors().lines {
+fn cobs_encodes_the_published_vectors() {
+    let cases: &[(&[u8], &[u8])] = &[
+        (&[0x00], &[0x01, 0x01]),
+        (&[0x00, 0x00], &[0x01, 0x01, 0x01]),
+        (&[0x00, 0x11, 0x00], &[0x01, 0x02, 0x11, 0x01]),
+        (&[0x11, 0x22, 0x00, 0x33], &[0x03, 0x11, 0x22, 0x02, 0x33]),
+        (&[0x11, 0x22, 0x33, 0x44], &[0x05, 0x11, 0x22, 0x33, 0x44]),
+        (&[0x11, 0x00, 0x00, 0x00], &[0x02, 0x11, 0x01, 0x01, 0x01]),
+        (&[], &[0x01]),
+    ];
+    for (raw, stuffed) in cases {
+        assert_eq!(&cobs_encode(raw), stuffed, "{raw:02x?}");
         assert_eq!(
-            statemachined_line(&vector.body),
-            vector.line,
-            "{}: the bytes this daemon would put on the wire are not the device's",
-            vector.why
+            cobs_decode(stuffed).as_deref(),
+            Some(*raw),
+            "{stuffed:02x?}"
         );
     }
 }
 
 #[test]
-fn every_golden_line_parses_back() {
-    // The other direction: what the device sends is what this reads. The CRC is
-    // checked before the JSON is touched, which is the rule the module exists
-    // to keep, so a line that parses here is one whose CRC was good.
-    for vector in vectors().lines {
-        let parsed = parse_reply(&vector.line)
-            .unwrap_or_else(|problem| panic!("{}: {problem}", vector.why));
-        assert!(parsed.get("msg_type").is_some(), "{}", vector.why);
+fn a_run_longer_than_one_cobs_group_round_trips() {
+    for length in [253, 254, 255, 508, 509, 600] {
+        let raw: Vec<u8> = (0..length).map(|at| 1 + (at % 255) as u8).collect();
+        let stuffed = cobs_encode(&raw);
+        assert!(
+            !stuffed.contains(&0),
+            "a zero in the stuffing of {length} bytes"
+        );
+        assert_eq!(cobs_decode(&stuffed), Some(raw), "{length} bytes");
     }
 }
 
 #[test]
-fn the_rolling_checksum_folds_the_covered_bytes_in_order() {
-    let vectors = vectors();
-    let folded: Vec<String> = vectors
-        .rolling
-        .over
-        .iter()
-        .map(|at| vectors.lines[*at].line.clone())
+fn a_frame_is_the_payload_and_its_crc_big_endian_stuffed_and_ended_with_a_zero() {
+    let payload = [0x08, 0x29, 0xBA, 0x01, 0x00];
+    let crc = crc16_ccitt(&payload, CRC_INIT);
+    let mut sealed = payload.to_vec();
+    sealed.extend_from_slice(&[(crc >> 8) as u8, crc as u8]);
+    let mut expected = cobs_encode(&sealed);
+    expected.push(0);
+    let frame = seal_frame(&payload);
+    assert_eq!(frame, expected);
+    assert_eq!(frame.iter().filter(|byte| **byte == 0).count(), 1);
+    assert_eq!(open_frame(&frame[..frame.len() - 1]), Ok(payload.to_vec()));
+}
+
+#[test]
+fn every_corrupted_byte_is_refused_rather_than_partly_believed() {
+    let payload: Vec<u8> = (0..40u8)
+        .map(|at| if at % 4 == 0 { 0 } else { at })
         .collect();
-    assert_eq!(
-        format!("{:04X}", rolling_checksum(&folded, CRC_INIT)),
-        vectors.rolling.checksum,
-        "{}",
-        vectors.rolling.why
-    );
-}
-
-#[test]
-fn a_line_with_a_wrong_crc_is_refused_before_it_is_parsed() {
-    // **The rule this module exists for.** A line whose CRC does not match is
-    // not acted on, and parsing it is acting on it.
-    let line = r#"{"msg_type":"ping","message_id":1,"crc":"0000"}"#;
-    let problem = parse_reply(line).expect_err("a bad crc is refused");
-    assert!(problem.to_string().contains("crc mismatch"), "{problem}");
-}
-
-#[test]
-fn a_line_that_is_not_ascii_is_a_framing_error() {
-    let problem = parse_reply("{\"msg_type\":\"pîng\",\"crc\":\"0000\"}")
-        .expect_err("a non-ascii line is refused");
-    assert!(problem.to_string().contains("0x80"), "{problem}");
-}
-
-#[test]
-fn a_line_with_no_crc_member_is_a_framing_error() {
-    let problem =
-        parse_reply(r#"{"msg_type":"ping","message_id":1}"#).expect_err("no crc is refused");
-    assert!(problem.to_string().contains("no trailing crc"), "{problem}");
-}
-
-#[test]
-fn good_crc_but_broken_json_says_which_it_was() {
-    // Worth telling apart: a bad CRC means the wire ate something, and good CRC
-    // with bad JSON means the *device* sent something wrong. A person on a
-    // bench chases different things for each.
-    let body = r#"{"msg_type":"ping","message_id":"#;
-    let line = statemachined_line(body);
-    let problem = parse_reply(&line).expect_err("truncated json is refused");
-    assert!(problem.to_string().contains("not JSON"), "{problem}");
-}
-
-#[test]
-fn the_covered_span_stops_before_the_crc_member() {
-    for vector in vectors().lines {
-        assert_eq!(
-            covered_bytes(&vector.line),
-            vector.body.as_bytes(),
-            "{}: the rolling checksum would fold the wrong bytes",
-            vector.why
-        );
+    let frame = seal_frame(&payload);
+    let body = &frame[..frame.len() - 1];
+    for at in 0..body.len() {
+        for flip in [0x01u8, 0x80, 0xFF] {
+            let mut bad = body.to_vec();
+            bad[at] ^= flip;
+            if bad[at] == 0 {
+                continue;
+            }
+            let refused = open_frame(&bad);
+            assert!(refused.is_err(), "byte {at} ^ {flip:02x} got through");
+        }
     }
 }
 
 #[test]
-fn the_seed_is_what_makes_the_fold_work() {
-    // Folding two lines one after another must equal seeding the second with
-    // the first's result -- which is the whole mechanism of the rolling
-    // checksum, and is worth pinning separately from the golden value.
-    let vectors = vectors();
-    let first = crc16_ccitt(covered_bytes(&vectors.lines[0].line), CRC_INIT);
-    let both = crc16_ccitt(covered_bytes(&vectors.lines[1].line), first);
-    assert_eq!(
-        both,
-        rolling_checksum(
-            &[vectors.lines[0].line.clone(), vectors.lines[1].line.clone()],
-            CRC_INIT
-        )
-    );
-}
-
-#[test]
-fn a_built_command_is_a_golden_line() {
-    // `command_line` is what every caller actually uses; `statemachined_line`
-    // is the half of it the vectors name. This ties the two together, so a
-    // change to how members are written shows up against the device's bytes
-    // rather than only against this module's own idea of them.
-    use statemachined::device::message_framing::command_line;
-    use statemachined::device::message_vocabulary::MsgType;
-
-    assert_eq!(
-        command_line(MsgType::Ping.as_str(), 1, &[]),
-        r#"{"msg_type":"ping","message_id":1,"crc":"6FE7"}"#
-    );
-    assert_eq!(
-        command_line(MsgType::State.as_str(), 0, &[]),
-        r#"{"msg_type":"state","message_id":0,"crc":"2B9F"}"#
-    );
-    // Member order is part of the bytes: a map that sorted these would frame a
-    // different line with a different CRC.
-    assert_eq!(
-        command_line(
-            MsgType::Hello.as_str(),
-            1,
-            &[
-                ("proto", serde_json::json!(1)),
-                ("seed", serde_json::json!("0123456789ABCDEF")),
-            ]
-        ),
-        r#"{"msg_type":"hello","message_id":1,"proto":1,"seed":"0123456789ABCDEF","crc":"4D87"}"#
-    );
-}
-
-#[test]
-fn a_null_field_is_written_and_not_dropped() {
-    // **The protocol distinguishes the two.** `terminal` must be present on
-    // every graph_state, as an outcome code or as null for a state that is not
-    // terminal, and a device that silently accepted the member's absence would
-    // be guessing which a graph meant.
-    use statemachined::device::message_framing::command_line;
-
-    let line = command_line("graph_state", 7, &[("terminal", serde_json::Value::Null)]);
-    assert!(line.contains(r#""terminal":null"#), "{line}");
+fn a_refusal_names_itself_in_the_boards_own_words() {
+    let frame = seal_frame(&[0x11, 0x22, 0x33]);
+    let mut bad_crc = frame[..frame.len() - 1].to_vec();
+    let last = bad_crc.len() - 1;
+    bad_crc[last] ^= 0x01;
+    assert_eq!(open_frame(&bad_crc).unwrap_err().code, "bad_crc");
+    assert_eq!(open_frame(&[0x05, 0x11]).unwrap_err().code, "bad_cobs");
+    assert_eq!(open_frame(&[0x02, 0x11]).unwrap_err().code, "bad_cobs");
 }

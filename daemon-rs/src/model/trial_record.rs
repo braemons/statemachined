@@ -19,10 +19,6 @@ use crate::wire::statemachined::v1::TrialCancelReason;
 /// `kNoTransition`.
 pub const NO_TRANSITION_FIRED: i64 = 255;
 
-/// The elements in a `result_path` row and in a `visit`'s `v`. One shape for
-/// one fact: two would be how the record and the stream drift apart.
-pub const WIRE_ROW_LENGTH: usize = 6;
-
 /// One state, entered and left, with everything the device measured about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StateVisitRecord {
@@ -88,38 +84,33 @@ impl TrialResultRecord {
 
 /// One wire row into a named visit.
 ///
+/// A row is link.proto's `StateVisit` -- `{state, exit, transition, drawn_ms,
+/// entered_us, duration_us}` -- whether it came in a `result_path` or as a
+/// `visit`'s `v`: one shape for one fact, decoded here and nowhere else.
+///
 /// Decoding is only possible against the graph the trial actually ran, which
 /// is what keeps a renamed state from silently mislabelling last week's data.
 /// An index the graph does not explain is reported rather than guessed at.
 pub fn decode_state_visit_row(
-    row: &[Value],
+    row: &Value,
     state_names_by_index: &[String],
     transition_target_names_by_state_index: &[Vec<String>],
 ) -> Result<StateVisitRecord, String> {
-    if row.len() != WIRE_ROW_LENGTH {
-        return Err(format!(
-            "a path row has {} elements, not {WIRE_ROW_LENGTH}: {}",
-            row.len(),
-            Value::from(row.to_vec())
-        ));
-    }
-    let state_index = row[0]
+    let Some(fields) = row.as_object() else {
+        return Err(format!("a path row is not a StateVisit: {row}"));
+    };
+    let number = |key: &str| fields.get(key).and_then(Value::as_i64).unwrap_or(0);
+    let state = fields.get("state").cloned().unwrap_or(Value::Null);
+    let state_index = state
         .as_i64()
         .filter(|index| (0..state_names_by_index.len() as i64).contains(index))
         .ok_or_else(|| {
             format!(
-                "a path row names state {}, and the graph has {} states",
-                row[0],
+                "a path row names state {state}, and the graph has {} states",
                 state_names_by_index.len()
             )
         })? as usize;
-    let number = |value: &Value| {
-        value
-            .as_i64()
-            .or_else(|| value.as_f64().map(|f| f as i64))
-            .unwrap_or(0)
-    };
-    let transition_index = number(&row[2]);
+    let transition_index = number("transition");
     let (fired_position, fired_target) = if transition_index == NO_TRANSITION_FIRED {
         (None, None)
     } else {
@@ -135,15 +126,16 @@ pub fn decode_state_visit_row(
     };
     Ok(StateVisitRecord {
         state_name: state_names_by_index[state_index].clone(),
-        exit_cause: match &row[1] {
-            Value::String(cause) => cause.clone(),
-            other => other.to_string(),
+        exit_cause: match fields.get("exit") {
+            Some(Value::String(cause)) => cause.clone(),
+            Some(other) => other.to_string(),
+            None => String::new(),
         },
         fired_transition_position: fired_position,
         fired_transition_target_state_name: fired_target,
-        drawn_duration_ms: number(&row[3]),
-        entered_device_microseconds: number(&row[4]),
-        measured_duration_microseconds: number(&row[5]),
+        drawn_duration_ms: number("drawn_ms"),
+        entered_device_microseconds: number("entered_us"),
+        measured_duration_microseconds: number("duration_us"),
     })
 }
 
@@ -163,8 +155,13 @@ mod tests {
         (states, targets)
     }
 
-    fn row(value: Value) -> Vec<Value> {
-        value.as_array().unwrap().clone()
+    /// A row as the NDJSON wire wrote it, and as link.proto names it now.
+    fn row(value: Value) -> Value {
+        let at = value.as_array().unwrap();
+        json!({
+            "state": at[0], "exit": at[1], "transition": at[2],
+            "drawn_ms": at[3], "entered_us": at[4], "duration_us": at[5],
+        })
     }
 
     #[test]
@@ -228,12 +225,11 @@ mod tests {
     }
 
     #[test]
-    fn a_row_of_the_wrong_length_is_refused() {
+    fn a_row_that_is_not_a_state_visit_is_refused() {
         let (states, targets) = names();
         let refused =
-            decode_state_visit_row(&row(json!([0, "timeout", 255, 0, 0])), &states, &targets)
-                .unwrap_err();
-        assert!(refused.contains("has 5 elements, not 6"), "{refused}");
+            decode_state_visit_row(&json!([0, "timeout"]), &states, &targets).unwrap_err();
+        assert!(refused.contains("not a StateVisit"), "{refused}");
     }
 
     #[test]

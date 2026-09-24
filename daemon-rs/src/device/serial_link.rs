@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The transport: one newline-delimited line in, one out.
+//! The transport: one frame in, one out.
 //!
 //! USB CDC is what the reference board offers, but **nothing in the protocol is
-//! serial** — it is lines of ASCII with a CRC, which is as true of a TCP socket
-//! to an ethernet-attached MCU as it is of a tty. So the target is a URL and the
+//! serial** — it is COBS frames with a CRC, which is as true of a TCP socket to
+//! an ethernet-attached MCU as it is of a tty. So the target is a URL and the
 //! layers above never learn which they got.
 //!
 //! Three transports, which is what the Python daemon gets from pyserial's
@@ -15,28 +15,27 @@
 //!   daemon runs with no board at all
 //!
 //! Raw mode is not optional for the tty. A port in canonical mode buffers by
-//! line, echoes what it receives and translates `\r`; on a link whose messages
-//! are newline-delimited that is three ways to corrupt a message.
+//! line, echoes what it receives and translates `\r` and `\n`; on a binary
+//! link that is three ways to corrupt every frame.
 //!
-//! **The buffering is a correctness fix, not a performance one.** pyserial's
-//! `readline()` returns whatever it has when the timeout expires, newline or
-//! not, so a line that straddled a timeout arrived in halves and both halves
-//! failed their CRC. It never bit at a two-second timeout and a board that
-//! writes a line in microseconds; it bites immediately once anything polls the
-//! link on a short timeout, which is what a daemon that must stay responsive
-//! between commands has to do. This reader has the same shape for the same
-//! reason: whole lines only, and a partial one stays in the buffer.
+//! **Whole frames only, and a partial one stays in the buffer.** A frame that
+//! straddled a poll's timeout must not arrive in halves, each failing its CRC —
+//! which is what a line reader that returned whatever it had did, once anything
+//! polled the link on a short timeout.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
+use super::link_codec::describe_frame;
+use super::message_framing::{open_frame, seal_frame, FramingError, MAX_FRAME};
+
 pub const DEFAULT_TARGET: &str = "/dev/ttyACM0";
 pub const DEFAULT_BAUD: u32 = 115_200;
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Which way a line crossed the link, as the serial monitor labels it.
+/// Which way a frame crossed the link, as the serial monitor labels it.
 pub const TO_DEVICE: &str = "to_device";
 pub const FROM_DEVICE: &str = "from_device";
 
@@ -92,28 +91,32 @@ fn is_host_and_port(target: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'))
 }
 
-/// Watches every line that crosses the link, in both directions.
+/// Watches every frame that crosses the link, in both directions, as the text
+/// `link_codec::describe_frame` makes of it.
 pub type LineObserver = Box<dyn FnMut(&str, &str) + Send>;
+
+/// One frame off the link: its protobuf, or why it is not a message.
+pub type ReceivedFrame = Result<Vec<u8>, FramingError>;
 
 enum Channel {
     File(std::fs::File),
     Socket(std::net::TcpStream),
-    /// Lines written, waiting to be read back.
+    /// Frames written, waiting to be read back.
     Loopback(VecDeque<u8>),
 }
 
-/// A line channel to exactly one device.
+/// A frame channel to exactly one device.
 pub struct SerialLink {
     channel: Channel,
     timeout: Duration,
-    /// Whatever has arrived and is not yet a whole line.
+    /// Whatever has arrived and is not yet a whole frame.
     receive_buffer: Vec<u8>,
-    /// Called with `(direction, line)` for every whole line that crosses.
+    /// Called with `(direction, text)` for every whole frame that crosses.
     ///
     /// **Here rather than in the session above**, because a monitor that only
     /// saw what the session understood would miss exactly what somebody opens a
     /// monitor for: the junk, the reply to a command that had already timed
-    /// out, the line with the bad CRC.
+    /// out, the frame with the bad CRC.
     observer: Option<LineObserver>,
 }
 
@@ -137,29 +140,37 @@ impl SerialLink {
         })
     }
 
-    /// Watch every line that crosses, in both directions.
+    /// Watch every frame that crosses, in both directions.
     pub fn observe(&mut self, observer: impl FnMut(&str, &str) + Send + 'static) {
         self.observer = Some(Box::new(observer));
     }
 
-    pub fn write_line(&mut self, line: &str) -> io::Result<()> {
-        let bytes = format!("{line}\n");
+    /// Seal one protobuf message into a frame and send it.
+    pub fn write_frame(&mut self, payload: &[u8]) -> io::Result<()> {
+        let bytes = seal_frame(payload);
         match &mut self.channel {
             Channel::File(file) => {
-                file.write_all(bytes.as_bytes())?;
+                file.write_all(&bytes)?;
                 file.flush()?;
             }
             Channel::Socket(stream) => {
-                stream.write_all(bytes.as_bytes())?;
+                stream.write_all(&bytes)?;
                 stream.flush()?;
             }
-            Channel::Loopback(pending) => pending.extend(bytes.as_bytes()),
+            Channel::Loopback(pending) => pending.extend(&bytes),
         }
-        self.observed(TO_DEVICE, line);
+        if self.observer.is_some() {
+            let text = describe_frame(TO_DEVICE, &Ok(payload.to_vec()));
+            self.observed(TO_DEVICE, &text);
+        }
         Ok(())
     }
 
-    /// One **complete** line, or `None` if none arrived before the timeout.
+    /// One **complete** frame, or `None` if none arrived before the timeout.
+    ///
+    /// A frame that arrived and is not a message is returned as the error it
+    /// is, not dropped: the session above counts it as junk, and a monitor
+    /// shows it.
     ///
     /// `timeout` overrides the link's for this call. A daemon polling between
     /// commands wants tens of milliseconds where a command waiting for its reply
@@ -170,13 +181,16 @@ impl SerialLink {
     /// **A timeout is not an error.** Sitting quiet is what a healthy device
     /// does between replies, and a serial monitor spends its whole life doing
     /// it.
-    pub fn read_line(&mut self, timeout: Option<Duration>) -> io::Result<Option<String>> {
+    pub fn read_frame(&mut self, timeout: Option<Duration>) -> io::Result<Option<ReceivedFrame>> {
         let effective = timeout.unwrap_or(self.timeout);
         let deadline = Instant::now() + effective;
         loop {
-            if let Some(line) = self.take_buffered_line() {
-                self.observed(FROM_DEVICE, &line);
-                return Ok(Some(line));
+            if let Some(frame) = self.take_buffered_frame() {
+                if self.observer.is_some() {
+                    let text = describe_frame(FROM_DEVICE, &frame);
+                    self.observed(FROM_DEVICE, &text);
+                }
+                return Ok(Some(frame));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
@@ -188,12 +202,31 @@ impl SerialLink {
         }
     }
 
-    /// A whole line out of the buffer, leaving a partial one behind.
-    fn take_buffered_line(&mut self) -> Option<String> {
-        let at = self.receive_buffer.iter().position(|byte| *byte == b'\n')?;
-        let line: Vec<u8> = self.receive_buffer.drain(..=at).collect();
-        let text = String::from_utf8_lossy(&line[..at]);
-        Some(text.trim_end_matches('\r').to_string())
+    /// A whole frame out of the buffer, leaving a partial one behind.
+    ///
+    /// Back-to-back delimiters are how a sender resynchronises a receiver, so
+    /// an empty frame is skipped rather than reported. A buffer that has grown
+    /// past any frame without a delimiter is thrown away as one refusal: it is
+    /// junk, and waiting for its end would hold every frame behind it.
+    fn take_buffered_frame(&mut self) -> Option<ReceivedFrame> {
+        loop {
+            let Some(at) = self.receive_buffer.iter().position(|byte| *byte == 0) else {
+                if self.receive_buffer.len() > MAX_FRAME {
+                    let dropped = self.receive_buffer.len();
+                    self.receive_buffer.clear();
+                    return Some(Err(FramingError::new(
+                        "too_long",
+                        format!("{dropped} bytes and no delimiter"),
+                    )));
+                }
+                return None;
+            };
+            let stuffed: Vec<u8> = self.receive_buffer.drain(..=at).collect();
+            if at == 0 {
+                continue;
+            }
+            return Some(open_frame(&stuffed[..at]));
+        }
     }
 
     /// Read whatever is there, waiting at most `remaining`. True if the caller
@@ -269,7 +302,7 @@ impl SerialLink {
     /// Drop whatever is already buffered.
     ///
     /// A board that has been running on its own has been talking to nobody, and
-    /// a serial monitor left open earlier may have left a partial line in the
+    /// a serial monitor left open earlier may have left a partial frame in the
     /// driver; starting a session on top of that produces one spurious framing
     /// complaint.
     pub fn reset_input(&mut self) {

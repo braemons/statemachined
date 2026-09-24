@@ -18,23 +18,21 @@ use std::time::Duration;
 use serde_json::Value;
 
 use super::board_pin_labels;
-use super::graph_set_upload::send_compiled_upload_messages;
 use super::device_clock_correlation::DeviceClockCorrelation;
-use super::device_pin_map::{Direction, DevicePinMap, PinLabelSource};
+use super::device_clock_correlation::HostTimeEstimate;
+use super::device_pin_map::{DevicePinMap, Direction, PinLabelSource};
+use super::graph_set_upload::send_compiled_upload_messages;
+use super::message_vocabulary::field;
 use super::message_vocabulary::MsgType;
-use super::request_response_session::{
-    random_seed, RequestProblem, RequestResponseSession, Sink,
-};
+use super::request_response_session::{random_seed, RequestProblem, RequestResponseSession, Sink};
 use super::serial_link::SerialLink;
+use super::trial_result_reassembly::{ReassembledTrialResult, TrialResultCollector};
 use crate::graph_set_compiler::{
     compile_graph_set_for_device, CompileError, CompiledGraphSet, DeviceCapabilities,
 };
-use super::device_clock_correlation::HostTimeEstimate;
-use super::message_vocabulary::field;
-use super::trial_result_reassembly::{ReassembledTrialResult, TrialResultCollector};
 use crate::model::graph_definition::GraphDefinition;
-use crate::model::trial_record::{decode_state_visit_row, StateVisitRecord, TrialResultRecord};
 use crate::model::line_map::LineMap;
+use crate::model::trial_record::{decode_state_visit_row, StateVisitRecord, TrialResultRecord};
 
 /// What a caller did that needs a board, without one.
 #[derive(Debug)]
@@ -72,14 +70,14 @@ impl From<RequestProblem> for DeviceProblem {
 /// changes anything on the strength of the reply, which is the same order.
 #[derive(Default)]
 pub struct Collected {
-    pending: std::collections::VecDeque<(Value, String)>,
+    pending: std::collections::VecDeque<(Value, Vec<u8>)>,
 }
 
 impl Sink for Collected {
-    fn unsolicited(&mut self, message: &Value, line: &str) {
-        self.pending.push_back((message.clone(), line.to_string()));
+    fn unsolicited(&mut self, message: &Value, payload: &[u8]) {
+        self.pending.push_back((message.clone(), payload.to_vec()));
     }
-    fn junk(&mut self, _line: &str, _why: &str) {}
+    fn junk(&mut self, _text: &str, _why: &str) {}
 }
 
 /// One `visit` off the wire, named, timestamped and placed in host time.
@@ -155,14 +153,17 @@ pub struct AutorunSetting {
     pub start_now: bool,
 }
 
-/// A seed as Python's `f"{seed:016X}"` writes it: sixteen hex digits, and a
-/// negative one signed rather than in two's complement.
-fn seed_as_python_writes_it(seed: i64) -> String {
-    if seed < 0 {
-        format!("-{:015X}", seed.unsigned_abs())
-    } else {
-        format!("{seed:016X}")
+/// A session seed as a rig's configuration writes it -- one to sixteen hex
+/// digits -- as the 64-bit number the link carries. The board used to parse
+/// this itself and refuse what was not hex; now the daemon does, before the
+/// greeting rather than in reply to it.
+pub fn parse_session_seed(text: &str) -> Result<u64, String> {
+    if text.is_empty() || text.len() > 16 || !text.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(format!(
+            "session seed {text:?} is not one to sixteen hex digits"
+        ));
     }
+    u64::from_str_radix(text, 16).map_err(|problem| problem.to_string())
 }
 
 /// Why a set did not reach the board: it would not compile against this
@@ -331,14 +332,14 @@ impl StatemachinedDevice {
         link.reset_input();
         let mut session = RequestResponseSession::new(link, Collected::default());
 
-        let seed = self
-            .configured_session_seed
-            .clone()
-            .unwrap_or_else(random_seed);
-        let hello_ack = session.hello(Some(&seed), self.timeout)?;
+        let seed = match &self.configured_session_seed {
+            Some(text) => parse_session_seed(text).map_err(RequestProblem::Unsendable)?,
+            None => random_seed(),
+        };
+        let hello_ack = session.hello(Some(seed), self.timeout)?;
 
         self.session = Some(session);
-        self.session_seed = Some(seed);
+        self.session_seed = Some(format!("{seed:016X}"));
         self.hello_ack = Some(hello_ack.clone());
         self.capabilities = Some(DeviceCapabilities::from_hello_ack(&hello_ack));
         // A reset device restarts its clock from zero, so an offset measured
@@ -453,17 +454,24 @@ impl StatemachinedDevice {
             )
             .into());
         };
-        let compiled =
-            compile_graph_set_for_device(graphs, &self.resolved_line_map, capabilities, set_version)
-                .map_err(UploadProblem::Compile)?;
+        let compiled = compile_graph_set_for_device(
+            graphs,
+            &self.resolved_line_map,
+            capabilities,
+            set_version,
+        )
+        .map_err(UploadProblem::Compile)?;
         // Not committed on this side until the device says set_ok. From
         // set_begin until then the board holds no graph at all, so believing
         // otherwise here would be believing something the board would
         // contradict.
         self.committed_graph_set = None;
         let timeout = self.timeout;
-        let sent =
-            send_compiled_upload_messages(self.require_session()?, &compiled.upload_messages, timeout);
+        let sent = send_compiled_upload_messages(
+            self.require_session()?,
+            &compiled.upload_messages,
+            timeout,
+        );
         self.route_what_arrived();
         sent?;
         self.committed_graph_set = Some(compiled.clone());
@@ -549,9 +557,21 @@ impl StatemachinedDevice {
             ("invert", Value::from(wiring.invert)),
             ("enable", Value::from(wiring.enable)),
             ("safe", Value::from(wiring.safe)),
-            ("debounce_ms", Value::from(wiring.debounce_ms)),
+            // Empty would leave the board's table alone -- protobuf cannot
+            // tell an empty list from an absent one -- where this means "no
+            // debounce anywhere". One zero says that.
+            (
+                "debounce_ms",
+                Value::from(if wiring.debounce_ms.is_empty() {
+                    vec![0]
+                } else {
+                    wiring.debounce_ms
+                }),
+            ),
         ];
-        let reply = self.require_session()?.request(MsgType::Wiring, timeout, &fields);
+        let reply = self
+            .require_session()?
+            .request(MsgType::Wiring, timeout, &fields);
         self.route_what_arrived();
         Ok(reply?)
     }
@@ -656,7 +676,10 @@ impl StatemachinedDevice {
     pub fn cancel_trial(&mut self, trial_id: i64) -> Result<Value, DeviceProblem> {
         self.ask(
             MsgType::Cancel,
-            &[("trial_id", Value::from(trial_id)), ("reason", Value::from("host"))],
+            &[
+                ("trial_id", Value::from(trial_id)),
+                ("reason", Value::from("host")),
+            ],
         )
     }
 
@@ -683,7 +706,9 @@ impl StatemachinedDevice {
             fields.push(("cap_ms", Value::from(autorun.cap_milliseconds)));
         }
         if let Some(seed) = autorun.seed {
-            fields.push(("seed", Value::from(seed_as_python_writes_it(seed))));
+            // A negative one is refused by the codec, as the board refused the
+            // signed hex it used to be sent as.
+            fields.push(("seed", Value::from(seed)));
         }
         if let Some(first_trial_id) = autorun.first_trial_id {
             fields.push(("first_trial_id", Value::from(first_trial_id)));
@@ -738,11 +763,11 @@ impl StatemachinedDevice {
                 break;
             }
             let session = self.require_session()?;
-            let Some(line) = session.link.read_line(Some(remaining))? else {
+            let Some(frame) = session.link.read_frame(Some(remaining))? else {
                 break;
             };
             lines_read += 1;
-            if let Some(message) = session.receive(&line) {
+            if let Some(message) = session.receive(frame) {
                 // A reply to a command nobody is waiting for: one that timed
                 // out and whose answer arrived late. Worth seeing.
                 self.route_what_arrived();
@@ -768,7 +793,7 @@ impl StatemachinedDevice {
     /// collector. Everything else is handed on untouched.
     fn route_what_arrived(&mut self) {
         loop {
-            let Some((message, line)) = self
+            let Some((message, payload)) = self
                 .session
                 .as_mut()
                 .and_then(|session| session.sink.pending.pop_front())
@@ -787,8 +812,8 @@ impl StatemachinedDevice {
                     self.events.push(DeviceEvent::Unsolicited(message));
                 }
                 Some(MsgType::ResultBegin | MsgType::ResultPath | MsgType::ResultEnd) => {
-                    if !line.is_empty() {
-                        self.collect_result_chunk(&line, &message);
+                    if !payload.is_empty() {
+                        self.collect_result_chunk(&payload, &message);
                     }
                 }
                 Some(MsgType::Visit) => {
@@ -801,8 +826,8 @@ impl StatemachinedDevice {
         }
     }
 
-    fn collect_result_chunk(&mut self, line: &str, message: &Value) {
-        let reassembled = match self.result_collector.feed(line, message) {
+    fn collect_result_chunk(&mut self, payload: &[u8], message: &Value) {
+        let reassembled = match self.result_collector.feed(payload, message) {
             Ok(Some(reassembled)) => reassembled,
             Ok(None) => return,
             Err(sentence) => {
@@ -817,7 +842,9 @@ impl StatemachinedDevice {
             // A result from a run this daemon did not configure: real, and
             // unreadable without the graph, so it goes on as it came rather
             // than decoded into a guess.
-            None => self.events.push(DeviceEvent::Unsolicited(reassembled.begin)),
+            None => self
+                .events
+                .push(DeviceEvent::Unsolicited(reassembled.begin)),
             Some(Err(sentence)) => self.events.push(DeviceEvent::Unsolicited(
                 serde_json::json!({"msg_type": "error", "message": sentence}),
             )),
@@ -845,35 +872,43 @@ impl StatemachinedDevice {
             Err(problem) => return Some(Err(problem.to_string())),
         };
         let begin = &reassembled.begin;
-        let number = |key: &str, default: i64| begin.get(key).and_then(Value::as_i64).unwrap_or(default);
+        let number =
+            |key: &str, default: i64| begin.get(key).and_then(Value::as_i64).unwrap_or(default);
         let visits = reassembled
             .rows
             .iter()
             .map(|row| {
                 decode_state_visit_row(
-                    row.as_array().map(Vec::as_slice).unwrap_or(&[]),
+                    row,
                     &graph.state_names_by_index,
                     &graph.transition_target_names_by_state_index,
                 )
             })
             .collect::<Result<Vec<_>, _>>();
-        Some(visits.map(|visits| TrialResultRecord {
-            trial_id: number("trial_id", 0),
-            outcome: number("outcome", 0) as i32,
-            cancel_reason: number("cancel_reason", 0) as i32,
-            total_duration_microseconds: number("total_us", 0),
-            path_was_truncated: begin.get("truncated").and_then(Value::as_bool).unwrap_or(false),
-            first_visit_sequence_number: number("first_seq", 0),
-            total_visit_count: number("total_visits", reassembled.rows.len() as i64),
-            visits,
+        Some(visits.map(|visits| {
+            TrialResultRecord {
+                trial_id: number("trial_id", 0),
+                outcome: number("outcome", 0) as i32,
+                cancel_reason: number("cancel_reason", 0) as i32,
+                total_duration_microseconds: number("total_us", 0),
+                path_was_truncated: begin
+                    .get("truncated")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                first_visit_sequence_number: number("first_seq", 0),
+                total_visit_count: number("total_visits", reassembled.rows.len() as i64),
+                visits,
+            }
         }))
     }
 
     fn decode_visit_message(&mut self, message: &Value) -> Option<ObservedStateVisit> {
         let named = (|| {
             let compiled = self.committed_graph_set.as_ref()?;
-            let graph = compiled.graph_named(self.graph_name_for_reporting()?).ok()?;
-            let row = message.get("v").and_then(Value::as_array)?;
+            let graph = compiled
+                .graph_named(self.graph_name_for_reporting()?)
+                .ok()?;
+            let row = message.get("v")?;
             Some(decode_state_visit_row(
                 row,
                 &graph.state_names_by_index,
@@ -905,7 +940,9 @@ impl StatemachinedDevice {
         Some(ObservedStateVisit {
             trial_id: message.get("trial_id").and_then(Value::as_i64).unwrap_or(0),
             sequence_number: message.get("seq").and_then(Value::as_i64).unwrap_or(0),
-            host_time: self.clock.host_time_for_unwrapped_device_microseconds(unwrapped),
+            host_time: self
+                .clock
+                .host_time_for_unwrapped_device_microseconds(unwrapped),
             unwrapped_device_microseconds: unwrapped,
             visit,
         })
