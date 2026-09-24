@@ -65,6 +65,9 @@ jobs:
       # The client's suite starts the daemon cargo builds.
       - run: make rust
       - run: make client
+      # The hardware suite, against the firmware built for this machine: every
+      # test but the timing budgets means the same thing there.
+      - run: make test-hardware TARGET=native
 
   # There is no job here for the trial loop across both daemons. It lives in the
   # contracts repo, in `e2e-tests/`, with the tests that are about the three daemons

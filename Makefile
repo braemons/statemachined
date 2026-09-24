@@ -199,6 +199,20 @@ bench:                      ## the daemon + web UI against a device: make bench 
 bench-device: integration-device  ## the native device on 127.0.0.1:5300
 	$(BUILD)/statemachined_native_device --port 5300 $(ARGS)
 
+# The suite that needs a board: timing on silicon, the response path through the
+# loopback harness, scan health under load, the trial lifecycle. It drives the
+# board the way a session does -- the daemon in front of it, the client talking
+# to the daemon -- from client/python/tests/hardware. TARGET=native runs it
+# against the firmware built for this machine with the harness wired in software,
+# which exercises everything but the timing budgets; CI does that.
+#
+# Not part of `make ci` against a board: a target that fails on every machine
+# without one attached is a target people learn to ignore. Greeting the board
+# takes the rig: a board that was running on its own stops.
+.PHONY: test-hardware
+test-hardware: rust integration-device  ## the suite that needs a board: make test-hardware TARGET=... (or native)
+	cd client/python && uv run --group dev pytest tests/hardware --target=$(TARGET) $(ARGS)
+
 # The trial loop across the daemons is **not** here. It lives in the contracts
 # repo (`e2e-tests/`), with the other tests that are about more than one
 # daemon; `make e2e` below runs it against this checkout.

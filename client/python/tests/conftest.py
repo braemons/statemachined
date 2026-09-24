@@ -147,3 +147,14 @@ def empty_stores(rig):
     for graph in rig.list_graphs():
         if graph.name not in before:
             rig.delete_graph(graph.name)
+
+
+def pytest_addoption(parser):
+    # Here, in the top-level conftest, because pytest only takes options from
+    # the conftests it loads before collection. `tests/hardware/` reads it.
+    parser.addoption(
+        "--target",
+        default=None,
+        help="the board for tests/hardware: a device path, a host:port, or `native` for "
+        "the firmware built for this machine. Without it tests/hardware is skipped.",
+    )
