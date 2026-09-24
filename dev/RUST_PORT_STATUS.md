@@ -78,7 +78,7 @@ green differential test that cannot go red is not evidence.
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
 | Trace | `test_state_visit_trace.py`, ported one test for one, and the day's file line against Python's `json.dumps` | 11 tests |
 | The cutover's acceptance test | `contracts/e2e-tests/`, unmodified, with `make e2e-rust` putting `tools/e2e_rust/statemachined` first on PATH so `serve` starts the Rust daemon — vstimd, triald and the native device as they are | 24 passed, 5 skipped (need a board), 1 xfail — the same as against Python |
-| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree; every line a daemon sends at startup, byte for byte; a recording across a pause, with its gap | 156 calls |
+| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree; every line a daemon sends at startup, byte for byte; a recording across a pause, with its gap; the device pulled out mid-trial and plugged back in | 170 calls |
 | Recordings | `test_event_recording.py`, ported one test for one, and the manifest's shape against Python's `json.dumps` | 15 tests |
 | Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
 
@@ -149,6 +149,12 @@ which the firmware does not send; the device clock is `us` (protocol.md 4.5).
 So no visit could ever have had a host time. Found porting the visit stream,
 which is the first thing to use the correlation.
 
+**A board that went away read as a quiet one.** `SerialLink` took end of file
+for "no line yet", so a closed socket or an unplugged tty looked like a healthy
+board with nothing to say; the daemon sat on the dead link until a request
+timed out, and no `link_lost` was ever written. It raises now, in pyserial's
+words.
+
 **`DeleteGraph` would delete a graph the board was running.** Python refuses
 with `graph_in_use` while the committed set holds it; the port had the delete
 and not the guard. Harmless until there was a committed set to guard.
@@ -208,10 +214,11 @@ not, and found `line_map.rs` answering two refusals differently from Python:
 **No rpcs.** What is left is what stands between a daemon that answers like
 the Python one and a daemon a rig can run on.
 
-**Not exercised by the comparison yet:** a gap in the visit stream's `seq`
-(the `sequence_gap` entry), a link that drops mid-session (`link_lost`, and
-`reconnect_and_restore`), and a trial started by a line rather than by `Start`.
-All three are ported; none has been made to happen against both daemons.
+**Not exercised by the comparison:** a gap in the visit stream's `seq` (the
+`sequence_gap` entry), which needs a board that drops a line on purpose.
+`reconnect_and_restore` and `wait_for_line_start` are ported and are not
+reachable through any rpc in either daemon — only the bench and the hardware
+suite call them.
 
 ### Not started
 

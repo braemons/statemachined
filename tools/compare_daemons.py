@@ -187,7 +187,8 @@ class Daemon:
     def __init__(self, which: str, root: Path, startup: dict) -> None:
         self.which = which
         stores_in(root)
-        self.device = NativeDeviceOnASocket(store_path=str(root / "device-store.bin"))
+        self.device_store = str(root / "device-store.bin")
+        self.device = NativeDeviceOnASocket(store_path=self.device_store)
         self.device.start()
         config = rig_config(root, self.device.target_url, startup)
         port = a_free_port()
@@ -206,6 +207,8 @@ class Daemon:
             grpc_port = port + 1
         self.process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
         self.client = StatemachinedClient(f"127.0.0.1:{grpc_port}")
+        # So a step can reach the daemon's own device -- to pull its cable.
+        self.client.daemon = self
         self.client.wait_until_ready(timeout_s=30.0)
 
     def stop(self) -> None:
@@ -567,6 +570,49 @@ TRIALS = [
     ("the trace's last entries", lambda c: [e.kind for e in c.read_trace().entries[-6:]]),
 ]
 
+def the_cable_pulled(client):
+    """Stop the device under the daemon.
+
+    The bridge does not close the connection cleanly, so nothing arrives to
+    say so: a daemon learns of it from the first thing it writes, which is why
+    the next step is a request, and the one after it a pause for the link
+    thread to take the link down."""
+    client.daemon.device.stop()
+    return "pulled"
+
+
+def a_moment_for_the_link_thread(client):
+    time.sleep(1.0)
+    return "waited"
+
+
+def a_device_plugged_back_in(client):
+    """A fresh device on the same socket, as a board reconnected to a bridge."""
+    daemon = client.daemon
+    port = int(daemon.device.target_url.rsplit(":", 1)[1])
+    daemon.device = NativeDeviceOnASocket(port=port, store_path=daemon.device_store)
+    daemon.device.start()
+    return "plugged in"
+
+
+#: A session whose link drops, and the rig brought back.
+A_LINK_THAT_DROPS = [
+    ("the set", lambda c: c.upload_graph_set(["timed-walk", "waits-for-ever"])),
+    ("arming a trial that waits for ever", lambda c: c.configure_trial(1, graph="waits-for-ever")),
+    ("starting it", lambda c: c.start_trial(1)),
+    ("the cable, pulled", the_cable_pulled),
+    ("the first request after, which finds out", lambda c: c.read_device().connected),
+    ("a moment for the link thread", a_moment_for_the_link_thread),
+    ("the device, after", lambda c: {"connected": c.read_device().connected}),
+    ("a trial with no board", lambda c: c.configure_trial(2, graph="timed-walk")),
+    ("the trace's last entries", lambda c: [e.kind for e in c.read_trace().entries[-4:]]),
+    ("the device, plugged back in", a_device_plugged_back_in),
+    ("the link, opened again", lambda c: c.open_link().connected),
+    ("the set the daemon still believes in", lambda c: c.read_device().committed_set),
+    ("a trial on it", lambda c: c.configure_trial(3, graph="timed-walk")),
+    ("the trace's last entries, after", lambda c: [e.kind for e in c.read_trace().entries[-4:]]),
+]
+
 #: Each run: how the daemons start, and what to ask them.
 RUNS = [
     ("started with nothing", {}, SCRIPT),
@@ -575,6 +621,7 @@ RUNS = [
     ("started with a config nobody stored, connecting",
      {"config": "nope", "connect": True}, AFTER_A_STARTUP),
     ("trials", {"config": "native-device", "connect": True}, TRIALS),
+    ("a link that drops", {"config": "native-device", "connect": True}, A_LINK_THAT_DROPS),
 ]
 
 
