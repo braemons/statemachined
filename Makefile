@@ -426,6 +426,9 @@ VSTIMD  ?= ../vstimd
 e2e: rust integration-device  ## the family's e2e suite, against this checkout
 	cd $(E2E) && uv sync --quiet --group dev
 	@printf 'statemachined-client @ file://%s\n' "$(abspath client/python)" > $(E2E)/.local-overrides.txt
+	@# A Python statemachined left in the suite's environment from before would
+	@# shadow the Rust one; it goes.
+	cd $(E2E) && (uv pip uninstall --quiet statemachined 2>/dev/null || true)
 	cd $(E2E) && uv pip install --quiet --overrides .local-overrides.txt \
 	  -e "$(abspath $(TRIALD))/daemon[serve]" \
 	  -e $(abspath client/python) \
