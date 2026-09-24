@@ -469,8 +469,13 @@ class RigService:
         )
         for name, value in changes.items():
             setattr(self.configuration, name, value)
+        # Every patched setting the device reads, not only the two that
+        # reopen the link: the seed and the baud are read at the next
+        # connection, and one left behind here would never be.
         self.supervisor.target = self.configuration.device_target
         self.supervisor.expected_board = self.configuration.expected_board
+        self.supervisor.baud = self.configuration.device_baud
+        self.supervisor.configured_session_seed = self.configuration.session_seed or None
         if reopen and self.supervisor.is_connected:
             self.connect()
             return True
