@@ -17,9 +17,7 @@
 //!   Skipped, and says so, when `make integration-device` has not been run.
 
 use std::io::{BufReader, Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::net::TcpListener;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -35,6 +33,7 @@ use statemachined::device::serial_link::SerialLink;
 use statemachined::graph_set_compiler::{compile_graph_set_for_device, DeviceCapabilities};
 use statemachined::model::graph_definition::GraphDefinition;
 use statemachined::model::line_map::LineMap;
+use statemachined::native_device_on_a_socket::{NativeDeviceOnASocket, NativeDeviceOptions};
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -276,78 +275,16 @@ fn a_refusal_mid_upload_stops_it_and_names_the_message() {
 
 // -- the firmware -------------------------------------------------------------
 
-/// The native device on a socket, killed when dropped.
-///
-/// It takes its link on stdin and stdout; this pumps a listening socket to
-/// them, as `native_device_on_a_socket.py` does for the Python daemon.
-struct NativeDevice {
-    child: Child,
-    address: String,
-}
-
-impl NativeDevice {
-    fn start() -> Option<Self> {
-        let binary =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../build/statemachined_native_device");
-        if !binary.exists() {
-            eprintln!(
-                "skipped: {} is not built; `make integration-device` builds it",
-                binary.display()
-            );
-            return None;
-        }
-        let mut child = Command::new(&binary)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("the native device starts");
-        let mut to_device = child.stdin.take().unwrap();
-        let mut from_device = child.stdout.take().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap().to_string();
-        std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut inbound: TcpStream = stream.try_clone().unwrap();
-            let mut outbound = stream;
-            // A plain loop rather than `io::copy`, which on Linux may splice a
-            // socket into a pipe in the kernel and hold bytes the device is
-            // waiting for.
-            std::thread::spawn(move || {
-                let mut buffer = [0u8; 4096];
-                while let Ok(read) = inbound.read(&mut buffer) {
-                    if read == 0
-                        || to_device.write_all(&buffer[..read]).is_err()
-                        || to_device.flush().is_err()
-                    {
-                        break;
-                    }
-                }
-            });
-            let mut buffer = [0u8; 4096];
-            while let Ok(read) = from_device.read(&mut buffer) {
-                if read == 0 || outbound.write_all(&buffer[..read]).is_err() {
-                    break;
-                }
-            }
-        });
-        Some(Self { child, address })
-    }
-}
-
-impl Drop for NativeDevice {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
 #[test]
 fn the_firmware_commits_every_set_python_would_have_uploaded() {
-    let Some(device) = NativeDevice::start() else {
-        return;
+    let device = match NativeDeviceOnASocket::start(0, &NativeDeviceOptions::default()) {
+        Ok(device) => device,
+        Err(problem) => {
+            eprintln!("skipped: {problem}");
+            return;
+        }
     };
-    let mut session = session_on(&device.address);
+    let mut session = session_on(&device.target());
     let hello_ack = session.hello(None, TIMEOUT).expect("the device greets");
     let capabilities = DeviceCapabilities::from_hello_ack(&hello_ack);
 

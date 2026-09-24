@@ -23,6 +23,7 @@ pub mod firmware_manifest;
 pub mod graph_set_compiler;
 pub mod grpc;
 pub mod mdns_service_advertisement;
+pub mod native_device_on_a_socket;
 pub mod model;
 pub mod observer_registry;
 pub mod rig_configuration;
