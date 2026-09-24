@@ -374,12 +374,41 @@ SCRIPT = [
     ("an empty set", lambda c: c.upload_graph_set([])),
 ]
 
+def the_wire(entries) -> list:
+    """What crossed the port: every line the daemon sent, as sent, and the
+    message type of every line it received -- whose bodies carry the device's
+    own clock and so differ between any two runs."""
+    seen = []
+    for entry in entries:
+        if entry.direction == "to_device":
+            seen.append(["to_device", entry.line])
+        else:
+            kind = json.loads(entry.line).get("msg_type") if entry.line.startswith("{") else None
+            seen.append(["from_device", kind])
+    return seen
+
+
+def watching_the_wire(client):
+    backlog = client.read_serial_monitor().newest_entry_number + 1
+    with client.watch_serial_monitor(0, timeout_s=5.0) as subscription:
+        received = []
+        for entry in subscription:
+            received.append(entry)
+            if len(received) == backlog:
+                break
+    return the_wire(received)
+
+
 #: What a daemon is after starting, told to load a config and connect.
 AFTER_A_STARTUP = [
     ("the session, as started", lambda c: c.read_session()),
     ("the trace, as started", lambda c: c.read_trace()),
     ("the device, as started", lambda c: c.read_device()),
     ("the lines, as started", lambda c: c.read_lines()),
+    ("the wire, as started", lambda c: the_wire(c.read_serial_monitor().entries)),
+    ("the wire, watched", watching_the_wire),
+    ("the monitor's window past its start",
+     lambda c: {k: v for k, v in vars(c.read_serial_monitor(3, 2)).items() if k != "entries"}),
     ("a line map that does not parse", lambda c: c.write_line_map("x", "{not json")),
     ("a line map naming a pin the board has not got",
      lambda c: c.write_line_map("x", a_line_map(lever={"pin_label": "D99"}))),

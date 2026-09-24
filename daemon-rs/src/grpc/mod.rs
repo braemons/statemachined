@@ -933,6 +933,21 @@ fn graph_not_available(detail: String) -> tonic::Status {
     Refusal::new(Category::WrongMoment, "graph_not_available", detail, "graph").into()
 }
 
+/// One line of the port, as the monitor kept it. A line of *text*: the wire
+/// says `Serial` where it means the port, because a `LineMap` line is another
+/// thing entirely.
+fn serial_monitor_entry(entry: &serde_json::Value) -> wire::SerialMonitorEntry {
+    let text = |key: &str| {
+        entry.get(key).and_then(serde_json::Value::as_str).unwrap_or_default().to_string()
+    };
+    wire::SerialMonitorEntry {
+        entry_number: entry.get("entry_number").and_then(serde_json::Value::as_i64).unwrap_or(0),
+        direction: text("direction"),
+        line: text("line"),
+        recorded_host_time: text("recorded_host_time"),
+    }
+}
+
 fn graph_names_of(compiled: &CompiledGraphSet) -> Vec<&str> {
     compiled.graphs_by_slot.iter().map(|graph| graph.name.as_str()).collect()
 }
@@ -1366,16 +1381,60 @@ impl service::device_server::Device for DaemonServices {
 
     async fn read_serial_monitor(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadSerialMonitorRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::ReadSerialMonitorRequest>,
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::SerialMonitorWindow>, tonic::Status> {
-        unported!("Device/read_serial_monitor")
+        let request = request.into_inner();
+        let monitor = &self.state.line_monitor;
+        let oldest = monitor.oldest_entry_number_still_held();
+        let limit = if request.limit > 0 { request.limit as usize } else { 500 };
+        Ok(tonic::Response::new(wire::SerialMonitorWindow {
+            entries: monitor
+                .lines_since(request.since_entry_number, limit)
+                .iter()
+                .map(serial_monitor_entry)
+                .collect(),
+            newest_entry_number: monitor.newest_entry_number(),
+            oldest_entry_number_still_held: oldest,
+            ring_capacity: monitor.ring_capacity() as i32,
+            lost_entries_before: monitor
+                .has_fallen_out_of_the_ring(request.since_entry_number)
+                .then_some(oldest),
+        }))
     }
 
     async fn watch_serial_monitor(
         &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::WatchSerialMonitorRequest>,
+        request: tonic::Request<crate::wire::statemachined::v1::WatchSerialMonitorRequest>,
     ) -> Result<tonic::Response<Self::WatchSerialMonitorStream>, tonic::Status> {
-        unported!("Device/watch_serial_monitor")
+        // Every line from `since_entry_number` on, then as they cross. Like
+        // `WatchTrace`, and unlike it in one way Python keeps: a watcher the
+        // ring passed carries on from the next line it asks for, unmarked.
+        let watcher = Watching::register(&self.state, &request, "monitor");
+        let mut next_entry_number = request.into_inner().since_entry_number;
+        let (sender, receiver) = tokio::sync::mpsc::channel(64);
+        tokio::spawn(async move {
+            let state = watcher.state.clone();
+            loop {
+                let lines = state.line_monitor.lines_since(next_entry_number, 500);
+                for line in &lines {
+                    if sender.send(Ok(serial_monitor_entry(line))).await.is_err() {
+                        return;
+                    }
+                    next_entry_number =
+                        line.get("entry_number").and_then(serde_json::Value::as_i64).unwrap_or(0) + 1;
+                }
+                state.observers.note_delivery(watcher.observer_id, lines.len() as i64);
+                if lines.is_empty() {
+                    tokio::select! {
+                        _ = sender.closed() => return,
+                        _ = tokio::time::sleep(WATCH_PERIOD) => {}
+                    }
+                }
+            }
+        });
+        Ok(tonic::Response::new(Box::pin(
+            tokio_stream::wrappers::ReceiverStream::new(receiver),
+        )))
     }
 
     async fn read_firmware(

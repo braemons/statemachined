@@ -198,6 +198,8 @@ pub struct StatemachinedDevice {
     /// The graph a self-driving board was pointed at, which names the results
     /// of runs this daemon did not arm.
     pub autorun_graph_name: Option<String>,
+    /// Every line crossing the wire, for the serial monitor.
+    pub line_monitor: Option<std::sync::Arc<super::device_line_monitor::DeviceLineMonitor>>,
     pub hello_ack: Option<Value>,
     /// What this board can hold, from its greeting. `None` until one greets.
     pub capabilities: Option<DeviceCapabilities>,
@@ -243,6 +245,7 @@ impl StatemachinedDevice {
             armed_trial_id: None,
             armed_graph_name: None,
             autorun_graph_name: None,
+            line_monitor: None,
             hello_ack: None,
             capabilities: None,
             session_seed: None,
@@ -252,6 +255,20 @@ impl StatemachinedDevice {
             committed_graph_set: None,
             graphs_of_the_committed_set: Vec::new(),
         }
+    }
+
+    /// A link to the target, with the monitor watching every line on it.
+    ///
+    /// Handed to each link rather than held here, because the transport is
+    /// the only place that sees a line before anything has decided whether it
+    /// means anything.
+    fn open_link(&self) -> Result<SerialLink, DeviceProblem> {
+        let mut link = SerialLink::open(&self.target, self.baud, self.timeout)?;
+        if let Some(monitor) = &self.line_monitor {
+            let monitor = monitor.clone();
+            link.observe(move |direction, line| monitor.record(direction, line));
+        }
+        Ok(link)
     }
 
     pub fn is_connected(&self) -> bool {
@@ -276,7 +293,7 @@ impl StatemachinedDevice {
     /// this safe rather than a way to half-connect.
     pub fn connect_and_watch(&mut self) -> Result<(), DeviceProblem> {
         self.disconnect();
-        let mut link = SerialLink::open(&self.target, self.baud, self.timeout)?;
+        let mut link = self.open_link()?;
         link.reset_input();
         self.session = Some(RequestResponseSession::new(link, Collected::default()));
         self.clock.forget_everything_observed();
@@ -289,7 +306,7 @@ impl StatemachinedDevice {
     /// **In that order and not another.**
     pub fn connect_and_greet(&mut self) -> Result<Value, DeviceProblem> {
         self.disconnect();
-        let mut link = SerialLink::open(&self.target, self.baud, self.timeout)?;
+        let mut link = self.open_link()?;
         link.reset_input();
         let mut session = RequestResponseSession::new(link, Collected::default());
 

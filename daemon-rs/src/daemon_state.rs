@@ -8,6 +8,7 @@
 
 use std::sync::Mutex;
 
+use crate::device::device_line_monitor::DeviceLineMonitor;
 use crate::device::state_visit_trace::StateVisitTrace;
 use crate::device::statemachined_device::StatemachinedDevice;
 use crate::observer_registry::ObserverRegistry;
@@ -58,6 +59,8 @@ pub struct DaemonState {
     pub trace: StateVisitTrace,
     /// Who is watching, while they are watching. Never read by this daemon.
     pub observers: ObserverRegistry,
+    /// The wire itself, both directions, for as long as the ring holds it.
+    pub line_monitor: std::sync::Arc<DeviceLineMonitor>,
     /// The last thing that went wrong with the board where nobody was waiting
     /// for an answer — a startup connect, a startup config. Reported, never
     /// fatal: a daemon that refused to start without a board would take the
@@ -81,6 +84,8 @@ impl DaemonState {
             configuration.device_timeout_seconds.max(0.0),
         );
         device.expected_board = configuration.expected_board.clone();
+        let line_monitor = std::sync::Arc::new(DeviceLineMonitor::default());
+        device.line_monitor = Some(line_monitor.clone());
         device.configured_session_seed = if configuration.session_seed.is_empty() {
             None
         } else {
@@ -98,6 +103,7 @@ impl DaemonState {
                 Some(configuration.trace_directory.clone()),
             ),
             observers: ObserverRegistry::new(),
+            line_monitor,
             last_error_from_the_device: Mutex::new(None),
             last_trial_result: Mutex::new(None),
             last_visit_sequence_number: Mutex::new(None),

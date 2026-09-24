@@ -15,7 +15,7 @@ still calls `unported!`, so it cannot drift from the proto.
 
 ## Done
 
-**36 of 50 rpcs.** The stores, the graph-set upload, the session around it,
+**38 of 50 rpcs.** The stores, the graph-set upload, the session around it,
 the trace, and trials: arming one, starting it, cancelling it, and reading back
 what it did.
 
@@ -55,6 +55,7 @@ what it did.
 | `device/state_visit_trace.rs` | `device/state_visit_trace.py` | 206 |
 | `observer_registry.rs` | `daemon/observer_registry.py` | 163 |
 | `firmware_manifest.rs` | `daemon/firmware_manifest.py` | 55 |
+| `device/device_line_monitor.rs` | `device/device_line_monitor.py` | 112 |
 | `device/graph_set_upload.rs` | `device/graph_set_upload.py` — **the daemon's half**; the hand-built uploaders stay with the hardware suite | 206 (part) |
 
 ### What the port is held to
@@ -75,7 +76,7 @@ green differential test that cannot go red is not evidence.
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
 | Trace | `test_state_visit_trace.py`, ported one test for one, and the day's file line against Python's `json.dumps` | 11 tests |
-| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree | 115 calls |
+| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree; every line a daemon sends at startup, byte for byte | 121 calls |
 | Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
 
 ### Bugs this found in the Python daemon
@@ -195,13 +196,12 @@ not, and found `line_map.rs` answering two refusals differently from Python:
 
 ## Left
 
-**14 rpcs**, and none of them waits on anything but its own module now.
+**12 rpcs**, and none of them waits on anything but its own module now.
 
 | Module | Lines | Unblocks |
 |---|---|---|
 | `daemon/event_recording.py` | 431 | `Recording/*` (9 rpcs) |
 | `statemachined_device.py` — autorun, settings, timers | ~110 | `Device/ReadAutorun`, `WriteAutorun`, `SaveSettings` |
-| `device/device_line_monitor.py` | 112 | `Device/ReadSerialMonitor`, `WatchSerialMonitor` |
 
 **Not exercised by the comparison yet:** a gap in the visit stream's `seq`
 (the `sequence_gap` entry), a link that drops mid-session (`link_lost`, and
@@ -210,9 +210,6 @@ All three are ported; none has been made to happen against both daemons.
 
 ### Not started
 
-* **Streaming rpcs.** `WatchSerialMonitor` is the one left; `WatchState` and
-  `WatchTrace` are ported, each a task feeding a channel, unregistered as an
-  observer when the client goes.
 * **mDNS.** `daemon/mdns_service_advertisement.py`. See the note below about
   the `/api` record.
 * **Packaging.** `packaging/` builds a Python wheel into a `.deb`. A Rust binary
