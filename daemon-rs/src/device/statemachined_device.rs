@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! One MCU, for as long as the daemon is running.
 //!
-//! **A port in progress.** What is here is the connection lifecycle — opening a
-//! link, greeting the board, checking it is the board this rig is wired for,
-//! resolving the line map against its pins, and pushing the wiring — the
-//! graph-set upload, and one trial at a time: arming it, reading the visits it
-//! streams, and naming the result it sends back. Autorun and the board's own
-//! settings are not ported yet.
+//! The connection lifecycle — opening a link, greeting the board, checking it
+//! is the board this rig is wired for, resolving the line map against its pins,
+//! and pushing the wiring — the graph-set upload, one trial at a time (arming
+//! it, reading the visits it streams, naming the result it sends back), and the
+//! board on its own: autorun and its saved settings. `set_enabled_timers` is
+//! not ported: no rpc calls it.
 //!
 //! The ordering in `connect_and_greet` is the part to keep: **the greeting is
 //! what takes the rig** from a board that was arming its own trials, and the

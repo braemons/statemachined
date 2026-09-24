@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! statemachined, in Rust.
 //!
-//! **A port in progress.** `daemon/` holds the Python daemon that runs on rigs;
-//! this is what replaces it, and until every rpc is ported the two are not
-//! interchangeable — see `dev/RUST_PORT.md`. `grpc/mod.rs` is the
-//! scoreboard: what is not ported answers `UNIMPLEMENTED` and says so.
+//! **The port of `daemon/`, not yet its replacement.** Every rpc answers, and
+//! answers as the Python daemon does — `tools/compare_daemons.py` holds the two
+//! to each other, and `make e2e-rust` runs the family's acceptance suite
+//! against this one. The Python daemon stays the one on rigs until this one has
+//! run a real session (`dev/RUST_PORT.md` §5.2, §8.1).
 //!
 //! The layering is mousewheeld's, because a braemons developer who has read
 //! that daemon should be able to read this one:

@@ -92,7 +92,10 @@ async fn main() {
         }
     };
     log::info!("statemachined on {address}  (panels at /, gRPC and reflection on the same port)");
-    log::warn!("this is the Rust port in progress; unported rpcs answer UNIMPLEMENTED");
+    log::warn!(
+        "this is the Rust port: every rpc answers as the Python daemon does, and it has not \
+         yet run a session on a rig"
+    );
 
     // **axum and tonic on one listener**, exactly as mousewheeld does it. Each
     // service registers its own path — `/statemachined.v1.State/…` — so no
