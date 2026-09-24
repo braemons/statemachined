@@ -241,13 +241,27 @@ class RigService:
             if not self.supervisor.is_connected:
                 time.sleep(0.2)
                 continue
-            try:
-                with self.device_lock:
-                    self.supervisor.pump_incoming_lines(budget_seconds=0.05)
-                    self._send_heartbeat_if_due()
-            except Exception as exc:  # noqa: BLE001
-                self._note_the_link_went_away(exc)
+            self._read_the_link_once()
             time.sleep(0.005)
+
+    def _read_the_link_once(self) -> None:
+        """One short burst, if there is still a link once the lock is ours.
+
+        **Asked again under the lock.** The loop's check is made without it,
+        and a request can close the link in between -- a re-greeting that finds
+        the wrong board disconnects on purpose. Pumping the link it closed
+        would raise `DeviceNotConnected` and be written down as `link_lost`: a
+        loss nobody suffered, in the record somebody reads to find out why a
+        session stopped.
+        """
+        try:
+            with self.device_lock:
+                if not self.supervisor.is_connected:
+                    return
+                self.supervisor.pump_incoming_lines(budget_seconds=0.05)
+                self._send_heartbeat_if_due()
+        except Exception as exc:  # noqa: BLE001
+            self._note_the_link_went_away(exc)
 
     def _send_heartbeat_if_due(self) -> None:
         now = time.monotonic()
