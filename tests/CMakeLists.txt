@@ -12,6 +12,7 @@ set(STATEMACHINED_TESTS
   machine/state_machine
   machine/global_timers
   trial/trial_runner
+  protocol/cobs
   protocol/framing
   protocol/graph_builder
   protocol/host_link_session

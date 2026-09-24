@@ -43,6 +43,7 @@ target_compile_options(statemachined_engine PRIVATE -Wall -Wextra -Wpedantic -We
 add_library(statemachined_core
   firmware/core/io/reply_queue.cpp
   firmware/core/io/settings_store.cpp
+  firmware/core/protocol/cobs.cpp
   firmware/core/protocol/crc16.cpp
   firmware/core/protocol/framing.cpp
   firmware/core/protocol/graph_builder.cpp
