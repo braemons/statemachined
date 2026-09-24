@@ -13,6 +13,28 @@ still calls `unported!`, so it cannot drift from the proto.
 
 ---
 
+## The board link is protobuf now, and only the Rust daemon speaks it
+
+The firmware and `daemon-rs` talk COBS-framed protobuf with a CRC-16, as
+mousewheeld does: `proto/statemachined/link/v1/link.proto`, nanopb on the board,
+the descriptor in the daemon. The Python daemon was retired from the board link
+rather than moved with it. So from here on:
+
+* **The differential comparison is over.** `tools/compare_daemons.py` drives
+  both daemons against the native device, and the Python one can no longer
+  talk to it. The 170 of 170 it last reported were against the NDJSON wire.
+  What still holds the Rust daemon to Python is the compiler: the upload test
+  checks that what a board decodes is the message Python uploaded, for every
+  case `tools/graph_set_cases.py` recorded.
+* **What still works:** the firmware's own tests, `daemon-rs`'s, `make
+  e2e-rust` (24 passed, 5 skipped, 1 xfail, as before), and the Python unit
+  tier (366, which touches no board).
+* **What does not:** everything in Python that speaks to a board —
+  `daemon/tests/{integration,e2e,runs,hardware}`, the bench commands behind
+  `make bringup`, `emulation/tests/` under Renode, and so `make test-python`
+  and the CI job that runs it. `statemachined device`, the bridge the e2e suite
+  uses, still works: it only pumps bytes.
+
 ## Done
 
 **All 50 rpcs.** Every one has a body, and every one is held to the Python
