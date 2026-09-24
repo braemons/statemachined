@@ -9,9 +9,31 @@ use statemachined::grpc::DaemonServices;
 use statemachined::web;
 use statemachined::wire;
 
+/// What the daemon is asked to do. `serve` is the only thing this binary does,
+/// and the word is accepted so the packaged unit — `statemachined serve …`,
+/// written for the Python daemon — starts this one unchanged. The Python
+/// command's bench tools (`hello`, `pins`, `monitor`, `device`, …) are not
+/// here.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum Mode {
+    Serve,
+}
+
 #[derive(Parser)]
 #[command(name = "statemachined", about = "Runs a trial's state machine on the board")]
+// argparse takes the last of a repeated option, and the unit relies on it: an
+// override in /etc/braemons/statemachined.env follows the unit's own --port.
+#[command(args_override_self = true)]
 struct Arguments {
+    /// `serve`, or nothing: the same thing.
+    #[arg(value_enum)]
+    mode: Option<Mode>,
+
+    /// Do not advertise `_statemachined._tcp`. Accepted as the Python daemon
+    /// accepts it; the API is served either way.
+    #[arg(long)]
+    no_mdns: bool,
+
     /// The port the panels and the rpcs share.
     ///
     /// **One port is all this daemon needs**, where the Python one needs two:
@@ -32,11 +54,19 @@ struct Arguments {
 
     /// Bind address. Loopback on a development box; a rig's unit binds the rig
     /// network.
-    #[arg(long, default_value = "127.0.0.1")]
+    ///
+    /// `--host` is the Python daemon's spelling, which the unit uses. The
+    /// default is loopback where the Python daemon's is every interface: a rig
+    /// says `--host 0.0.0.0` in its unit, and a daemon somebody starts by hand
+    /// on a laptop should not be reachable from the lab network by accident.
+    #[arg(long, alias = "host", default_value = "127.0.0.1")]
     bind: String,
 
     /// The board's port. `loop://` is no board at all.
-    #[arg(long, default_value = "loop://")]
+    ///
+    /// `-t`/`--target` is the Python command's spelling. Given, it wins over
+    /// the rig config's `device_target`.
+    #[arg(long, short = 't', alias = "target", default_value = "loop://")]
     device: String,
 
     /// Where the documents live. A rig uses `/var/lib/braemons/statemachined`;
@@ -63,7 +93,9 @@ async fn main() {
         }
     };
     // The flag wins over the file, which is what a flag is for.
-    if std::env::args().any(|argument| argument.starts_with("--device")) {
+    if std::env::args().any(|argument| {
+        argument.starts_with("--device") || argument.starts_with("--target") || argument.starts_with("-t")
+    }) {
         configuration.device_target = arguments.device.clone();
     }
     if let Err(problem) = configuration.validate() {
