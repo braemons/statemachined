@@ -15,19 +15,19 @@ still calls `unported!`, so it cannot drift from the proto.
 
 ## Done
 
-**41 of 50 rpcs.** The stores, the graph-set upload, the session around it,
-the trace, and trials: arming one, starting it, cancelling it, and reading back
-what it did.
+**All 50 rpcs.** Every one has a body, and every one is held to the Python
+daemon's answer by `tools/compare_daemons.py`. That is not the cutover: see
+*Left*.
 
 | | |
 |---|---|
-| `Configuration` | `ReadHealth`, `ReadConfiguration` |
-| `GraphStore` | `ListGraphs`, `ReadGraphFile`, `WriteGraphFile`, `DeleteGraph` |
-| `StateMachineConfigStore` | `ListConfigs`, `ReadConfigFile`, `WriteConfigFile`, `DeleteConfig` |
-| `Device` | `ReadDevice`, `OpenLink`, `ReadLines`, `ReadFirmware` |
+| `Configuration` | all three: `ReadHealth`, `ReadConfiguration`, `PatchConfiguration` |
+| `GraphStore` | all seven: `ListGraphs`, `ReadGraphFile`, `WriteGraphFile`, `DeleteGraph`, `ValidateGraph`, `ValidateGraphFile`, `UploadGraph` |
+| `StateMachineConfigStore` | all five: `ListConfigs`, `ReadConfigFile`, `WriteConfigFile`, `DeleteConfig`, `LoadConfig` |
+| `Device` | all ten: `ReadDevice`, `OpenLink`, `ReadLines`, `WriteLineMapFile`, `ReadFirmware`, `ReadSerialMonitor`, `WatchSerialMonitor`, `ReadAutorun`, `WriteAutorun`, `SaveSettings` |
+| `Recording` | all nine |
 | `State` | all six: `ReadState`, `WatchState`, `ReadTrace`, `WatchTrace`, `ReadTrialTrace`, `ReadObservers` |
 | `Trial` | all four: `Configure`, `Start`, `Cancel`, `ReadResult` |
-| Upload | `GraphStore/UploadGraph`, `StateMachineConfigStore/LoadConfig` |
 | `Session` | all six: `ReadSession`, `Open`, `UploadGraphs`, `Close`, `SetActiveGraph`, `ClearActiveGraph` |
 
 ### Modules
@@ -56,6 +56,7 @@ what it did.
 | `observer_registry.rs` | `daemon/observer_registry.py` | 163 |
 | `firmware_manifest.rs` | `daemon/firmware_manifest.py` | 55 |
 | `device/device_line_monitor.rs` | `device/device_line_monitor.py` | 112 |
+| `event_recording.rs` | `daemon/event_recording.py` | 431 |
 | `device/graph_set_upload.rs` | `device/graph_set_upload.py` — **the daemon's half**; the hand-built uploaders stay with the hardware suite | 206 (part) |
 
 ### What the port is held to
@@ -76,7 +77,8 @@ green differential test that cannot go red is not evidence.
 | Connection | `build/statemachined_native_device` — the real firmware on a socket | driven live |
 | Compiler | every upload message and read-back table Python produces, `tools/graph_set_cases.py`; refusals by sentence | 39 cases, 495 messages |
 | Trace | `test_state_visit_trace.py`, ported one test for one, and the day's file line against Python's `json.dumps` | 11 tests |
-| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree; every line a daemon sends at startup, byte for byte | 133 calls |
+| Everything that answers | `tools/compare_daemons.py`: both daemons as processes, each on its own native device, identical stores, driven by the real Python client; answers and refusals compared whole, trailer included; three startups — nothing, a config and a board, a config nobody stored — and a session of trials on one seed, so every draw must agree; every line a daemon sends at startup, byte for byte; a recording across a pause, with its gap | 156 calls |
+| Recordings | `test_event_recording.py`, ported one test for one, and the manifest's shape against Python's `json.dumps` | 15 tests |
 | Upload | every framed line Python sends, byte for byte, rolling checksum included; then `set_ok` from the native firmware for every set that fits it | 20 sets |
 
 ### Bugs this found in the Python daemon
@@ -116,6 +118,8 @@ regression test:
    reply that carries `graph_index` and no name, so every answer was slot 0 and
    no graph. The name now comes from the committed set, as the proto says. The
    seed is still always zero: the board does not report it.
+9. **A recording name ending in a newline was taken.** `NAME_PATTERN` was
+   applied with `re.match`, whose `$` also matches before a trailing newline.
 7. **A link the daemon closed itself was written down as lost.** The link
    thread checked for a connection outside the lock; a re-greeting that found
    the wrong board closed it in between, and the next pump's
@@ -200,11 +204,8 @@ not, and found `line_map.rs` answering two refusals differently from Python:
 
 ## Left
 
-**9 rpcs**, and none of them waits on anything but its own module now.
-
-| Module | Lines | Unblocks |
-|---|---|---|
-| `daemon/event_recording.py` | 431 | `Recording/*` (9 rpcs) |
+**No rpcs.** What is left is what stands between a daemon that answers like
+the Python one and a daemon a rig can run on.
 
 **Not exercised by the comparison yet:** a gap in the visit stream's `seq`
 (the `sequence_gap` entry), a link that drops mid-session (`link_lost`, and
@@ -214,7 +215,7 @@ All three are ported; none has been made to happen against both daemons.
 ### Not started
 
 * **mDNS.** `daemon/mdns_service_advertisement.py`. See the note below about
-  the `/api` record.
+  the `/api` record. Without it a console has to be given the rig's address.
 * **Packaging.** `packaging/` builds a Python wheel into a `.deb`. A Rust binary
   is still a `.deb` and `packages/` does not change, but the Makefile does.
 * **The e2e suite.** `contracts/e2e-tests/` is the acceptance test for the

@@ -61,6 +61,10 @@ pub struct DaemonState {
     pub observers: ObserverRegistry,
     /// The wire itself, both directions, for as long as the ring holds it.
     pub line_monitor: std::sync::Arc<DeviceLineMonitor>,
+    /// A named selection out of the trace, for a rig with no triald writing a
+    /// `.tdr`. A sink rather than a poller, so it cannot miss an entry the
+    /// ring evicted before anybody asked.
+    pub recorder: std::sync::Arc<crate::event_recording::EventRecorder>,
     /// The last thing that went wrong with the board where nobody was waiting
     /// for an answer — a startup connect, a startup config. Reported, never
     /// fatal: a daemon that refused to start without a board would take the
@@ -91,6 +95,15 @@ impl DaemonState {
         } else {
             Some(configuration.session_seed.clone())
         };
+        let trace = StateVisitTrace::new(
+            configuration.trace_ring_entries.max(0) as usize,
+            Some(configuration.trace_directory.clone()),
+        );
+        let recorder = std::sync::Arc::new(crate::event_recording::EventRecorder::new(Some(
+            configuration.recording_directory.clone(),
+        )));
+        let sink = recorder.clone();
+        trace.add_sink(Box::new(move |entry| sink.record(entry)));
         Self {
             device: Mutex::new(device),
             graphs: Store::new(configuration.graph_store_directory.clone()),
@@ -98,11 +111,9 @@ impl DaemonState {
             loaded_config: Mutex::new(None),
             session_opened_at: Mutex::new(None),
             active_graph: Mutex::new(None),
-            trace: StateVisitTrace::new(
-                configuration.trace_ring_entries.max(0) as usize,
-                Some(configuration.trace_directory.clone()),
-            ),
+            trace,
             observers: ObserverRegistry::new(),
+            recorder,
             line_monitor,
             last_error_from_the_device: Mutex::new(None),
             last_trial_result: Mutex::new(None),

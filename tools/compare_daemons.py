@@ -73,6 +73,13 @@ DIFFERS_BY_RUN = {
     "unwrapped_device_microseconds",
     "entered_host_time",
     "host_time_uncertainty_microseconds",
+    # A recording's own clock readings.
+    "created_unix_seconds",
+    "created_host_time",
+    "started_host_time",
+    "ended_host_time",
+    "stopped_host_time",
+    "cleared_host_time",
 }
 
 
@@ -215,12 +222,15 @@ class Daemon:
 #: device's port.
 OWN_PATH = re.compile(r"/tmp/[^/\s]+/(python|rust)(?=/)")
 OWN_SOCKET = re.compile(r"(socket://127\.0\.0\.1):\d+")
+#: A recording nobody named is named for the second it started.
+SUGGESTED_NAME = re.compile(r"recording-\d{8}-\d{6}")
 
 
 def plain(value):
     """An answer as plain data, with what differs by run taken out."""
     if isinstance(value, str):
-        return OWN_SOCKET.sub(r"\1", OWN_PATH.sub("<scratch>", value))
+        value = OWN_SOCKET.sub(r"\1", OWN_PATH.sub("<scratch>", value))
+        return SUGGESTED_NAME.sub("recording-<when>", value)
     if dataclasses.is_dataclass(value):
         value = dataclasses.asdict(value)
     if isinstance(value, dict):
@@ -471,10 +481,18 @@ TRIALS = [
                                  distribution_patches=[DistributionPatch(name="nope", minimum_ms=5)])),
     ("a graph the set has not got", lambda c: c.configure_trial(1, graph="go-nogo")),
     ("starting what was never armed", lambda c: c.start_trial(9)),
+    ("the recordings, before any", lambda c: c.read_recordings()),
+    ("pausing a recording nobody started", lambda c: c.pause_recording()),
+    ("a recording named like a path", lambda c: c.start_recording("../escape")),
+    ("starting a recording", lambda c: c.start_recording("session-a", "pilot")),
+    ("starting a second while it runs", lambda c: c.start_recording("session-b")),
+    ("deleting the one being written", lambda c: c.delete_recording("session-a")),
     ("arming trial 1", lambda c: c.configure_trial(1, graph="timed-walk")),
     ("starting it", lambda c: c.start_trial(1)),
     ("its result", the_result_of(1)),
     ("its trace", lambda c: c.read_trial_trace(1)),
+    ("pausing the recording", lambda c: c.pause_recording()),
+    ("pausing it again", lambda c: c.pause_recording()),
     ("arming trial 2, which waits for ever",
      lambda c: c.configure_trial(2, graph="waits-for-ever", cap_milliseconds=60000)),
     ("starting it", lambda c: c.start_trial(2)),
@@ -483,6 +501,8 @@ TRIALS = [
     ("cancelling it", lambda c: c.cancel_trial(2)),
     ("its result", the_result_of(2)),
     ("the result of a trial that is not the last", lambda c: c.read_trial_result(1)),
+    ("resuming the recording", lambda c: c.resume_recording()),
+    ("resuming what is not paused", lambda c: c.resume_recording()),
     ("trial 3, patched",
      lambda c: c.configure_trial(3, graph="timed-walk", distribution_patches=[
          DistributionPatch(name="wait", minimum_ms=5, maximum_ms=5)])),
@@ -491,6 +511,21 @@ TRIALS = [
     ("deleting a graph the board is holding", lambda c: c.delete_graph("timed-walk")),
     ("deleting one it is not", lambda c: c.delete_graph("state-walk")),
     ("the rig after", lambda c: c.read_state()),
+    ("stopping the recording", lambda c: c.stop_recording()),
+    ("the recording, read back", lambda c: c.read_recording("session-a")),
+    ("its entries, a page from the middle",
+     lambda c: c.read_recording_entries("session-a", offset=2, limit=3)),
+    ("all its entries", lambda c: c.read_recording_entries("session-a")),
+    ("recording over it", lambda c: c.start_recording("session-a")),
+    ("a recording nobody named", lambda c: c.start_recording()),
+    ("clearing it", lambda c: c.clear_recording()),
+    ("pausing it, then clearing it paused",
+     lambda c: (c.pause_recording(), c.clear_recording())[1]),
+    ("stopping that", lambda c: c.stop_recording()),
+    ("the recordings", lambda c: c.read_recordings()),
+    ("a recording nobody made", lambda c: c.read_recording("nope")),
+    ("deleting the first", lambda c: c.delete_recording("session-a")),
+    ("deleting it again", lambda c: c.delete_recording("session-a")),
     ("closing, with trial 3 still the armed one", lambda c: c.close_session()),
     ("what closing left in the device", lambda c: c.read_device().link),
     ("the trace, every trial in it", lambda c: c.read_trace()),

@@ -1,16 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The rpcs, as the generated traits ask for them.
 //!
-//! **This is the port's scoreboard.** Every rpc in `proto/` appears here
-//! because the trait requires it — an rpc with no implementation does not
-//! compile — and the ones not yet ported answer `UNIMPLEMENTED` rather than
-//! being absent. A client asking for one gets the same answer it would get
-//! from a daemon that never had it, which is the honest thing for a daemon
-//! that is half-ported, and `make ported` counts what is left.
+//! Every rpc in `proto/` appears here because the generated traits require
+//! it: an rpc with no implementation does not compile. During the port the
+//! unfinished ones answered `UNIMPLEMENTED` through an `unported!` macro, and
+//! `make ported` counted them; every one now has a body, held to the Python
+//! daemon's answers by `tools/compare_daemons.py`.
 //!
-//! Each rpc moves from `unported!()` to a real body exactly once, and the
-//! Python daemon in `daemon/` stays the one on rigs until every one of them
-//! has (`dev/RUST_PORT.md` §5.2: there is no split where both run).
+//! The Python daemon in `daemon/` stays the one on rigs until this one has run
+//! a real session (`dev/RUST_PORT.md` §5.2, §8.1).
 
 use std::sync::Arc;
 
@@ -34,24 +32,10 @@ use crate::wire::statemachined::v1 as wire;
 use crate::wire::statemachined::v1::service;
 
 mod refusal;
+mod recording;
 mod trace;
 mod trial;
 use refusal::{store_refusal, Category, Refusal, StoreKind};
-
-/// Not ported yet. See the module docstring.
-///
-/// A macro rather than a function so that the rpc's own name reaches the
-/// message: "no such rpc" and "that rpc exists but this build cannot do it
-/// yet" are different problems and a person reading a log needs to tell them
-/// apart.
-macro_rules! unported {
-    ($name:literal) => {
-        Err(tonic::Status::unimplemented(concat!(
-            $name,
-            " is not ported to the Rust daemon yet; the Python daemon answers it"
-        )))
-    };
-}
 
 /// Every service, over one shared state. The same object each trait is
 /// implemented for, so there is one daemon rather than eight.
@@ -1931,74 +1915,6 @@ impl service::session_server::Session for DaemonServices {
     ) -> Result<tonic::Response<crate::wire::statemachined::v1::ActiveGraph>, tonic::Status> {
         self.state.select_active_graph(None)?;
         Ok(tonic::Response::new(wire::ActiveGraph::default()))
-    }
-
-}
-
-// -- Recording -----------------------------------------------------------------
-#[tonic::async_trait]
-impl service::recording_server::Recording for DaemonServices {
-    async fn read_recordings(
-        &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadRecordingsRequest>,
-    ) -> Result<tonic::Response<crate::wire::statemachined::v1::Recordings>, tonic::Status> {
-        unported!("Recording/read_recordings")
-    }
-
-    async fn start(
-        &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::StartRecordingRequest>,
-    ) -> Result<tonic::Response<crate::wire::statemachined::v1::RecordingManifest>, tonic::Status> {
-        unported!("Recording/start")
-    }
-
-    async fn pause(
-        &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::PauseRecordingRequest>,
-    ) -> Result<tonic::Response<crate::wire::statemachined::v1::RecordingManifest>, tonic::Status> {
-        unported!("Recording/pause")
-    }
-
-    async fn resume(
-        &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ResumeRecordingRequest>,
-    ) -> Result<tonic::Response<crate::wire::statemachined::v1::RecordingManifest>, tonic::Status> {
-        unported!("Recording/resume")
-    }
-
-    async fn stop(
-        &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::StopRecordingRequest>,
-    ) -> Result<tonic::Response<crate::wire::statemachined::v1::RecordingManifest>, tonic::Status> {
-        unported!("Recording/stop")
-    }
-
-    async fn clear(
-        &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ClearRecordingRequest>,
-    ) -> Result<tonic::Response<crate::wire::statemachined::v1::RecordingManifest>, tonic::Status> {
-        unported!("Recording/clear")
-    }
-
-    async fn read_recording(
-        &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::RecordingName>,
-    ) -> Result<tonic::Response<crate::wire::statemachined::v1::RecordingManifest>, tonic::Status> {
-        unported!("Recording/read_recording")
-    }
-
-    async fn read_entries(
-        &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::ReadRecordingEntriesRequest>,
-    ) -> Result<tonic::Response<crate::wire::statemachined::v1::RecordingEntries>, tonic::Status> {
-        unported!("Recording/read_entries")
-    }
-
-    async fn delete_recording(
-        &self,
-        _request: tonic::Request<crate::wire::statemachined::v1::RecordingName>,
-    ) -> Result<tonic::Response<crate::wire::statemachined::v1::Recordings>, tonic::Status> {
-        unported!("Recording/delete_recording")
     }
 
 }
