@@ -47,10 +47,14 @@ jobs:
 
   daemon:
     name: "the daemon: its tests, its generated types, clippy"
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
+      # prost-build runs protoc to check the committed wire types are current.
+      # Ubuntu 24.04's is 3.21.12, the version they were generated with; a
+      # different protoc could write a different descriptor.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq protobuf-compiler
       # The upload test commits every compiled set to the firmware built for
       # this machine, which `rust-test` builds first.
       - run: make rust-check
