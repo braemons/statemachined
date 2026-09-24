@@ -461,25 +461,62 @@ std::string json_of(const link::DeviceMessage& m) {
   const auto& b = m.body;
   const char* type = "?";
   switch (m.which_body) {
-    case statemachined_link_v1_DeviceMessage_hello_ack_tag: type = "hello_ack"; break;
-    case statemachined_link_v1_DeviceMessage_ack_tag: type = "ack"; break;
-    case statemachined_link_v1_DeviceMessage_set_ok_tag: type = "set_ok"; break;
-    case statemachined_link_v1_DeviceMessage_armed_tag: type = "armed"; break;
-    case statemachined_link_v1_DeviceMessage_started_tag: type = "started"; break;
-    case statemachined_link_v1_DeviceMessage_cancel_ack_tag: type = "cancel_ack"; break;
-    case statemachined_link_v1_DeviceMessage_result_begin_tag: type = "result_begin"; break;
-    case statemachined_link_v1_DeviceMessage_result_path_tag: type = "result_path"; break;
-    case statemachined_link_v1_DeviceMessage_result_end_tag: type = "result_end"; break;
-    case statemachined_link_v1_DeviceMessage_event_tag: type = "event"; break;
-    case statemachined_link_v1_DeviceMessage_error_tag: type = "error"; break;
-    case statemachined_link_v1_DeviceMessage_log_tag: type = "log"; break;
-    case statemachined_link_v1_DeviceMessage_pong_tag: type = "pong"; break;
-    case statemachined_link_v1_DeviceMessage_state_report_tag: type = "state_report"; break;
-    case statemachined_link_v1_DeviceMessage_visit_tag: type = "visit"; break;
-    case statemachined_link_v1_DeviceMessage_pin_map_tag: type = "pin_map"; break;
-    case statemachined_link_v1_DeviceMessage_autorun_ok_tag: type = "autorun_ok"; break;
-    case statemachined_link_v1_DeviceMessage_saved_tag: type = "saved"; break;
-    default: break;
+    case statemachined_link_v1_DeviceMessage_hello_ack_tag:
+      type = "hello_ack";
+      break;
+    case statemachined_link_v1_DeviceMessage_ack_tag:
+      type = "ack";
+      break;
+    case statemachined_link_v1_DeviceMessage_set_ok_tag:
+      type = "set_ok";
+      break;
+    case statemachined_link_v1_DeviceMessage_armed_tag:
+      type = "armed";
+      break;
+    case statemachined_link_v1_DeviceMessage_started_tag:
+      type = "started";
+      break;
+    case statemachined_link_v1_DeviceMessage_cancel_ack_tag:
+      type = "cancel_ack";
+      break;
+    case statemachined_link_v1_DeviceMessage_result_begin_tag:
+      type = "result_begin";
+      break;
+    case statemachined_link_v1_DeviceMessage_result_path_tag:
+      type = "result_path";
+      break;
+    case statemachined_link_v1_DeviceMessage_result_end_tag:
+      type = "result_end";
+      break;
+    case statemachined_link_v1_DeviceMessage_event_tag:
+      type = "event";
+      break;
+    case statemachined_link_v1_DeviceMessage_error_tag:
+      type = "error";
+      break;
+    case statemachined_link_v1_DeviceMessage_log_tag:
+      type = "log";
+      break;
+    case statemachined_link_v1_DeviceMessage_pong_tag:
+      type = "pong";
+      break;
+    case statemachined_link_v1_DeviceMessage_state_report_tag:
+      type = "state_report";
+      break;
+    case statemachined_link_v1_DeviceMessage_visit_tag:
+      type = "visit";
+      break;
+    case statemachined_link_v1_DeviceMessage_pin_map_tag:
+      type = "pin_map";
+      break;
+    case statemachined_link_v1_DeviceMessage_autorun_ok_tag:
+      type = "autorun_ok";
+      break;
+    case statemachined_link_v1_DeviceMessage_saved_tag:
+      type = "saved";
+      break;
+    default:
+      break;
   }
   w.begin(type, m.message_id);
   if (m.has_in_reply_to) w.in_reply_to(m.in_reply_to);

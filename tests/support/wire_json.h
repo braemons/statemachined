@@ -14,7 +14,6 @@
 #include <cstddef>
 #include <cstdint>
 
-
 namespace statemachined::test {
 
 /// A view into the message buffer. Nothing here copies: the reader borrows the

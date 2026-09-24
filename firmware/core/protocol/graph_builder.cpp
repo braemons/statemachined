@@ -129,7 +129,8 @@ UploadError GraphBuilder::begin_graph(const link::GraphBegin& m, link::PayloadSp
   return UploadError::None;
 }
 
-UploadError GraphBuilder::add_distribution(const link::GraphDist& m, link::PayloadSpan payload) {
+UploadError GraphBuilder::add_distribution(const link::GraphDist& m,
+                                           link::PayloadSpan payload) {
   // A distribution belongs to the SET, not to a graph: the pool is shared, and
   // a graph reusing another's foreperiod is the point of sharing it. So a host
   // may send them all at set level, before the first graph_begin, or with the
@@ -184,7 +185,8 @@ UploadError GraphBuilder::add_distribution(const link::GraphDist& m, link::Paylo
         if (m.weights_count > n) return fail(UploadError::BadField, "weights longer than opts");
         // A short weights array would silently give the unlisted options weight
         // 1 against neighbours weighted in the hundreds. Refuse instead.
-        if (m.weights_count < n) return fail(UploadError::BadField, "weights shorter than opts");
+        if (m.weights_count < n)
+          return fail(UploadError::BadField, "weights shorter than opts");
         for (uint8_t k = 0; k < n; ++k) {
           if (m.weights[k] > UINT16_MAX) return fail(UploadError::BadField, "weight");
           g_.choice_weights[first + k] = static_cast<uint16_t>(m.weights[k]);
@@ -315,7 +317,8 @@ UploadError GraphBuilder::add_timer(const link::GraphTimer& m, link::PayloadSpan
   // Declared in order, like every other pooled thing, so that a set cannot
   // leave a hole -- an undeclared timer between two declared ones would be one
   // an action could name and nothing would ever run.
-  if (m.i != g_.n_timers) return fail(UploadError::BadOrder, "timers must be declared in order");
+  if (m.i != g_.n_timers)
+    return fail(UploadError::BadOrder, "timers must be declared in order");
 
   GlobalTimer t;
   t.all_high = m.all;

@@ -163,8 +163,8 @@ class HostLinkSession {
   ///
   /// This used to happen inside advance_trial() itself, which on a board means
   /// inside the scan ISR -- and building a ~130 byte JSON line with a CRC on it
-  /// cost about 120 us there, on the NDJSON wire this link used to be. That does not merely add jitter: the scan
-  /// overruns its own tick, so the *next* scan lands late, and the state
+  /// cost about 120 us there, on the NDJSON wire this link used to be. That does not merely add
+  /// jitter: the scan overruns its own tick, so the *next* scan lands late, and the state
   /// machine's response to a line went from one scan period to 220 us. Measured
   /// both ways on an Uno R4 Minima: 222 us with the stream on the ISR, exactly
   /// 100 us with it off, and insensitive to how much else the entry action did.

@@ -32,11 +32,11 @@
 #include <cstring>
 #include <ctime>
 
-#include "protocol/firmware_version.h"
 #include "hal.h"
 #include "io/input_conditioner.h"
 #include "io/reply_queue.h"
 #include "io/settings_store.h"
+#include "protocol/firmware_version.h"
 #include "protocol/host_link_session.h"
 
 using namespace statemachined;
@@ -167,7 +167,8 @@ void configure_the_loopback_from_the_environment() {
 /// `--port N`, or 5300.
 uint16_t port_from(int argc, char** argv) {
   for (int i = 1; i + 1 < argc; ++i) {
-    if (std::strcmp(argv[i], "--port") == 0) return static_cast<uint16_t>(std::atoi(argv[i + 1]));
+    if (std::strcmp(argv[i], "--port") == 0)
+      return static_cast<uint16_t>(std::atoi(argv[i + 1]));
   }
   return 5300;
 }

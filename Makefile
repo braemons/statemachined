@@ -225,7 +225,7 @@ test-hardware: rust integration-device  ## the suite that needs a board: make te
 CLANG_FORMAT      ?= clang-format
 CLANG_FORMAT_PIN  := 23.1.0
 
-SOURCES = $(shell find firmware tests -name '*.cpp' -o -name '*.h' | grep -v third_party)
+SOURCES = $(shell find firmware tests -name '*.cpp' -o -name '*.h' | grep -v third_party | grep -v firmware/core/proto/)
 
 .PHONY: check-clang-format
 check-clang-format:

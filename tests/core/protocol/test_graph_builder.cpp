@@ -74,8 +74,8 @@ struct Upload {
 
   std::string checksum_hex() const {
     static const char kHex[] = "0123456789ABCDEF";
-    return {kHex[(checksum >> 12) & 0xF], kHex[(checksum >> 8) & 0xF], kHex[(checksum >> 4) & 0xF],
-            kHex[checksum & 0xF]};
+    return {kHex[(checksum >> 12) & 0xF], kHex[(checksum >> 8) & 0xF],
+            kHex[(checksum >> 4) & 0xF], kHex[checksum & 0xF]};
   }
 
   /// Close the current graph. Its own totals, not the set's.

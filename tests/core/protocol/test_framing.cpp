@@ -124,7 +124,8 @@ TEST_CASE("a payload with no zero in it round-trips too, whatever its length") {
   }
 }
 
-TEST_CASE("encode_frame refuses a payload longer than a frame holds rather than truncating it") {
+TEST_CASE(
+    "encode_frame refuses a payload longer than a frame holds rather than truncating it") {
   const Bytes too_long(kMaxPayload + 1, 0x55);
   uint8_t out[kMaxFrame];
   CHECK(encode_frame(too_long.data(), too_long.size(), out) == 0);
@@ -142,7 +143,8 @@ TEST_CASE("the reader splits a stream into frames") {
 TEST_CASE("back-to-back delimiters are not a frame and not an error") {
   // How a sender resynchronises a receiver that may be mid-frame.
   FrameReader reader;
-  const auto got = read_all(reader, concat({Bytes{0, 0, 0}, frame_of(payload_of(9)), Bytes{0}}));
+  const auto got =
+      read_all(reader, concat({Bytes{0, 0, 0}, frame_of(payload_of(9)), Bytes{0}}));
   REQUIRE(got.size() == 1);
   CHECK(got[0].status == FrameError::None);
   CHECK(reader.dropped() == 0);

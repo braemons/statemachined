@@ -62,7 +62,8 @@ struct Host {
   /// it; see support/link_json.h. Returns the replies this command produced.
   std::vector<std::string> send(const std::string& body, bool fold_graph = false) {
     const Bytes payload = payload_of(body);
-    if (fold_graph) graph_checksum = crc16_ccitt(payload.data(), payload.size(), graph_checksum);
+    if (fold_graph)
+      graph_checksum = crc16_ccitt(payload.data(), payload.size(), graph_checksum);
     return send_raw(as_text(frame_of(payload)));
   }
 
@@ -114,7 +115,9 @@ struct Host {
     return payload;
   }
 
-  static std::string as_text(const Bytes& bytes) { return std::string(bytes.begin(), bytes.end()); }
+  static std::string as_text(const Bytes& bytes) {
+    return std::string(bytes.begin(), bytes.end());
+  }
 };
 
 /// Every reply, rendered, is one well-formed line. The frame it came in was

@@ -12,15 +12,18 @@ namespace statemachined {
 // configured with. A board whose link could carry fewer options than its pool
 // holds would refuse a set it has room for; one whose frame could not hold the
 // largest message would fail to send it.
-static_assert(sizeof(statemachined_link_v1_GraphDist{}.opts) / sizeof(int32_t) >= kMaxChoiceOptions,
+static_assert(sizeof(statemachined_link_v1_GraphDist{}.opts) / sizeof(int32_t) >=
+                  kMaxChoiceOptions,
               "link.options: GraphDist.opts holds kMaxChoiceOptions");
 static_assert(sizeof(statemachined_link_v1_Configure{}.patch) /
                       sizeof(statemachined_link_v1_Patch) ==
                   kMaxPatchedDistributions,
               "link.options: Configure.patch holds kMaxPatchedDistributions");
-static_assert(sizeof(statemachined_link_v1_Wiring{}.debounce_ms) / sizeof(uint32_t) == kMaxLines,
+static_assert(sizeof(statemachined_link_v1_Wiring{}.debounce_ms) / sizeof(uint32_t) ==
+                  kMaxLines,
               "link.options: Wiring.debounce_ms holds kMaxLines");
-static_assert(sizeof(statemachined_link_v1_PinMap{}.pins) / sizeof(statemachined_link_v1_PinMap{}.pins[0]) >=
+static_assert(sizeof(statemachined_link_v1_PinMap{}.pins) /
+                      sizeof(statemachined_link_v1_PinMap{}.pins[0]) >=
                   kMaxLines,
               "link.options: PinMap.pins holds kMaxLines");
 static_assert(statemachined_link_v1_HostMessage_size <= kMaxPayload,
@@ -1068,7 +1071,8 @@ void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us)
     booted_us_ = now_us;
     have_boot_ = true;
   }
-  auto& report = compose(statemachined_link_v1_DeviceMessage_state_report_tag).body.state_report;
+  auto& report =
+      compose(statemachined_link_v1_DeviceMessage_state_report_tag).body.state_report;
   report.link_state = static_cast<uint32_t>(state_);
   report.has_graph = true;
   report.graph.has_set = have_set_;
@@ -1479,7 +1483,8 @@ void HostLinkSession::emit_result() {
   uint16_t checksum = 0xFFFF;
 
   {
-    auto& begin = compose(statemachined_link_v1_DeviceMessage_result_begin_tag).body.result_begin;
+    auto& begin =
+        compose(statemachined_link_v1_DeviceMessage_result_begin_tag).body.result_begin;
     begin.trial_id = r.trial_id;
     begin.outcome = static_cast<int32_t>(r.outcome);
     begin.cancel_reason = static_cast<uint32_t>(r.cancel_reason);
