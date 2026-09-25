@@ -10,7 +10,7 @@
 //!
 //! **The paths are the package's, and a bench passes its own.** There is no
 //! search order and no guessing at who started the process: the defaults here
-//! are where the `.deb` puts things, `--config` and the directory settings
+//! are where the `.deb` puts things, `--rig-config` and the directory settings
 //! override them. A daemon that answered "which file am I reading" differently
 //! depending on `$HOME` is a daemon nobody can debug over the phone.
 
@@ -154,7 +154,7 @@ impl RigConfiguration {
     /// Read the TOML, or the built-in defaults when there is none.
     ///
     /// **Its absence is not an error.** A bench with no conffile runs on the
-    /// defaults, which is what `--config` pointing at nothing means too.
+    /// defaults, which is what `--rig-config` pointing at nothing means too.
     pub fn read(path: &std::path::Path) -> Result<Self, String> {
         match std::fs::read_to_string(path) {
             Ok(text) => toml::from_str(&text)

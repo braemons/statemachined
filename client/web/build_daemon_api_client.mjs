@@ -3,7 +3,7 @@
 // Generates the browser's protobuf types from `proto/` and bundles the network
 // module the panels import.
 //
-// **The bundle is committed**, for the same reason `daemon-rs/src/wire/` is: a
+// **The bundle is committed**, for the same reason `daemon/src/wire/` is: a
 // checkout builds without the generator. The daemon embeds `client/web/`, so a
 // bundle produced at build time would make npm a build dependency of every
 // release, and of every rig that builds one. It is not.

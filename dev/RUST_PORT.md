@@ -127,7 +127,7 @@ not just "no".
 **Done, 2026-09-21 — and it did not change the plan.** `graph_definition.py`
 (560 lines) is ported; `tools/document_corpus.py` generates the three real
 graphs plus one systematic mutation per refusal rule, with pydantic's verdict on
-each, and `daemon-rs/tests/documents.rs` holds the Rust implementation to it.
+each, and `daemon/tests/documents.rs` holds the Rust implementation to it.
 **105/105 agree**: 3 accepted and identical field-by-field after a round trip,
 102 refused by both.
 

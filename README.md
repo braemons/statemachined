@@ -1,24 +1,27 @@
 # statemachined — the trial state machine
 
-> ## ⚠️ Alpha — `v0.1.0-alpha1`
+> ## ⚠️ Alpha — `v0.3.0-alpha1`
 >
 > **Do not run an experiment on this.** It has never controlled a session with a
 > subject in it, and it is not yet something a rig should depend on.
 >
 > What *is* real: the portable core, the wire protocol and the Uno R4 Minima HAL
 > are implemented and tested — on the host, under sanitizers, and on a physical
-> R4, which measured **122 767 Hz** against the 10 kHz target. The daemon, its
-> gRPC API and its web UI exist and drive whole trials against a board.
+> R4, which measured **122 767 Hz** against the 10 kHz target. The daemon — Rust
+> since 0.3 —, its gRPC API and its web UI exist and drive whole trials against
+> a board.
 >
 > What has **not** happened, and matters:
 >
-> - **No session has ever run against triald.** The daemon reports outcomes to
->   an interface nothing has exercised end to end (M6).
+> - **No session has run against triald on a rig.** triald driving this daemon
+>   is exercised end to end only in `contracts/e2e-tests/`, against the
+>   firmware built for the host (M6).
 > - **The board's data flash has never run on silicon.** Saving wiring, autorun
 >   and the graph set is tested on the host and against a native build of the
 >   same firmware; the RA4M1 path itself is unproven (M7).
-> - **The packages have never been installed on a machine.** They build, they
->   are reproducible, and no rig has one (M5).
+> - **The packages have never been installed on a rig.** They build, they are
+>   reproducible, and `contracts/e2e-tests/` installs them in a container; no
+>   rig has one (M5).
 >
 > Pre-releases go to the braemons archive's `testing` suite, never `stable` —
 > a `~` in the version is what keeps a rig tracking `stable` from being offered
@@ -36,12 +39,12 @@ calls "the MCU" — the half of VStim's interval table that
 response windows, timeouts, reward, and an outcome.
 
 ```
-   triald            configure / arm / result            slow bus · HTTP+JSON
-  ┌────────┐  ◀────────────────────────────────▶  ┌──────────┐
-  │ triald │                                       │ statemachined     │  host bridge
-  └────────┘                                       │ (bridge) │
-  ═══════════════════════════════════════════════  └────┬─────┘
-                                                        │ USB CDC · NDJSON
+   triald     configure / start (gRPC) · WatchTrace       slow bus · gRPC
+  ┌────────┐  ◀────────────────────────────────▶  ┌───────────────┐
+  │ triald │                                       │ statemachined │  the daemon
+  └────────┘                                       │   (host)      │
+  ═══════════════════════════════════════════════  └────┬──────────┘
+                                                        │ USB CDC · COBS · protobuf
   ┌─────────┬─────────┬─────────┬──────────┬────────────┴──────┐
   │ vstimd  │ soundd  │ optod   │  daqd    │  statemachined (firmware)  │
   └─────────┴─────────┴─────────┴──────────┴───────────────────┘
@@ -173,7 +176,7 @@ Python here:
 ```python
 from statemachined_client import StatemachinedClient
 
-rig = StatemachinedClient("rig-3.local")      # gRPC, on 8082
+rig = StatemachinedClient("rig-3.local")      # gRPC, on 8081
 rig.upload_graph_set(["go-nogo", "two-alternative-forced-choice"])
 
 rig.configure_trial(1, graph="go-nogo", cap_milliseconds=30_000)
@@ -235,8 +238,8 @@ Also: **VStim** (Andreas Kreiter, Cognitive Neurophysiology Lab, Bremen), whose
 **Firmware, core, tests and tools: [GPLv3-or-later](LICENSE).
 The Python client, `client/python/`: [LGPLv3-or-later](client/python/LICENSE)**,
 so an experiment importing it is not placed under copyleft — the same split, and
-the same reason, as vstimd's client. **The daemon — `daemon-rs/`, and the panels
-in `client/web/` it serves: [AGPLv3-or-later](daemon-rs/LICENSE.AGPL)**, like
+the same reason, as vstimd's client. **The daemon — `daemon/`, and the panels
+in `client/web/` it serves: [AGPLv3-or-later](daemon/LICENSE.AGPL)**, like
 vstimd and triald: it is a network service, and whoever runs a modified one for
 others owes them its source. The split is by *what the code is*, not by
 directory. Every source file carries an

@@ -12,14 +12,14 @@ on a rig (open question 1).
 
 ## The board link is protobuf, and the Python is retired
 
-The firmware and `daemon-rs` talk COBS-framed protobuf with a CRC-16, as
+The firmware and `daemon` talk COBS-framed protobuf with a CRC-16, as
 mousewheeld does: `proto/statemachined/link/v1/link.proto`, nanopb on the
 board, the descriptor in the daemon. The Python daemon was retired rather than
 moved to it, and with it went everything in Python but the client:
 
 * **The differential comparison is over.** `tools/compare_daemons.py` last
   reported 170 of 170 against the NDJSON wire. What still holds the Rust daemon
-  to Python is the recorded corpora in `daemon-rs/tests/` — the compiler's
+  to Python is the recorded corpora in `daemon/tests/` — the compiler's
   messages, the documents' verdicts, the line maps, the clock — which are
   fixtures now, and the upload test, which checks that what a board decodes is
   the message Python uploaded for every compiled case.

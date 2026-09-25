@@ -66,7 +66,7 @@ WORKDIR /src
 # not invalidate the layers below.
 COPY Makefile README.md LICENSE NOTICE ./
 COPY Cargo.toml Cargo.lock ./
-COPY daemon-rs/            daemon-rs/
+COPY daemon/            daemon/
 COPY client/web/           client/web/
 COPY docs/                 docs/
 COPY dev/                  dev/

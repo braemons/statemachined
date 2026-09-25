@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Write `daemon-rs/src/wire/` from `proto/`.
+//! Write `daemon/src/wire/` from `proto/`.
 //!
 //! `prost-build` writes the Rust types and `tonic-prost-build` writes the
 //! `service` blocks as traits the daemon implements. **An rpc with no
@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // first time a message is added is worse than none.
     let out_dir = match std::env::args().nth(1) {
         Some(elsewhere) => PathBuf::from(elsewhere),
-        None => repository.join("daemon-rs/src/wire"),
+        None => repository.join("daemon/src/wire"),
     };
     std::fs::create_dir_all(&out_dir)?;
 
@@ -94,7 +94,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // does not compile the link into types; it reads this at run time and
     // carries each message as the `msg_type` and fields it has always handled,
     // so only the codec under them had to change. See
-    // `daemon-rs/src/device/link_codec.rs`.
+    // `daemon/src/device/link_codec.rs`.
     let scratch = std::env::temp_dir().join(format!("protogen-link-{}", std::process::id()));
     std::fs::create_dir_all(&scratch)?;
     prost_build::Config::new()

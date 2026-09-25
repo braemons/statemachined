@@ -42,15 +42,6 @@ struct Arguments {
     #[arg(long, default_value_t = 8081)]
     port: u16,
 
-    /// Serve the same thing on `port + 1` as well, as the Python daemon's gRPC
-    /// port is. On by default, **for the cutover**: `statemachined-client`
-    /// dials 8082 when told nothing, triald's executor setting names it, and
-    /// the plan is that nothing which talks to this daemon changes when the
-    /// daemon does (`dev/RUST_PORT.md` §2, §6). Dropping the second port is a
-    /// family decision to take afterwards, in `contracts/DAEMON_LAYOUT.md`.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    serve_on_the_next_port_too: bool,
-
     /// Bind address. Loopback on a development box; a rig's unit binds the rig
     /// network.
     ///
@@ -75,8 +66,14 @@ struct Arguments {
 
     /// The TOML that says what this box is. Its absence means the built-in
     /// defaults, which is what a bench with no conffile runs on.
-    #[arg(long, default_value = statemachined::rig_configuration::DEFAULT_CONFIGURATION_PATH)]
-    config: std::path::PathBuf,
+    //
+    // `--rig-config`, as every daemon in the family spells it: a bare
+    // `--config` could as well mean the experiment's state-machine config.
+    #[arg(
+        long = "rig-config",
+        default_value = statemachined::rig_configuration::DEFAULT_CONFIGURATION_PATH
+    )]
+    rig_config: std::path::PathBuf,
 }
 
 #[tokio::main]
@@ -85,7 +82,7 @@ async fn main() {
     let arguments = Arguments::parse();
     let port = arguments.port;
 
-    let mut configuration = match RigConfiguration::read(&arguments.config) {
+    let mut configuration = match RigConfiguration::read(&arguments.rig_config) {
         Ok(configuration) => configuration,
         Err(problem) => {
             eprintln!("statemachined: {problem}");
@@ -99,7 +96,7 @@ async fn main() {
         configuration.device_target = arguments.device.clone();
     }
     if let Err(problem) = configuration.validate() {
-        eprintln!("statemachined: {}: {problem}", arguments.config.display());
+        eprintln!("statemachined: {}: {problem}", arguments.rig_config.display());
         std::process::exit(1);
     }
     if let Some(root) = &arguments.storage_dir {
@@ -184,25 +181,6 @@ async fn main() {
 
     // With the peer's address, which tonic's own server would provide and
     // axum only does when asked: `ReadObservers` names who is watching by it.
-    // The Python daemon's gRPC port, answered by the same app — see
-    // `serve_on_the_next_port_too`. A bind failure there is reported and not
-    // fatal: the one port that is this daemon's own is already serving.
-    let next = if arguments.serve_on_the_next_port_too {
-        let address = format!("{}:{}", arguments.bind, port.saturating_add(1));
-        match tokio::net::TcpListener::bind(&address).await {
-            Ok(listener) => {
-                log::info!("and on {address}, which clients dial when told only a host");
-                Some(listener)
-            }
-            Err(problem) => {
-                log::warn!("not serving on {address} as well: {problem}");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
     let stopping = tokio::sync::watch::channel(false);
     let serve = |listener: tokio::net::TcpListener| {
         let app = app.clone().into_make_service_with_connect_info::<std::net::SocketAddr>();
@@ -228,7 +206,6 @@ async fn main() {
     });
 
     let mut main = tokio::spawn(serve(listener));
-    let second = next.map(|listener| tokio::spawn(serve(listener)));
     tokio::select! {
         _ = tokio::signal::ctrl_c() => log::info!("statemachined: stopping"),
         // The daemon's own port failing is the daemon failing, as it was when
@@ -245,7 +222,4 @@ async fn main() {
     }
     let _ = stopping.0.send(true);
     let _ = main.await;
-    if let Some(second) = second {
-        let _ = second.await;
-    }
 }

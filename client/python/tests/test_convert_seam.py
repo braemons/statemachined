@@ -343,10 +343,10 @@ def test_a_refusal_reads_as_a_sentence():
 @pytest.mark.parametrize(
     ("given", "expected"),
     [
-        ("", "127.0.0.1:8082"),
-        ("rig-3.local", "rig-3.local:8082"),
+        ("", "127.0.0.1:8081"),
+        ("rig-3.local", "rig-3.local:8081"),
         ("rig-3.local:9999", "rig-3.local:9999"),
-        ("http://rig-3.local/", "rig-3.local:8082"),
+        ("http://rig-3.local/", "rig-3.local:8081"),
         ("[::1]:9999", "[::1]:9999"),
     ],
 )

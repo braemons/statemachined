@@ -10,24 +10,49 @@ can work out, :class:`~statemachined_client.daemon_client.StatemachinedClient`
 could have; anything it decided would be a second opinion about a session that
 already has one.
 
-Everything prints JSON, so it pipes into `jq`. A refusal prints as JSON too —
-on stderr, with a non-zero exit — so a shell script can read which refusal it
-was and a person can read the sentence.
+It follows the family's rules for a `<name>ctl` (`contracts/DAEMON_LAYOUT.md`):
+`--rig`, then `$BRAEMONS_RIG`, then localhost; JSON on stdout, one compact
+object per line for a stream; a refusal as one JSON object on stderr, with an
+exit status a script can switch on and a sentence a person can read.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from collections.abc import Sequence
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
-from enum import Enum
+from enum import Enum, IntEnum
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from .daemon_client import DEFAULT_PORT, StatemachinedClient
 from .daemon_refusals import DaemonRefusedTheRequest
+
+RIG_ENVIRONMENT_VARIABLE = "BRAEMONS_RIG"
+
+
+class ExitStatus(IntEnum):
+    """The same numbers from every `<name>ctl` in the family."""
+
+    OK = 0
+    FAILURE = 1
+    USAGE = 2
+    UNAVAILABLE = 3
+    TIMED_OUT = 4
+    REFUSED = 5
+    NOT_FOUND = 6
+    INTERRUPTED = 130
+
+
+_EXIT_STATUS_FOR_REFUSAL = {
+    "unavailable": ExitStatus.UNAVAILABLE,
+    "deadline_exceeded": ExitStatus.TIMED_OUT,
+    "not_found": ExitStatus.NOT_FOUND,
+}
 
 
 def _plain(value):
@@ -54,15 +79,45 @@ def _print(value) -> None:
     print(json.dumps(_plain(value), indent=2))
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _print_line(value) -> None:
+    """One compact object per line, flushed: this is what somebody leaves
+    running in a second terminal, and an entry that arrives four kilobytes
+    late is not an entry."""
+    print(json.dumps(_plain(value)), flush=True)
+
+
+def _fail(error: str, detail: str, exit_status: ExitStatus, **more) -> int:
+    print(json.dumps({"error": error, "detail": detail, **more}), file=sys.stderr)
+    return exit_status
+
+
+def _client_version() -> str:
+    try:
+        return version("statemachined-client")
+    except PackageNotFoundError:
+        return "unknown"
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="statemachinectl",
         description="Talk to a statemachined. Everything prints JSON, so it pipes into jq.",
     )
     parser.add_argument(
+        "-V", "--version", action="version", version=f"statemachinectl {_client_version()}"
+    )
+    parser.add_argument(
         "--rig",
-        default="localhost",
-        help=f"host, or host:port (default {DEFAULT_PORT}, one above the browser's)",
+        default=os.environ.get(RIG_ENVIRONMENT_VARIABLE) or "localhost",
+        help=f"host, or host:port (default ${RIG_ENVIRONMENT_VARIABLE}, then localhost; "
+        f"port {DEFAULT_PORT})",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=5.0,
+        metavar="SECONDS",
+        help="how long to wait for the daemon to answer (default %(default)s)",
     )
     commands = parser.add_subparsers(dest="command", required=True)
 
@@ -100,7 +155,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     graph_get = graph_actions.add_parser("get", help="print one graph's text")
     graph_get.add_argument("name")
     graph_put = graph_actions.add_parser("put", help="write a .json into the store")
-    graph_put.add_argument("path", type=Path)
+    graph_put.add_argument("file", help="the file to store, or - for stdin")
+    graph_put.add_argument("--name", help="default: the file's stem")
     graph_remove = graph_actions.add_parser("rm", help="delete one graph")
     graph_remove.add_argument("name")
     graph_check = graph_actions.add_parser("check", help="compile it against the board")
@@ -112,7 +168,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     config_get = config_actions.add_parser("get", help="print one config's text")
     config_get.add_argument("name")
     config_put = config_actions.add_parser("put", help="write a .json into the store")
-    config_put.add_argument("path", type=Path)
+    config_put.add_argument("file", help="the file to store, or - for stdin")
+    config_put.add_argument("--name", help="default: the file's stem")
     config_remove = config_actions.add_parser("rm", help="delete one config")
     config_remove.add_argument("name")
     config_load = config_actions.add_parser("load", help="load one, and push its wiring")
@@ -137,7 +194,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     result = trial_actions.add_parser("result", help="a finished trial, with its path")
     result.add_argument("trial_id", nargs="?", type=int)
 
-    recording = commands.add_parser("recording", help="take a named recording off the ring")
+    recording = commands.add_parser("recordings", help="take a named recording off the ring")
     recording_actions = recording.add_subparsers(dest="action", required=True)
     recording_actions.add_parser("list", help="the store, and the one being written to")
     recording_start = recording_actions.add_parser("start", help="begin keeping entries")
@@ -152,33 +209,38 @@ def main(argv: Sequence[str] | None = None) -> int:
     recording_remove = recording_actions.add_parser("rm", help="delete a closed recording")
     recording_remove.add_argument("name")
 
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
     arguments = parser.parse_args(argv)
+    if getattr(arguments, "file", None) == "-" and not arguments.name:
+        parser.error("put - reads stdin and needs --name")
 
     try:
         with StatemachinedClient(arguments.rig) as rig:
-            # Before anything else, so that "nothing is listening" and "that is
-            # the browser's port" are one clear sentence rather than whatever
-            # gRPC says about HTTP/2 frames.
-            rig.wait_until_ready(timeout_s=5)
+            # Before anything else, so that "nothing is listening" is one clear
+            # sentence rather than whatever gRPC says about HTTP/2 frames.
+            rig.wait_until_ready(timeout_s=arguments.timeout)
             return _run(rig, arguments)
     except DaemonRefusedTheRequest as refusal:
         # To stderr, and JSON, so that a script can read the refusal and a
         # person can read the sentence. `error` is what a script switches on
         # and `context` is what to change.
-        print(
-            json.dumps(
-                {
-                    "error": refusal.error,
-                    "detail": refusal.detail,
-                    "context": refusal.context,
-                    "status": refusal.status,
-                }
-            ),
-            file=sys.stderr,
+        return _fail(
+            refusal.error,
+            refusal.detail,
+            _EXIT_STATUS_FOR_REFUSAL.get(refusal.status, ExitStatus.REFUSED),
+            context=refusal.context,
+            status=refusal.status,
         )
-        return 1
-    except KeyboardInterrupt:
-        return 130
+    except TimeoutError as problem:
+        return _fail("unavailable", str(problem), ExitStatus.UNAVAILABLE)
+    except OSError as problem:
+        return _fail("unreadable", str(problem), ExitStatus.FAILURE)
+    except (KeyboardInterrupt, BrokenPipeError):
+        return ExitStatus.INTERRUPTED
 
 
 def _run(rig: StatemachinedClient, arguments) -> int:
@@ -221,9 +283,9 @@ def _run(rig: StatemachinedClient, arguments) -> int:
             _print(rig.close_session())
         case "trial":
             return _trial(rig, arguments)
-        case "recording":
+        case "recordings":
             return _recording(rig, arguments)
-    return 0
+    return ExitStatus.OK
 
 
 def _trace(rig: StatemachinedClient, arguments) -> int:
@@ -235,8 +297,7 @@ def _trace(rig: StatemachinedClient, arguments) -> int:
         return 0
     with rig.watch_trace(arguments.since) as entries:
         for entry in entries:
-            _print(entry)
-            sys.stdout.flush()
+            _print_line(entry)
     return 0
 
 
@@ -246,7 +307,7 @@ def _monitor(rig: StatemachinedClient, arguments) -> int:
         return 0
     with rig.watch_serial_monitor(arguments.since) as entries:
         for entry in entries:
-            print(f"{entry.direction} {entry.line}", flush=True)
+            _print_line(entry)
     return 0
 
 
@@ -259,16 +320,17 @@ def _graphs(rig: StatemachinedClient, arguments) -> int:
             # reformatted graph is a diff nobody asked for.
             print(rig.read_graph(arguments.name).text, end="")
         case "put":
-            # The file's own stem is the name it is filed under, and the daemon
-            # refuses it if the document disagrees — which is the check, rather
-            # than this guessing which of the two was meant.
-            _print(rig.write_graph(arguments.path.stem, arguments.path.read_text()))
+            # The file's own stem is the name it is filed under unless --name
+            # says otherwise, and the daemon refuses it if the document
+            # disagrees — which is the check, rather than this guessing which
+            # of the two was meant.
+            _print(rig.write_graph(*_named_document(arguments)))
         case "rm":
             _print(rig.delete_graph(arguments.name))
         case "check":
             validation = rig.validate_graph(arguments.name)
             _print(validation)
-            return 0 if validation.valid else 1
+            return ExitStatus.OK if validation.valid else ExitStatus.REFUSED
     return 0
 
 
@@ -279,12 +341,20 @@ def _configs(rig: StatemachinedClient, arguments) -> int:
         case "get":
             print(rig.read_config(arguments.name).text, end="")
         case "put":
-            _print(rig.write_config(arguments.path.stem, arguments.path.read_text()))
+            _print(rig.write_config(*_named_document(arguments)))
         case "rm":
             _print(rig.delete_config(arguments.name))
         case "load":
             _print(rig.load_config(arguments.name))
     return 0
+
+
+def _named_document(arguments) -> tuple[str, str]:
+    """`put FILE [--name NAME]`: the name, and the text as it is on disk."""
+    if arguments.file == "-":
+        return arguments.name, sys.stdin.read()
+    path = Path(arguments.file)
+    return arguments.name or path.stem, path.read_text(encoding="utf-8")
 
 
 def _trial(rig: StatemachinedClient, arguments) -> int:
@@ -344,8 +414,7 @@ def _watch(rig: StatemachinedClient, *, summary: bool) -> None:
                     flush=True,
                 )
             else:
-                _print(state)
-                sys.stdout.flush()
+                _print_line(state)
 
 
 if __name__ == "__main__":  # pragma: no cover

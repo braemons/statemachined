@@ -130,7 +130,7 @@ fn the_firmware_enum_is_the_taxonomy_value_for_value() {
 #[test]
 fn the_generated_enum_is_the_taxonomy() {
     // The daemon's own copy is generated, so this only catches a stale
-    // `daemon-rs/src/wire/` -- which `make rust-check-proto` also does.
+    // `daemon/src/wire/` -- which `make rust-check-proto` also does.
     for (name, value) in taxonomy() {
         let generated = TrialOutcome::from_str_name(&name)
             .unwrap_or_else(|| panic!("{name} is not in the generated enum"));

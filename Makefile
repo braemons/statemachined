@@ -30,7 +30,7 @@ check-core:                 ## enforce the portable core's constraints
 #
 # The `.tdr` taxonomy, `proto/braemons/v1/`, is vendored byte-identically from
 # `contracts/vendored/proto/` because neither this daemon nor triald owns it.
-# `daemon-rs/tests/outcomes.rs` holds the firmware enum and the graph editor's
+# `daemon/tests/outcomes.rs` holds the firmware enum and the graph editor's
 # menu to it.
 
 # **The browser's protobuf client is generated and committed**, like the
@@ -187,8 +187,8 @@ bench:                      ## the daemon + web UI against a device: make bench 
 	@for config in configs/*.config.json; do \
 	  [ -f "$(BENCH_CONFIGS)/$$(basename $$config)" ] || cp "$$config" $(BENCH_CONFIGS)/; \
 	done
-	cargo run --quiet --manifest-path daemon-rs/Cargo.toml -- serve -t $(TARGET) \
-	  --config $(BENCH_CONFIG) \
+	cargo run --quiet --manifest-path daemon/Cargo.toml -- serve -t $(TARGET) \
+	  --rig-config $(BENCH_CONFIG) \
 	  --host $(BENCH_HOST) --port $(BENCH_PORT) $(ARGS)
 
 # The other half of the no-board path: the firmware's own session and engine,
@@ -389,18 +389,18 @@ ci: check-core check-proto test sanitize golden format-check rust-check client f
 
 .PHONY: rust
 rust:  ## build the daemon
-	cargo build --manifest-path daemon-rs/Cargo.toml
+	cargo build --manifest-path daemon/Cargo.toml
 
 .PHONY: rust-proto
-rust-proto:  ## regenerate daemon-rs/src/wire/ from proto/
+rust-proto:  ## regenerate daemon/src/wire/ from proto/
 	cargo run --quiet --manifest-path tools/protogen/Cargo.toml
 
 .PHONY: rust-check-proto
 rust-check-proto:  ## fail if the committed wire types are not what proto/ produces
 	@rm -rf target/proto-check
 	@cargo run --quiet --manifest-path tools/protogen/Cargo.toml -- target/proto-check
-	@diff -r --exclude=mod.rs target/proto-check daemon-rs/src/wire || { \
-	  echo "daemon-rs/src/wire/ is not what proto/ produces: run 'make rust-proto'"; \
+	@diff -r --exclude=mod.rs target/proto-check daemon/src/wire || { \
+	  echo "daemon/src/wire/ is not what proto/ produces: run 'make rust-proto'"; \
 	  exit 1; \
 	}
 
@@ -408,11 +408,11 @@ rust-check-proto:  ## fail if the committed wire types are not what proto/ produ
 # firmware built for this machine, and skips, saying so, without it.
 .PHONY: rust-test
 rust-test: integration-device  ## the daemon's tests
-	cargo test --manifest-path daemon-rs/Cargo.toml
+	cargo test --manifest-path daemon/Cargo.toml
 
 .PHONY: rust-check
 rust-check: rust rust-check-proto rust-test  ## everything the daemon checks
-	cargo clippy --manifest-path daemon-rs/Cargo.toml --all-targets -- -D warnings
+	cargo clippy --manifest-path daemon/Cargo.toml --all-targets -- -D warnings
 
 # The family's e2e suite -- contracts/e2e-tests -- against this checkout: the
 # daemon cargo builds, first on PATH, and the native device from build/. The

@@ -372,7 +372,7 @@ If you would rather do it without the browser, the client does the same:
 ```python
 from statemachined_client import StatemachinedClient
 
-rig = StatemachinedClient("127.0.0.1:8082")
+rig = StatemachinedClient("127.0.0.1:8081")
 rig.write_autorun(True, graph_name="state-walk", start_now=False)
 rig.save_settings()
 ```

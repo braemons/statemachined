@@ -176,7 +176,7 @@ deb rpm: export STATEMACHINED_PKG_VERSION = $(VERSION)
 stage: $(STAGE)/.stamp      ## build the tree the package is cut from
 # The panels are a prerequisite because they are embedded, minus their build
 # inputs: `node_modules` is tens of thousands of files.
-$(STAGE)/.stamp: $(shell find $(ROOT)/daemon-rs -type f -not -path '*/target/*') \
+$(STAGE)/.stamp: $(shell find $(ROOT)/daemon -type f -not -path '*/target/*') \
                  $(shell find $(ROOT)/client/web -type f \
                            -not -path '*/node_modules/*' -not -path '*/gen/*') \
                  $(ROOT)/Cargo.toml $(ROOT)/Cargo.lock
@@ -197,7 +197,7 @@ $(STAGE)/.stamp: $(shell find $(ROOT)/daemon-rs -type f -not -path '*/target/*')
 	cd $(ROOT) && STATEMACHINED_VERSION=$(VERSION) \
 	  RUSTFLAGS="--remap-path-prefix=$(ROOT)=/build/statemachined --remap-path-prefix=$(CARGO_HOME_DIR)=/cargo" \
 	  $(CARGO) build --release --locked --target-dir $(BUILD)/target \
-	    --manifest-path daemon-rs/Cargo.toml
+	    --manifest-path daemon/Cargo.toml
 	install -m 0755 $(BUILD)/target/release/statemachined $(STAGE)$(BINARY)
 
 	$(MAKE) --no-print-directory stage-docs stage-firmware stage-deterministic
@@ -253,7 +253,7 @@ check: stage                ## run the staged daemon: its version and its panels
 	@$(STAGE)$(BINARY) --help >/dev/null
 	@scratch=$$(mktemp -d); \
 	 $(STAGE)$(BINARY) serve --no-mdns --port $(CHECK_PORT) \
-	   --config $$scratch/absent.toml --storage-dir $$scratch --device loop:// \
+	   --rig-config $$scratch/absent.toml --storage-dir $$scratch --device loop:// \
 	   >$$scratch/log 2>&1 & daemon=$$!; \
 	 for _ in $$(seq 50); do \
 	   curl -fsS http://127.0.0.1:$(CHECK_PORT)/ >$$scratch/index.html 2>/dev/null && break; \

@@ -46,30 +46,16 @@ def the_daemon_binary() -> Path | None:
 
 
 def a_free_port() -> int:
-    """A free port whose **successor is also free**, and hand both over.
+    """A free port, for a daemon of this suite's own.
 
-    `statemachined serve` answers on two: `--port`, and the one above it, which
-    is the port `DEFAULT_PORT` names on this side. Asking the
-    kernel for one port says nothing about the next, and a daemon that comes up
-    and then cannot bind its second listener fails this suite for a reason that
-    has nothing to do with the client.
-
-    There is still a race between closing these sockets and the child binding
-    them, and it is the one every test harness accepts: the alternative is a
-    fixed port, and a fixed port makes two runs of this suite on one machine
-    collide — which is a certainty rather than a race.
+    There is a race between closing this socket and the child binding it, and
+    it is the one every test harness accepts: the alternative is a fixed port,
+    and a fixed port makes two runs of this suite on one machine collide —
+    which is a certainty rather than a race.
     """
-    for _ in range(50):
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
-            try:
-                with socket.socket() as neighbour:
-                    neighbour.bind(("127.0.0.1", port + 1))
-            except OSError:
-                continue
-            return port
-    raise AssertionError("no pair of consecutive free ports after 50 tries")
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
 @pytest.fixture(scope="session")
@@ -83,8 +69,6 @@ def rig():
     if binary is None:
         pytest.skip(f"no daemon at {BUILT_DAEMON}; `cargo build` makes one")
 
-    # The client dials `--port + 1`, which the daemon also answers on and which
-    # is the port `DEFAULT_PORT` names here.
     port = a_free_port()
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch)
@@ -107,7 +91,7 @@ def rig():
             [
                 str(binary),
                 "serve",
-                "--config",
+                "--rig-config",
                 str(configuration),
                 "--host",
                 "127.0.0.1",
@@ -118,12 +102,12 @@ def rig():
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
-        client = StatemachinedClient(f"127.0.0.1:{port + 1}")
+        client = StatemachinedClient(f"127.0.0.1:{port}")
         try:
             client.wait_until_ready(timeout_s=STARTUP_TIMEOUT_SECONDS)
         except DaemonIsUnavailable:
             daemon.terminate()
-            pytest.fail(f"{binary} did not come up on 127.0.0.1:{port + 1}")
+            pytest.fail(f"{binary} did not come up on 127.0.0.1:{port}")
         try:
             yield client
         finally:

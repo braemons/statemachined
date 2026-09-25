@@ -70,14 +70,20 @@ either.
 
 ## `statemachinectl`
 
-The same client as a command line. `--rig` takes `host` or `host:port`.
-Everything prints JSON, so it pipes into `jq`.
+The same client as a command line. It follows the family's rules for a
+`<name>ctl` (`contracts/DAEMON_LAYOUT.md`): `--rig` takes `host` or
+`host:port`, else `$BRAEMONS_RIG`, else localhost. Everything prints JSON, one
+object per line for a stream, so it pipes into `jq`. A refusal is JSON on
+stderr with a shared exit status (3 nothing answered, 5 refused, 6 not found).
 
 ```console
-$ statemachinectl --rig rig-3.local state
-$ statemachinectl --rig rig-3.local device
-$ statemachinectl --rig rig-3.local graphs
-$ statemachinectl --rig rig-3.local trace --follow
+$ export BRAEMONS_RIG=rig-3.local
+$ statemachinectl state
+$ statemachinectl device
+$ statemachinectl graphs list
+$ statemachinectl graphs get go-no-go > go-no-go.json
+$ statemachinectl graphs put go-no-go.json
+$ statemachinectl trace --follow | jq -c .
 ```
 
 ## Licence

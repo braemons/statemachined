@@ -84,7 +84,7 @@ The daemon owns the board; a script talks to the daemon, with the client in
 ```python
 from statemachined_client import StatemachinedClient
 
-rig = StatemachinedClient("rig-3.local")      # gRPC, on 8082
+rig = StatemachinedClient("rig-3.local")      # gRPC, on 8081
 rig.upload_graph_set(["go-nogo", "two-alternative-forced-choice"])
 
 rig.configure_trial(1, graph="go-nogo", cap_milliseconds=30_000)

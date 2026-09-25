@@ -138,18 +138,16 @@ def a_line_answering_itself(name: str, outputs: list[int], *, mid_trial: bool) -
 
 
 def a_free_port() -> int:
-    """A free port whose successor is also free: the daemon answers on both."""
-    for _ in range(50):
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
-            try:
-                with socket.socket() as neighbour:
-                    neighbour.bind(("127.0.0.1", port + 1))
-            except OSError:
-                continue
-            return port
-    raise AssertionError("no pair of consecutive free ports after 50 tries")
+    """A free port, for a daemon of this suite's own.
+
+    There is a race between closing this socket and the child binding it, and
+    it is the one every test harness accepts: the alternative is a fixed port,
+    and a fixed port makes two runs of this suite on one machine collide —
+    which is a certainty rather than a race.
+    """
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
 
 
 @dataclass
@@ -269,7 +267,7 @@ def start_daemon(target: str, scratch: Path) -> tuple[subprocess.Popen, Statemac
         [
             str(binary),
             "serve",
-            "--config",
+            "--rig-config",
             str(configuration),
             "--host",
             "127.0.0.1",
@@ -280,7 +278,7 @@ def start_daemon(target: str, scratch: Path) -> tuple[subprocess.Popen, Statemac
         stdout=subprocess.DEVNULL,
         stderr=open(scratch / "daemon.log", "w"),  # noqa: SIM115 -- lives as long as the daemon
     )
-    client = StatemachinedClient(f"127.0.0.1:{port + 1}")
+    client = StatemachinedClient(f"127.0.0.1:{port}")
     client.wait_until_ready(timeout_s=30)
     return daemon, client
 

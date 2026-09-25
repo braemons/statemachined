@@ -19,12 +19,12 @@ Group=statemachined
 
 # --host and --port are command line only: they are properties of how this box
 # is reached rather than of the rig, so they are not in the rig config. An
-# override goes in /etc/braemons/statemachined.env as extra arguments -- argparse
-# takes the last of a repeated option, so `--port 9000` there wins over the one
+# override goes in /etc/braemons/statemachined.env as extra arguments -- the
+# daemon takes the last of a repeated option (clap's args_override_self), so `--port 9000` there wins over the one
 # here without this file being edited.
 EnvironmentFile=-/etc/braemons/statemachined.env
 ExecStart=/usr/bin/statemachined serve \
-  --config /etc/braemons/statemachined-rig-config.toml \
+  --rig-config /etc/braemons/statemachined-rig-config.toml \
   --host 0.0.0.0 --port 8081 $STATEMACHINED_EXTRA_ARGS
 
 # A board that stops answering is the case this exists for: the daemon exits,
@@ -54,7 +54,7 @@ ProtectControlGroups=yes
 RestrictNamespaces=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
-# AF_NETLINK is zeroconf's: it watches for interfaces appearing, which is how a
+# AF_NETLINK is mDNS's: it watches for interfaces appearing, which is how a
 # rig on DHCP advertises itself after the network comes up rather than before.
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
 

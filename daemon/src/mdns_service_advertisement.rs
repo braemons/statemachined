@@ -38,6 +38,20 @@ pub fn stable_rig_identifier(machine_id_path: &Path) -> String {
     digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()[..16].to_string()
 }
 
+/// The box rather than this daemon on it: the same machine-id, salted
+/// `braemons:`, and so the same sixteen digits in every braemons daemon's
+/// record on one rig. `id` cannot do this — it is salted with the daemon's own
+/// name by design — and a console grouping on it shows each rig once per
+/// daemon (`console/docs/PLAN.md` §4).
+pub fn rig_identifier(machine_id_path: &Path) -> String {
+    let seed = std::fs::read_to_string(machine_id_path)
+        .map(|text| text.trim().to_string())
+        .unwrap_or_default();
+    let seed = if seed.is_empty() { hostname() } else { seed };
+    let digest = Sha256::digest(format!("braemons:{seed}").as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>()[..16].to_string()
+}
+
 /// What a console can act on without opening a connection first.
 ///
 /// Deliberately small: a TXT record is not an API. `elements` is here because
@@ -126,12 +140,13 @@ impl MdnsServiceAdvertisement {
     pub fn build_service_info(&self) -> Result<mdns_sd::ServiceInfo, String> {
         let instance = self.service_name();
         let instance = instance.trim_end_matches(&format!(".{SERVICE_TYPE}"));
-        let records = text_records_for(
+        let mut records = text_records_for(
             &stable_rig_identifier(Path::new(MACHINE_ID_PATH)),
             self.port,
             &self.device_target,
             &self.version,
         );
+        records.insert("rig".into(), rig_identifier(Path::new(MACHINE_ID_PATH)));
         mdns_sd::ServiceInfo::new(
             SERVICE_TYPE,
             instance,
@@ -216,6 +231,18 @@ mod tests {
         let machine_id = directory.path().join("machine-id");
         std::fs::write(&machine_id, "dc4f4b06f2d84f6b9e2a7b0c1d2e3f40\n").unwrap();
         assert_eq!(stable_rig_identifier(&machine_id), "0b60208b6da842d7");
+    }
+
+    #[test]
+    fn the_rig_identifier_is_the_family_one() {
+        // mousewheeld's test asserts the same salting; this is the value both
+        // daemons advertise as `rig=` for this machine-id.
+        let directory = tempfile::tempdir().unwrap();
+        let machine_id = directory.path().join("machine-id");
+        std::fs::write(&machine_id, "dc4f4b06f2d84f6b9e2a7b0c1d2e3f40\n").unwrap();
+        let rig = rig_identifier(&machine_id);
+        assert_eq!(rig.len(), 16);
+        assert_ne!(rig, stable_rig_identifier(&machine_id));
     }
 
     #[test]

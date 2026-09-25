@@ -75,23 +75,14 @@ from .api_types import (
 )
 from .daemon_refusals import DaemonIsUnavailable, DaemonRefusedTheRequest
 
-#: What a person types into a browser, and what a console's `rigs.json` holds.
-#: The panels are served here; this client does not talk to it.
-DEFAULT_WEB_PORT = 8081
-
-#: Where this client connects: **one above the web port**.
+#: Where this client connects: the daemon's one port, which is also what a
+#: person types into a browser and what a console's `rigs.json` holds. The
+#: panels, gRPC and gRPC-Web share it.
 #:
-#: A Python daemon cannot serve gRPC and a browser on one socket the way a Rust
-#: one can — `grpc.aio` owns its port outright, and no ASGI server speaks native
-#: gRPC — so statemachined listens twice, and `grpc_port_for` in the daemon's
-#: `api/grpc_server.py` is the same `+ 1` written on the other side. It is a
-#: derived number rather than a second setting because a second setting is one
-#: nobody remembers to change.
-#:
-#: **8082 is also mousewheeld's web port**, so a rig running both daemons on
-#: their defaults has a collision. Whichever moves, this number follows
-#: `--port`, and `port=` here is how you say so until then.
-DEFAULT_PORT = DEFAULT_WEB_PORT + 1
+#: It was one above, 8082, while the daemon was Python and `grpc.aio` needed a
+#: socket of its own; the Rust daemon answered there too through the cutover,
+#: and since the second port was dropped this is the only one.
+DEFAULT_PORT = 8081
 
 _T = TypeVar("_T")
 _Wire = TypeVar("_Wire")
@@ -142,10 +133,8 @@ class StatemachinedClient:
     ``address`` is ``host``, ``host:port`` or an empty string for localhost.
     One daemon is one board and one session, so no call carries a session id.
 
-    **The port is the daemon's gRPC one**, which is one above the port the
-    panels are served on — see :data:`DEFAULT_PORT`. Pointing this at the
-    browser's port reaches an ASGI server that does not speak gRPC, so the
-    connection simply never becomes ready; :meth:`wait_until_ready` says so.
+    **The port is the daemon's one port**, the same one its panels are served
+    on — see :data:`DEFAULT_PORT`.
 
     Use it as a context manager, or call :meth:`close`::
 
@@ -205,13 +194,10 @@ class StatemachinedClient:
         try:
             grpc.channel_ready_future(self._channel).result(timeout=timeout_s)
         except grpc.FutureTimeoutError:
-            hint = ""
-            if self.address.endswith(f":{DEFAULT_WEB_PORT}"):
-                hint = f" — that is the port the panels are served on; gRPC is {DEFAULT_PORT}"
             raise DaemonIsUnavailable(
                 "unavailable",
                 "unavailable",
-                f"no statemachined answered at {self.address} within {timeout_s:g}s{hint}",
+                f"no statemachined answered at {self.address} within {timeout_s:g}s",
             ) from None
 
     # -- is it up ---------------------------------------------------------------

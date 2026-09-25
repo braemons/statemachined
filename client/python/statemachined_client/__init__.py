@@ -113,7 +113,6 @@ from .api_types import (
 )
 from .daemon_client import (
     DEFAULT_PORT,
-    DEFAULT_WEB_PORT,
     DaemonStreamSubscription,
     StatemachinedClient,
 )
@@ -128,7 +127,6 @@ from .daemon_refusals import (
 __all__ = [
     "DEFAULT_OBSERVER_NAME",
     "DEFAULT_PORT",
-    "DEFAULT_WEB_PORT",
     "KIND_STATE_VISIT",
     "KIND_TRIAL_RESULT",
     "Autorun",
