@@ -495,9 +495,6 @@ class HostLinkSession {
   void send(uint16_t message_id);
   /// Encode, frame and send the reply send() noted, if there is one.
   void flush_reply();
-  /// Zero `tx_`, flushing a noted reply first. compose() skips it when nothing
-  /// has been composed since.
-  void clear_tx();
   /// Send what compose() began, answering nothing.
   void send_unsolicited();
 
@@ -508,8 +505,6 @@ class HostLinkSession {
   bool deferring_ = false;
   bool reply_pending_ = false;
   uint16_t reply_to_ = 0;
-  /// `tx_` is all zero and nothing has been composed into it since.
-  bool tx_clean_ = false;
 
   FrameReader reader_;
   /// The command being handled, decoded. A member rather than a local because

@@ -53,6 +53,10 @@ add_library(statemachined_link
 set_target_properties(statemachined_link PROPERTIES LINKER_LANGUAGE CXX)
 target_include_directories(statemachined_link PUBLIC
   firmware/third_party/nanopb firmware/core/proto)
+# Every stream is a buffer, so nanopb need not carry a callback in each. Public:
+# it changes pb_istream_t and pb_ostream_t, so everything including pb.h must
+# agree -- platformio.ini sets the same.
+target_compile_definitions(statemachined_link PUBLIC PB_BUFFER_ONLY)
 
 add_library(statemachined_core
   firmware/core/io/reply_queue.cpp

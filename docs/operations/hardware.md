@@ -304,6 +304,37 @@ budgets a `state_report` at 20 periods, against the 9.1 measured here. Reverting
 the point — a measurement written down once is a measurement that quietly stops
 being true.
 
+### Link cost after protobuf, and what fixed it — measured 2026-09-28
+
+The link became COBS-framed protobuf, decoded and encoded by nanopb, and the
+hold grew with it. `client/python/tests/perf` measures it from outside, and the
+profiling build (`uno_r4_minima_profile`, `firmware/core/profile`) from inside,
+in cycles. Figures are during a trial, which is when a lost scan costs
+something.
+
+| | protobuf, whole hold | handler-only hold | + header wire, per-body clear, `-O2` |
+|---|---|---|---|
+| hold, `ping` | 647 µs | 7 µs | 11 µs |
+| hold, `state_report` | 1397 µs | 8 µs | 27 µs |
+| scan periods lost per command | 5.9 / 13.0 | 0 / 0 | 0 / 0 |
+| foreground work, `ping` | — | 596 µs | 110 µs |
+| foreground work, `state_report` | — | 1576 µs | 379 µs |
+| encode, one `visit` | 763 µs | 763 µs | 145 µs |
+| `state_report` round trip, p50 | 2.0 ms | 2.8 ms | 1.0 ms |
+
+Three changes, in order. **The hold covers only the handler** (`EngineLock`):
+the frame reader, nanopb's decode and the reply's encode run with the scan free
+to preempt them, because they touch nothing it does. **The payload is a fixed
+header and a bare body** (`docs/reference/protocol.md` §1), and the messages
+sent most are flat: nanopb walked the whole envelope `oneof` for every message
+and encoded every nested one twice. **Only the body in use is cleared**, from a
+table of body types built once, rather than the union of all of them.
+
+What is left for a lost scan is the handler itself and the catch-up scan, well
+under one period; the rest is foreground time the scan preempts. A scan itself
+costs ~16-19 µs of its 100 µs period during a trial, and 61 transitions in the
+current state cost no more than none.
+
 ### What `pins` costs — measured 2026-09-04
 
 The board answering which pin each line is (`PROTOCOL.md` §3.6) is the cheapest
@@ -463,7 +494,7 @@ follow:
   than it holds and `send_line()` spins waiting for the wire — 21 such stalls on
   the reference board, against a budget of zero.
 - **A full ring drops the newest visit and counts it**, reported as
-  `scan.visits_dropped` in `state_report`. Dropping the newest rather than the
+  `visits_dropped` in `state_report`. Dropping the newest rather than the
   oldest is what keeps the ring single-producer/single-consumer and therefore
   lock-free with an interrupt at one end. The host sees the gap either way, in
   the `seq` field that exists for exactly this. **The result is unaffected**:

@@ -226,13 +226,7 @@ void HostLinkSession::receive_byte(uint8_t c, Microseconds now_us) {
 }
 
 void HostLinkSession::handle_frame(link::PayloadSpan payload, Microseconds now_us) {
-  // Cleared here and not by pb_decode, which would otherwise walk every field
-  // of every message in the union to set its default -- in proto3 all zero,
-  // which is what memset writes in a fraction of the time. Measured by
-  // tests/perf/test_profile.py: that walk was most of a decode.
-  PROFILE_START(reset_started);
-  memset(&rx_, 0, sizeof(rx_));
-  PROFILE_END(profile::Span::RxReset, reset_started);
+  // decode_host_payload clears only the body it decodes, not the union.
   link::Header header;
   const char* why = nullptr;
   PROFILE_START(decode_started);
@@ -259,11 +253,6 @@ void HostLinkSession::handle_frame(link::PayloadSpan payload, Microseconds now_u
     return;
   }
 
-  // The reply's struct is cleared here, before the lock, so that the handler's
-  // compose() finds it clean and does not clear it inside the hold. 376 bytes
-  // of memset was two thirds of what was left of a hold once the encode moved
-  // out (tests/perf/test_profile.py).
-  clear_tx();
   {
     PROFILE_SCOPE(profile::Span::Dispatch);
     if (lock_ != nullptr) lock_->acquire();
@@ -1652,18 +1641,10 @@ link::DeviceMessage& HostLinkSession::compose(pb_size_t which) {
   // clear: it goes out first. Only a handler that sends twice, or sends
   // something unasked, ever meets one here.
   flush_reply();
-  if (!tx_clean_) clear_tx();
-  tx_clean_ = false;
-  tx_.which_body = which;
-  return tx_;
-}
-
-void HostLinkSession::clear_tx() {
-  flush_reply();
   PROFILE_SCOPE(profile::Span::Compose);
-  // All zero is the proto3 default for every field, and what init_zero is.
-  memset(&tx_, 0, sizeof(tx_));
-  tx_clean_ = true;
+  // That body's bytes, zeroed -- not the whole union's (link_payload.h).
+  link::select_body(&tx_, which);
+  return tx_;
 }
 
 size_t HostLinkSession::encode_composed(bool is_reply, uint16_t in_reply_to) {

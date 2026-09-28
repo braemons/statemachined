@@ -49,10 +49,10 @@ enum class PayloadError : uint8_t {
   BadBody,      ///< the body did not decode as its type
 };
 
-/// `m` must be zeroed first: the body is decoded without nanopb's default
-/// initialisation, which walks every field of every body to set a zero. On
-/// UnknownType and BadBody `h` is filled in, so the refusal can name the
-/// command it refuses.
+/// The body's own bytes are zeroed and it is decoded without nanopb's default
+/// initialisation, which walks every field of every body to set a zero; the
+/// rest of `m` is left alone. On UnknownType (`which_body` is then 0) and
+/// BadBody `h` is filled in, so the refusal can name the command it refuses.
 PayloadError decode_host_payload(const uint8_t* bytes, size_t n, Header* h, HostMessage* m,
                                  const char** why = nullptr);
 PayloadError decode_device_payload(const uint8_t* bytes, size_t n, Header* h, DeviceMessage* m,
@@ -64,6 +64,12 @@ PayloadError decode_device_payload(const uint8_t* bytes, size_t n, Header* h, De
 /// rule out for the session's own buffers.
 size_t encode_device_payload(const Header& h, const DeviceMessage& m, uint8_t* out, size_t cap);
 size_t encode_host_payload(const Header& h, const HostMessage& m, uint8_t* out, size_t cap);
+
+/// Make `type` the body of `m`, zeroed: the start of composing a message. Only
+/// that body's bytes are cleared, not the union's -- clearing the whole union
+/// for a `pong` was once the most expensive part of sending one. False for a
+/// type link.proto does not have.
+bool select_body(DeviceMessage* m, pb_size_t type);
 
 }  // namespace link
 }  // namespace statemachined

@@ -36,8 +36,8 @@ from one of them:
   record of a run.
 
 Throughout, examples are wrapped for readability. **On the wire every message
-is exactly one frame**, and `msg_type` is not a field but the `body` member that
-is set.
+is exactly one frame**, and `msg_type` is not a field but the header's `type`:
+the body's field number in `link.proto`'s `HostMessage` / `DeviceMessage`.
 
 ---
 
@@ -46,12 +46,30 @@ is set.
 Both directions, identically:
 
 ```
-COBS( protobuf message ‖ CRC-16, big-endian ) ‖ 0x00
+COBS( header ‖ body ‖ CRC-16, big-endian ) ‖ 0x00
 ```
 
-The bridge sends a `HostMessage` and the device a `DeviceMessage`: a
-`message_id`, on a reply an `in_reply_to`, and a `oneof body` naming the
-message.
+The **header** is fixed, not protobuf:
+
+| Offset | Size | Field         | Meaning |
+| ------ | ---- | ------------- | ------- |
+| 0      | 1    | `type`        | Which message the body is: its field number in `link.proto`'s `HostMessage` (host → device) or `DeviceMessage` (device → host) `oneof body` |
+| 1      | 1    | `flags`       | Bit 0: `in_reply_to` follows. The others are zero |
+| 2      | 2    | `message_id`  | Little-endian. §1.2 |
+| 4      | 2    | `in_reply_to` | Little-endian, only when flags bit 0 is set: the `message_id` of the command this answers |
+
+The **body** is that message alone, protobuf-encoded -- a `pong` with nothing
+in it is an empty body. The header and the body together are the *payload*,
+which is what the CRC, the set checksum (§3.2) and the result checksum (§4.3)
+are computed over.
+
+**Why a header and not a protobuf envelope.** This was an envelope message
+with the body as a `oneof` member, and on the reference board it was the most
+expensive thing the firmware did: nanopb walks every member of a `oneof` to
+encode one, and encodes a nested message twice (once to size it), so a `pong`
+cost five times its own encode. `link.proto` keeps the envelopes as the registry
+of type numbers, which is all they are now. For the same reason the messages
+the board sends most -- `visit`, `state_report`, `result_path` -- are flat.
 
 **Rules**
 
@@ -61,7 +79,7 @@ message.
 | Frame length     | At most `max_frame` bytes encoded, delimiter included. The device reports its limit in `hello_ack`'s `caps`; the reference board's is **512**, and every message this protocol defines fits in it by construction — the firmware's build refuses a `link.options` under which one would not |
 | Bounded fields   | Every repeated and string field has a limit in `firmware/core/proto/link.options`, so the device decodes into fixed-size structs. A list longer than its limit is a frame that does not decode                                                   |
 | Unknown fields   | **Ignored**, on both sides — protobuf does this. It is how the protocol gains fields without a version bump                                                                                                                                      |
-| Unknown `body`   | Answered with `error` / `unknown_type`. Never silently dropped                                                                                                                                                                                   |
+| Unknown `type`   | Answered with `error` / `unknown_type`, naming the command's `message_id`. Never silently dropped                                                                                                                                               |
 | Absent fields    | A plain field that is not sent reads as zero. A field is `optional` in the `.proto` where absence has to be told apart from zero — `terminal` on a state that is not terminal, a timer's `loops`. The JSON `null` the old wire used for those is absence now |
 
 A frame that is too long, is not valid COBS, or whose CRC does not match is
@@ -75,8 +93,8 @@ protocol exists to prevent.
 ### 1.1 The CRC
 
 **CRC-16/CCITT-FALSE** (polynomial `0x1021`, initial value `0xFFFF`, no
-reflection, no final XOR) over the protobuf bytes, appended big-endian before
-COBS encoding.
+reflection, no final XOR) over the payload -- header and body -- appended
+big-endian before COBS encoding.
 
 A CRC is not security and is not claimed to be. It catches the failure that
 actually happens on a USB CDC link — a truncated or spliced frame after a
@@ -84,7 +102,7 @@ re-enumeration — early enough that a corrupt graph is refused instead of run.
 
 ### 1.2 `message_id`
 
-An unsigned 16-bit counter — carried in a `uint32` — **independent per
+An unsigned 16-bit counter — the header's, little-endian — **independent per
 direction**, incremented by one for every frame sent and wrapping through zero. It exists for link-level retry
 and for nothing else; trial attribution is `trial_id`'s job, and the two are
 never conflated.
@@ -1047,13 +1065,15 @@ result_end
  "total_us":1483200,"path_len":5,"first_seq":0,"total_visits":5,"truncated":false}
 
 {"msg_type":"result_path","message_id":10,"trial_id":193,"from":0,
- "p":[{"state":0,"exit":"timeout","transition":255,"drawn_ms":500,"entered_us":0,"duration_us":500120},
-      {"state":1,"exit":"transition","transition":2,"drawn_ms":0,"entered_us":500120,"duration_us":183044}]}
+ "state":[0,1],"exit":["timeout","transition"],"transition":[255,2],
+ "drawn_ms":[500,0],"entered_us":[0,500120],"duration_us":[500120,183044]}
 
 {"msg_type":"result_end","message_id":12,"trial_id":193,"checksum":48879}
 ```
 
-Each entry of `p` is a `StateVisit`:
+The rows are **parallel packed arrays**, one per field, all the same length:
+row `i` is element `i` of each. A repeated message cost nanopb a sizing pass
+per row, and this is the largest burst the device sends. The fields of a row:
 
 | Field         | Type   |                                                                                                                                                                                                                                                                                           |
 | ------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1064,9 +1084,8 @@ Each entry of `p` is a `StateVisit`:
 | `entered_us`  | `u32`  | Entry timestamp, device clock                                                                                                                                                                                                                                                             |
 | `duration_us` | `u32`  | Measured duration. This is what actually happened; `drawn_ms` is what was asked for                                                                                                                                                                                                       |
 
-On the NDJSON wire this was a six-element array, because objects there cost
-twice the bytes. Named protobuf fields cost one byte of tag each, so the row is
-named now — and still documented once, here, and decoded once, in the bridge.
+The same six fields, under the same names, are a `visit` (§4.4). The bridge
+zips a chunk's arrays back into rows, so one function decodes both.
 
 `truncated` is set when the run visited more states than `max_path` holds. **A
 graph may loop, and a long trial degrades to a truncated path rather than to a
@@ -1076,7 +1095,7 @@ oldest visits, not the newest.
 
 | Field          | Type  |                                                                                                                         |
 | -------------- | ----- | ----------------------------------------------------------------------------------------------------------------------- |
-| `path_len`     | `u8`  | How many entries `p` will carry in total — the size of the window, not of the run                                       |
+| `path_len`     | `u8`  | How many rows the chunks will carry in total — the size of the window, not of the run                                  |
 | `first_seq`    | `u32` | The `seq` (§4.4) of the oldest visit still in that window. `0` unless the ring wrapped                                  |
 | `total_visits` | `u32` | How many visits the run actually made. `total_visits > path_len` is what `truncated` means, and now it says by how much |
 
@@ -1106,7 +1125,7 @@ them.
 
 **A visit may be dropped, and the drop is counted rather than hidden.** If the
 ring fills — a burst of state changes faster than the link can be fed — the
-newest visit is discarded and `scan.visits_dropped` in `state_report` (§4.5)
+newest visit is discarded and `visits_dropped` in `state_report` (§4.5)
 counts it. A host detects the gap in `seq`, which is what `seq` is for. **This
 never costs a record**: `result_path` is built from the device's own account of
 the run and not from this stream, so a dropped visit costs a live trace and
@@ -1118,13 +1137,15 @@ nothing else.
   "message_id": 57,
   "trial_id": 193,
   "seq": 2,
-  "v": {"state": 1, "exit": "transition", "transition": 2, "drawn_ms": 0,
-        "entered_us": 500120, "duration_us": 183044}
+  "state": 1, "exit": "transition", "transition": 2, "drawn_ms": 0,
+  "entered_us": 500120, "duration_us": 183044
 }
 ```
 
-`v` is **the same `StateVisit` as a `result_path` entry** (§4.3). It is decoded by the same function on the
-host; two shapes for one fact is how the two drift apart.
+Its row fields are **the same as a `result_path` row** (§4.3), flat in the
+message rather than nested -- nesting cost nanopb a second encode of the row.
+It is decoded by the same function on the host; two shapes for one fact is how
+the two drift apart.
 
 | Field      | Type  |                                                                                                                                                                                                                                                              |
 | ---------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -1171,39 +1192,39 @@ the two clocks at all.
 `log` is free text, rate-limited, and never load-bearing. Nothing in the bridge
 may parse it.
 
-`state_report` answers `state` with the current state index, uptime, the
-nested `graph` object (`has_set`, `set_version`, `n_graphs`, `index`),
-`has_wiring` as in §4.1, `autorun` — whether the board is arming its own trials
-(§3.8) — `dropped_lines`, frames thrown away whole (too long, not COBS, a bad
-CRC), and `bad_lines`, frames that arrived intact and still did not decode —
-and a nested `scan` object.
+`state_report` answers `state`, **flat** -- it had nested `graph`, `io` and
+`scan` groups, each of which nanopb encoded twice, in the reply a host polls
+for. Its fields: the current state index, uptime, the committed set
+(`has_set`, `set_version`, `n_graphs`, `graph_index`), `has_wiring` as in
+§4.1, `autorun` — whether the board is arming its own trials (§3.8) —
+`dropped_lines`, frames thrown away whole (too long, not COBS, a bad CRC),
+`bad_lines`, frames that arrived intact and still did not decode, the live
+pins (`in`, `out`), and how the scan is doing (`scan_hz`, `overruns`,
+`worst_gap`, `tx_stalls`, `visits_dropped`, `timers_enabled`,
+`timers_running`).
 
-The `scan` object also carries `timers_enabled` and `timers_running`. They are
-in there rather than at the top level because the top level of `state_report` is
-at the reader's member limit exactly, and `scan` is the object that already
-holds what the scan is doing. `timers_enabled` is the mask **in force now**, so
-during a trial that overrode it this is the trial's mask and not the device's.
-`timers_running` is one bit per timer actually in flight, onset delay included —
-a timer counting down its delay is running, it is simply not high yet.
+`timers_enabled` is the mask **in force now**, so during a trial that overrode
+it this is the trial's mask and not the device's. `timers_running` is one bit
+per timer actually in flight, onset delay included — a timer counting down its
+delay is running, it is simply not high yet.
 
 `link_state` is what the session is doing: `0` greeting (nothing but `hello` is
 answered), `1` idle, `2` armed, `3` running, `4` relighting — the dwell between
-two self-driven runs, which only a board driving itself is ever in. Nested because a message is capped at sixteen top-level members
-and that cap is what bounds the reader's stack footprint. Diagnosis, not
-control.
+two self-driven runs, which only a board driving itself is ever in. Diagnosis,
+not control.
 
 ```jsonc
-"io":   {"in": 5, "out": 128},
-"scan": {"hz": 9871, "overruns": 4, "worst_gap": 2, "tx_stalls": 0}
+"in": 5, "out": 128,
+"scan_hz": 9871, "overruns": 4, "worst_gap": 2, "tx_stalls": 0
 ```
 
-`io.in` is the _conditioned_ input word as of the last scan — after invert,
-enable and debounce — and `io.out` is the device's own record of the output
+`in` is the _conditioned_ input word as of the last scan — after invert,
+enable and debounce — and `out` is the device's own record of the output
 levels, not a read-back: nothing can read a pin. Together they are the only way
 anything outside the device can check that a graph's line numbers reach the pins
 somebody wired.
 
-`hz` is what the device measured of itself at boot, not a declared figure — and
+`scan_hz` is what the device measured of itself at boot, not a declared figure — and
 it is a _floor_, covering reading and conditioning the pins but not evaluating
 a graph's transitions. `overruns` counts scan periods that went by with no scan
 in them since boot, and `worst_gap` is the most ever missed in a row.

@@ -42,10 +42,10 @@ enum class Span : uint8_t {
   HoldTrial = 3,       ///< the same, a trial running: the one that matters
   LinkRead = 4,        ///< hal::link_read, outside the hold
   FrameRead = 5,       ///< the frame reader: COBS, CRC, per byte (count is bytes)
-  RxReset = 6,         ///< clearing the decode struct before a frame
+  RxReset = 6,         ///< unused since decode clears only its own body
   Decode = 7,          ///< pb_decode of one HostMessage
   Dispatch = 8,        ///< the handler, reply included
-  Compose = 9,         ///< clearing the encode struct, before the engine lock
+  Compose = 9,         ///< selecting and clearing a reply's body
   Encode = 10,         ///< pb_encode of one DeviceMessage
   FrameWrite = 11,     ///< COBS and CRC around an encoded reply
   DrainOutbound = 12,  ///< visits and results, built in loop()

@@ -16,20 +16,57 @@ void put_u16(uint8_t* p, uint16_t v) {
 
 uint16_t get_u16(const uint8_t* p) { return static_cast<uint16_t>(p[0] | (p[1] << 8)); }
 
-/// The body for `type`, found in the envelope's descriptor -- nanopb's own
-/// table of which number is which message, generated from link.proto, so
-/// there is no second one here to keep in step. `it.pData` is the union's
-/// storage and `it.pSize` its `which_body`.
-bool find_body(pb_field_iter_t* it, const pb_msgdesc_t* envelope, const void* message,
-               pb_size_t type) {
-  if (!pb_field_iter_begin_const(it, envelope, message)) return false;
-  if (!pb_field_iter_find(it, type)) return false;
-  return PB_HTYPE(it->type) == PB_HTYPE_ONEOF && PB_LTYPE_IS_SUBMSG(it->type);
+/// What each body type is, indexed by its number: nanopb's descriptor for it
+/// and the size of its struct. Built once from the envelope's own descriptor --
+/// nanopb's table of which number is which message, generated from link.proto,
+/// so there is no second one to keep in step -- because walking that
+/// descriptor on every message was a measurable part of each encode.
+struct Body {
+  const pb_msgdesc_t* desc = nullptr;
+  pb_size_t size = 0;
+};
+constexpr pb_size_t kTypes = 64;
+struct BodyTable {
+  Body body[kTypes];
+};
+
+BodyTable build_table(const pb_msgdesc_t* envelope, const void* message) {
+  BodyTable t;
+  pb_field_iter_t it;
+  if (!pb_field_iter_begin_const(&it, envelope, message)) return t;
+  do {
+    if (PB_HTYPE(it.type) == PB_HTYPE_ONEOF && PB_LTYPE_IS_SUBMSG(it.type) && it.tag < kTypes) {
+      t.body[it.tag].desc = it.submsg_desc;
+      t.body[it.tag].size = it.data_size;
+    }
+  } while (pb_field_iter_next(&it));
+  return t;
 }
 
 template <typename Envelope>
-PayloadError decode(const pb_msgdesc_t* envelope, const uint8_t* bytes, size_t n, Header* h,
-                    Envelope* m, const char** why) {
+const Body* body_of(const Envelope* m, pb_size_t type);
+
+template <>
+const Body* body_of(const HostMessage* m, pb_size_t type) {
+  static const BodyTable table = build_table(statemachined_link_v1_HostMessage_fields, m);
+  return type < kTypes && table.body[type].desc != nullptr ? &table.body[type] : nullptr;
+}
+
+template <>
+const Body* body_of(const DeviceMessage* m, pb_size_t type) {
+  static const BodyTable table = build_table(statemachined_link_v1_DeviceMessage_fields, m);
+  return type < kTypes && table.body[type].desc != nullptr ? &table.body[type] : nullptr;
+}
+
+/// Make `type` the body, zeroed -- that body's bytes, not the whole union's.
+template <typename Envelope>
+void select(Envelope* m, pb_size_t type, pb_size_t size) {
+  memset(&m->body, 0, size);
+  m->which_body = type;
+}
+
+template <typename Envelope>
+PayloadError decode(const uint8_t* bytes, size_t n, Header* h, Envelope* m, const char** why) {
   if (n < kHeaderBytes) {
     if (why != nullptr) *why = "shorter than a header";
     return PayloadError::TooShort;
@@ -47,32 +84,33 @@ PayloadError decode(const pb_msgdesc_t* envelope, const uint8_t* bytes, size_t n
     h->in_reply_to = get_u16(bytes + at);
     at += 2;
   }
-  pb_field_iter_t it;
-  if (!find_body(&it, envelope, m, h->type)) {
+  const Body* body = body_of(m, h->type);
+  if (body == nullptr) {
+    m->which_body = 0;
     if (why != nullptr) *why = "unrecognised message type";
     return PayloadError::UnknownType;
   }
-  *static_cast<pb_size_t*>(it.pSize) = h->type;
+  select(m, h->type, body->size);
   pb_istream_t stream = pb_istream_from_buffer(bytes + at, n - at);
-  if (!pb_decode_ex(&stream, it.submsg_desc, it.pData, PB_DECODE_NOINIT)) {
+  if (!pb_decode_ex(&stream, body->desc, &m->body, PB_DECODE_NOINIT)) {
     if (why != nullptr) *why = PB_GET_ERROR(&stream);
     return PayloadError::BadBody;
   }
   return PayloadError::None;
 }
 
-size_t encode(const pb_msgdesc_t* envelope, const Header& h, const void* m, pb_size_t which,
-              uint8_t* out, size_t cap) {
-  pb_field_iter_t it;
-  if (which > 0xFF || !find_body(&it, envelope, m, which)) return 0;
+template <typename Envelope>
+size_t encode(const Header& h, const Envelope& m, uint8_t* out, size_t cap) {
+  const Body* body = body_of(&m, m.which_body);
+  if (body == nullptr || m.which_body > 0xFF) return 0;
   const size_t at = kHeaderBytes + (h.has_in_reply_to ? 2 : 0);
   if (cap < at) return 0;
-  out[0] = static_cast<uint8_t>(which);
+  out[0] = static_cast<uint8_t>(m.which_body);
   out[1] = h.has_in_reply_to ? kFlagInReplyTo : 0;
   put_u16(out + 2, h.message_id);
   if (h.has_in_reply_to) put_u16(out + kHeaderBytes, h.in_reply_to);
   pb_ostream_t stream = pb_ostream_from_buffer(out + at, cap - at);
-  if (!pb_encode(&stream, it.submsg_desc, it.pData)) return 0;
+  if (!pb_encode(&stream, body->desc, &m.body)) return 0;
   return at + stream.bytes_written;
 }
 
@@ -80,21 +118,28 @@ size_t encode(const pb_msgdesc_t* envelope, const Header& h, const void* m, pb_s
 
 PayloadError decode_host_payload(const uint8_t* bytes, size_t n, Header* h, HostMessage* m,
                                  const char** why) {
-  return decode(statemachined_link_v1_HostMessage_fields, bytes, n, h, m, why);
+  return decode(bytes, n, h, m, why);
 }
 
 PayloadError decode_device_payload(const uint8_t* bytes, size_t n, Header* h, DeviceMessage* m,
                                    const char** why) {
-  return decode(statemachined_link_v1_DeviceMessage_fields, bytes, n, h, m, why);
+  return decode(bytes, n, h, m, why);
 }
 
 size_t encode_device_payload(const Header& h, const DeviceMessage& m, uint8_t* out,
                              size_t cap) {
-  return encode(statemachined_link_v1_DeviceMessage_fields, h, &m, m.which_body, out, cap);
+  return encode(h, m, out, cap);
 }
 
 size_t encode_host_payload(const Header& h, const HostMessage& m, uint8_t* out, size_t cap) {
-  return encode(statemachined_link_v1_HostMessage_fields, h, &m, m.which_body, out, cap);
+  return encode(h, m, out, cap);
+}
+
+bool select_body(DeviceMessage* m, pb_size_t type) {
+  const Body* body = body_of(m, type);
+  if (body == nullptr) return false;
+  select(m, type, body->size);
+  return true;
 }
 
 }  // namespace link

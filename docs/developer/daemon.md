@@ -642,12 +642,13 @@ So the device also emits one message per completed state visit, as it happens.
   "message_id": 57,
   "trial_id": 193,
   "seq": 2,
-  "v": {"state": 1, "exit": "transition", "transition": 2, "drawn_ms": 0,
-        "entered_us": 500120, "duration_us": 183044}
+  "state": 1, "exit": "transition", "transition": 2, "drawn_ms": 0,
+  "entered_us": 500120, "duration_us": 183044
 }
 ```
 
-`v` is **the same `StateVisit`** as a `result_path` entry, decoded by the same
+Its row fields are **the same** as a `result_path` row's -- which arrive as
+parallel arrays and are zipped back into rows -- and are decoded by the same
 function on the host. Two shapes for one fact is how the two drift apart.
 
 It is called `visit`, not `transition`, for two reasons. `transition` is already
