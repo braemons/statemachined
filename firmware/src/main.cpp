@@ -49,10 +49,26 @@
 // And the residue is no longer a mystery: 3.0 periods is 300 us, against the
 // 374 us the hold measures for a ping, and 9.1 against 973 us for a state. The
 // scan now loses *exactly* the time the foreground spends inside the session
-// and not one period more. Shrinking it further means splitting `receive()` so
-// that framing and parsing happen outside the hold and only dispatch is inside
-// -- a change to core/, worth doing when a rig's traffic makes it worth doing,
-// and not before.
+// and not one period more.
+//
+// Then the link became protobuf, and the hold grew with it: 5.9 periods per
+// ping and 13 per state_report, during a trial. The profiling build
+// (core/profile, client/python/tests/perf/test_profile.py) said where: of a
+// 1400 us state_report hold, nanopb's encode was 940 us, its decode 185 us and
+// clearing the two message structs 100 us -- and the handler itself 35 us. None
+// of the rest touches anything the scan does. So the session now takes the
+// hold (EngineLock, core/protocol/host_link_session.h) around the handler
+// alone: the frame reader, the decode, clearing the reply and encoding it all
+// run with the scan free to preempt them.
+//
+//                        protobuf, whole     handler only
+//     hold, ping              647 us             7 us     (during a trial)
+//     hold, state_report     1397 us             8 us
+//     overruns/command     5.9 / 13.0          0 / 0
+//
+// A command no longer costs the scan a period. What it still costs is
+// foreground time -- ~0.6 ms a ping, ~1.5 ms a state_report, mostly nanopb --
+// which the scan preempts rather than waits for.
 //
 // What is left is counted, not absorbed: a scan deferred by that window is an
 // overrun like any other, and ScanHealth::overruns and worst_gap go out in
@@ -61,13 +77,14 @@
 //
 // The engine itself is untouched by any of this. Nothing in core/ knows which
 // context calls it, the host tests still exercise byte-identical code, and the
-// whole handoff is the flag below and the two places that raise it.
+// whole handoff is the flag below and the places that raise it.
 #include <Arduino.h>
 
 #include "hal.h"
 #include "io/input_conditioner.h"
 #include "io/reply_queue.h"
 #include "io/settings_store.h"
+#include "profile/profile.h"
 #include "protocol/firmware_version.h"
 #include "protocol/host_link_session.h"
 #include "trial/trial_runner.h"
@@ -146,13 +163,13 @@ SerialReplySink g_sink;
 volatile uint32_t g_ticks = 0;
 volatile uint32_t g_consumed = 0;
 
-/// Raised while the foreground is inside the engine or the session, which is
-/// the only window in which the ISR must not scan.
+/// Raised while the foreground is inside the engine -- a command's handler, or
+/// link loss -- which is the only window in which the ISR must not scan.
 ///
-/// It is deliberately not "while the foreground is busy": the expensive part of
-/// a command is the USB stack, and that shares nothing with a scan, so it runs
-/// with this down and gets preempted like any other work. Measured at ~372 us
-/// per command up, against ~2.5 ms down.
+/// It is deliberately not "while the foreground is busy": the USB stack, the
+/// frame reader and nanopb share nothing with a scan, so they run with this
+/// down and get preempted like any other work. Measured at ~7 us per command
+/// up, against ~0.6-1.5 ms of the session's own work and ~2.5 ms of USB down.
 volatile bool g_engine_held = false;
 
 /// The fixed cost of a scan, measured rather than declared, so the host learns
@@ -291,6 +308,10 @@ void apply(const OutputUpdate& ops) {
 }
 
 void scan() {
+#if defined(STATEMACHINED_PROFILE)
+  const bool in_trial = g_session->trial_running();
+  const profile::Scope timed(in_trial ? profile::Span::ScanTrial : profile::Span::ScanIdle);
+#endif
   const Microseconds now = hal::micros_now();
   heartbeat(now);
   const LineBitmask word = g_inputs.apply(hal::read_inputs(), now);
@@ -307,6 +328,13 @@ void note_missed(uint32_t missed) {
   if (missed == 0) return;
   g_health.overruns += missed;
   if (missed > g_health.worst_gap) g_health.worst_gap = missed;
+#if defined(STATEMACHINED_PROFILE)
+  if (g_session->trial_running()) {
+    profile::Profile& p = profile::get();
+    p.overruns_in_trial += missed;
+    if (missed > p.worst_gap_in_trial) p.worst_gap_in_trial = missed;
+  }
+#endif
 }
 
 /// The timer. Scans unless the foreground is inside the engine, in which case
@@ -329,27 +357,61 @@ void on_tick() {
 /// next tick defers instead of entering. So the two can never be inside the
 /// engine at once, and the cost is a couple of microseconds rather than a
 /// parse's worth of deaf timer.
+void hold_engine() {
+  noInterrupts();
+  g_engine_held = true;
+  interrupts();
+}
+
+void release_engine() {
+  // Whatever the ISR could not do while we held it, do now, so a command does
+  // not leave the trial a scan behind.
+  const uint32_t ticks = g_ticks;
+  if (ticks != g_consumed) {
+    note_missed(ticks - g_consumed - 1);
+    g_consumed = ticks;
+    scan_once();
+  }
+  g_engine_held = false;
+}
+
 class EngineHold {
  public:
-  EngineHold() {
-    noInterrupts();
-    g_engine_held = true;
-    interrupts();
-  }
-  ~EngineHold() {
-    // Whatever the ISR could not do while we held it, do now, so a command does
-    // not leave the trial a scan behind.
-    const uint32_t ticks = g_ticks;
-    if (ticks != g_consumed) {
-      note_missed(ticks - g_consumed - 1);
-      g_consumed = ticks;
-      scan_once();
-    }
-    g_engine_held = false;
-  }
+  EngineHold() { hold_engine(); }
+  ~EngineHold() { release_engine(); }
   EngineHold(const EngineHold&) = delete;
   EngineHold& operator=(const EngineHold&) = delete;
 };
+
+/// The session's view of the same hold: taken around a command's handler and
+/// nothing else (see EngineLock in core/protocol/host_link_session.h). A
+/// changed wiring is pushed into the conditioner before letting go, because
+/// only a handler changes it and the scan reads the conditioner.
+class SessionLock : public EngineLock {
+ public:
+  void acquire() override {
+#if defined(STATEMACHINED_PROFILE)
+    // Classified at the start: a `start` begins a trial inside its own hold,
+    // and what that hold cost the scan was spent before the trial existed.
+    in_trial_ = g_session->trial_running();
+    started_ = profile::cycles();
+#endif
+    hold_engine();
+  }
+  void release() override {
+    apply_wiring();
+    release_engine();
+    PROFILE_END(in_trial_ ? profile::Span::HoldTrial : profile::Span::HoldIdle, started_);
+  }
+
+ private:
+#if defined(STATEMACHINED_PROFILE)
+  bool in_trial_ = false;
+  uint32_t started_ = 0;
+#endif
+};
+
+SessionLock g_lock;
 
 void service_link() {
   const bool up = hal::link_up();
@@ -380,16 +442,16 @@ void service_link() {
   g_link_was_up = true;
 
   char buf[64];
+  PROFILE_START(read_started);
   const size_t n = hal::link_read(buf, sizeof(buf));
   if (n > 0) {
+    PROFILE_END(profile::Span::LinkRead, read_started);
     const Microseconds now = hal::micros_now();
-    // The hold covers the parse and the graph's input configuration --
-    // everything that touches the session, the runner or the conditioner, and
-    // nothing else. Reading those bytes off USB, above, cost twice as long and
-    // needed no hold at all.
-    const EngineHold hold;
+    // No hold here. The session takes one around each command's handler --
+    // everything that touches the runner or the conditioner -- and leaves the
+    // frame reader, nanopb's decode and the reply's encode outside it, where
+    // the scan preempts them. Those were four fifths of a command.
     g_session->receive(reinterpret_cast<const uint8_t*>(buf), n, now);
-    apply_wiring();
   }
 }
 
@@ -438,6 +500,7 @@ void setup() {
   g_inputs.prime(hal::read_inputs());
   g_session = &session();
   g_session->set_settings_port(&g_settings);
+  g_session->set_engine_lock(&g_lock);
   g_session->report_scan_health(g_health);
 
   // What this board remembers about itself, read before a single line is
@@ -501,8 +564,12 @@ void loop() {
   // bytes, and handing it a burst bigger than the queue is what makes
   // send_frame() spin. loop() turns far faster than a graph changes state, so
   // one at a time still empties it immediately.
-  g_session->drain_outbound(1);
+  {
+    PROFILE_SCOPE(profile::Span::DrainOutbound);
+    g_session->drain_outbound(1);
+  }
   // Last, so a reply produced by the command just serviced starts moving in
   // this same pass instead of waiting for the next one.
+  PROFILE_SCOPE(profile::Span::DrainTx);
   drain_tx();
 }

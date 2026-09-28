@@ -230,8 +230,10 @@ const char* exit_token(statemachined_link_v1_ExitCause c) {
 
 }  // namespace
 
-bool host_message_from_json(const std::string& text, link::HostMessage* out, std::string* why) {
+bool host_message_from_json(const std::string& text, link::Header* header,
+                            link::HostMessage* out, std::string* why) {
   *out = statemachined_link_v1_HostMessage_init_zero;
+  *header = link::Header{};
   JsonObject m(text.data(), text.size());
   if (!m.valid()) {
     *why = std::string("not a JSON object: ") + json_error_str(m.error());
@@ -243,7 +245,7 @@ bool host_message_from_json(const std::string& text, link::HostMessage* out, std
     return false;
   }
   Reader r(m, why);
-  r.u32("message_id", &out->message_id);
+  r.u32("message_id", &header->message_id);
   const std::string t(type.p, type.n);
   auto& b = out->body;
 
@@ -373,6 +375,9 @@ bool host_message_from_json(const std::string& text, link::HostMessage* out, std
     out->which_body = statemachined_link_v1_HostMessage_state_tag;
   } else if (t == "save") {
     out->which_body = statemachined_link_v1_HostMessage_save_tag;
+  } else if (t == "profile") {
+    out->which_body = statemachined_link_v1_HostMessage_profile_tag;
+    r.boolean("reset", &b.profile.reset);
   } else if (t == "wiring") {
     out->which_body = statemachined_link_v1_HostMessage_wiring_tag;
     auto& w = b.wiring;
@@ -406,11 +411,16 @@ bool host_message_from_json(const std::string& text, link::HostMessage* out, std
   return r.ok();
 }
 
-Bytes encode_host_message(const link::HostMessage& message) {
+Bytes encode_host_message(const link::Header& header, const link::HostMessage& message) {
   Bytes out(kMaxPayload);
-  pb_ostream_t stream = pb_ostream_from_buffer(out.data(), out.size());
-  if (!pb_encode(&stream, statemachined_link_v1_HostMessage_fields, &message)) return {};
-  out.resize(stream.bytes_written);
+  if (message.which_body == 0) {
+    // No body link.proto knows: a type number past every one it has.
+    constexpr uint8_t kNoSuchType = 0xFF;
+    out.assign({kNoSuchType, 0, static_cast<uint8_t>(header.message_id & 0xFF),
+                static_cast<uint8_t>(header.message_id >> 8)});
+    return out;
+  }
+  out.resize(link::encode_host_payload(header, message, out.data(), out.size()));
   return out;
 }
 
@@ -420,7 +430,8 @@ Bytes frame_of(const Bytes& payload) {
   return out;
 }
 
-bool decode_device_frame(const Bytes& frame, link::DeviceMessage* out, Bytes* payload) {
+bool decode_device_frame(const Bytes& frame, link::Header* header, link::DeviceMessage* out,
+                         Bytes* payload) {
   FrameReader reader;
   bool got = false;
   for (uint8_t byte : frame) {
@@ -431,19 +442,23 @@ bool decode_device_frame(const Bytes& frame, link::DeviceMessage* out, Bytes* pa
   }
   if (!got) return false;
   *out = statemachined_link_v1_DeviceMessage_init_zero;
-  pb_istream_t stream = pb_istream_from_buffer(payload->data(), payload->size());
-  return pb_decode(&stream, statemachined_link_v1_DeviceMessage_fields, out);
+  return link::decode_device_payload(payload->data(), payload->size(), header, out) ==
+         link::PayloadError::None;
 }
 
 namespace {
 
-void write_row(JsonWriter& w, const link::StateVisit& v) {
-  w.elem_u32(v.state);
-  w.elem_str(exit_token(v.exit));
-  w.elem_u32(v.transition);
-  w.elem_i32(v.drawn_ms);
-  w.elem_u32(v.entered_us);
-  w.elem_u32(v.duration_us);
+/// A path row as the NDJSON board wrote it, whichever message carried it: a
+/// `visit`'s own fields, or element `i` of a result_path's arrays.
+void write_row(JsonWriter& w, uint32_t state, statemachined_link_v1_ExitCause exit,
+               uint32_t transition, int32_t drawn_ms, uint32_t entered_us,
+               uint32_t duration_us) {
+  w.elem_u32(state);
+  w.elem_str(exit_token(exit));
+  w.elem_u32(transition);
+  w.elem_i32(drawn_ms);
+  w.elem_u32(entered_us);
+  w.elem_u32(duration_us);
 }
 
 void write_hex16(JsonWriter& w, const char* key, uint32_t value) {
@@ -455,7 +470,7 @@ void write_hex16(JsonWriter& w, const char* key, uint32_t value) {
 
 }  // namespace
 
-std::string json_of(const link::DeviceMessage& m) {
+std::string json_of(const link::Header& header, const link::DeviceMessage& m) {
   char buffer[4096];
   JsonWriter w(buffer, sizeof(buffer));
   const auto& b = m.body;
@@ -515,11 +530,14 @@ std::string json_of(const link::DeviceMessage& m) {
     case statemachined_link_v1_DeviceMessage_saved_tag:
       type = "saved";
       break;
+    case statemachined_link_v1_DeviceMessage_profile_report_tag:
+      type = "profile_report";
+      break;
     default:
       break;
   }
-  w.begin(type, m.message_id);
-  if (m.has_in_reply_to) w.in_reply_to(m.in_reply_to);
+  w.begin(type, header.message_id);
+  if (header.has_in_reply_to) w.in_reply_to(header.in_reply_to);
 
   switch (m.which_body) {
     case statemachined_link_v1_DeviceMessage_hello_ack_tag: {
@@ -593,9 +611,11 @@ std::string json_of(const link::DeviceMessage& m) {
       w.key_u32("trial_id", b.result_path.trial_id);
       w.key_u32("from", b.result_path.from);
       w.begin_array("p");
-      for (pb_size_t i = 0; i < b.result_path.p_count; ++i) {
+      for (pb_size_t i = 0; i < b.result_path.state_count; ++i) {
+        const auto& p = b.result_path;
         w.begin_elem_array();
-        write_row(w, b.result_path.p[i]);
+        write_row(w, p.state[i], p.exit[i], p.transition[i], p.drawn_ms[i], p.entered_us[i],
+                  p.duration_us[i]);
         w.end_array();
       }
       w.end_array();
@@ -624,11 +644,13 @@ std::string json_of(const link::DeviceMessage& m) {
     case statemachined_link_v1_DeviceMessage_state_report_tag: {
       const auto& r = b.state_report;
       w.key_u32("link_state", r.link_state);
+      // Rendered in the NDJSON board's nested shape, which the tests read;
+      // on the wire it is flat (link.proto).
       w.begin_object("graph");
-      w.key_bool("has_set", r.graph.has_set);
-      w.key_u32("set_version", r.graph.set_version);
-      w.key_u32("n_graphs", r.graph.n_graphs);
-      w.key_u32("index", r.graph.index);
+      w.key_bool("has_set", r.has_set);
+      w.key_u32("set_version", r.set_version);
+      w.key_u32("n_graphs", r.n_graphs);
+      w.key_u32("index", r.graph_index);
       w.end_object();
       w.key_bool("has_wiring", r.has_wiring);
       w.key_bool("autorun", r.autorun);
@@ -639,17 +661,17 @@ std::string json_of(const link::DeviceMessage& m) {
       w.key_u32("dropped_lines", r.dropped_lines);
       w.key_u32("bad_lines", r.bad_lines);
       w.begin_object("io");
-      w.key_u32("in", r.io.in);
-      w.key_u32("out", r.io.out);
+      w.key_u32("in", r.in);
+      w.key_u32("out", r.out);
       w.end_object();
       w.begin_object("scan");
-      w.key_u32("hz", r.scan.hz);
-      w.key_u32("overruns", r.scan.overruns);
-      w.key_u32("worst_gap", r.scan.worst_gap);
-      w.key_u32("tx_stalls", r.scan.tx_stalls);
-      w.key_u32("visits_dropped", r.scan.visits_dropped);
-      w.key_u32("timers_enabled", r.scan.timers_enabled);
-      w.key_u32("timers_running", r.scan.timers_running);
+      w.key_u32("hz", r.scan_hz);
+      w.key_u32("overruns", r.overruns);
+      w.key_u32("worst_gap", r.worst_gap);
+      w.key_u32("tx_stalls", r.tx_stalls);
+      w.key_u32("visits_dropped", r.visits_dropped);
+      w.key_u32("timers_enabled", r.timers_enabled);
+      w.key_u32("timers_running", r.timers_running);
       w.end_object();
       break;
     }
@@ -657,7 +679,8 @@ std::string json_of(const link::DeviceMessage& m) {
       w.key_u32("trial_id", b.visit.trial_id);
       w.key_u32("seq", b.visit.seq);
       w.begin_array("v");
-      write_row(w, b.visit.v);
+      write_row(w, b.visit.state, b.visit.exit, b.visit.transition, b.visit.drawn_ms,
+                b.visit.entered_us, b.visit.duration_us);
       w.end_array();
       break;
     case statemachined_link_v1_DeviceMessage_pin_map_tag:
@@ -680,6 +703,13 @@ std::string json_of(const link::DeviceMessage& m) {
       w.key_bool("autorun", b.saved.autorun);
       w.key_u32("write_count", b.saved.write_count);
       w.key_bool("written", b.saved.written);
+      break;
+    case statemachined_link_v1_DeviceMessage_profile_report_tag:
+      // The figures are timing and not worth asserting on; what a test can
+      // hold is whether this build profiles at all and how much it reports.
+      w.key_bool("enabled", b.profile_report.enabled);
+      w.key_u32("spans", b.profile_report.spans_count);
+      w.key_u32("cycles_per_second", b.profile_report.cycles_per_second);
       break;
     default:
       break;

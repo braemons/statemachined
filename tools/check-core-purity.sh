@@ -37,7 +37,7 @@ echo "$bad_includes" | while IFS= read -r line; do
   [ -n "$line" ] || continue
   case "$line" in
     *'<cstdint>'* | *'<cstddef>'*) ;;
-    *'<pb.h>'* | *'<pb_encode.h>'* | *'<pb_decode.h>'*) ;;
+    *'<pb.h>'* | *'<pb_common.h>'* | *'<pb_encode.h>'* | *'<pb_decode.h>'*) ;;
     *) printf '%s\n' "$line" ;;
   esac
 done > /tmp/statemachined-bad-includes.$$ || true

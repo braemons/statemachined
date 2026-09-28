@@ -78,6 +78,9 @@ PB_BIND(statemachined_link_v1_Autorun, statemachined_link_v1_Autorun, AUTO)
 PB_BIND(statemachined_link_v1_Save, statemachined_link_v1_Save, AUTO)
 
 
+PB_BIND(statemachined_link_v1_Profile, statemachined_link_v1_Profile, AUTO)
+
+
 PB_BIND(statemachined_link_v1_Caps, statemachined_link_v1_Caps, AUTO)
 
 
@@ -97,9 +100,6 @@ PB_BIND(statemachined_link_v1_Started, statemachined_link_v1_Started, AUTO)
 
 
 PB_BIND(statemachined_link_v1_CancelAck, statemachined_link_v1_CancelAck, AUTO)
-
-
-PB_BIND(statemachined_link_v1_StateVisit, statemachined_link_v1_StateVisit, AUTO)
 
 
 PB_BIND(statemachined_link_v1_ResultBegin, statemachined_link_v1_ResultBegin, AUTO)
@@ -123,15 +123,6 @@ PB_BIND(statemachined_link_v1_Log, statemachined_link_v1_Log, AUTO)
 PB_BIND(statemachined_link_v1_Pong, statemachined_link_v1_Pong, AUTO)
 
 
-PB_BIND(statemachined_link_v1_GraphReport, statemachined_link_v1_GraphReport, AUTO)
-
-
-PB_BIND(statemachined_link_v1_IoReport, statemachined_link_v1_IoReport, AUTO)
-
-
-PB_BIND(statemachined_link_v1_ScanReport, statemachined_link_v1_ScanReport, AUTO)
-
-
 PB_BIND(statemachined_link_v1_StateReport, statemachined_link_v1_StateReport, AUTO)
 
 
@@ -145,6 +136,12 @@ PB_BIND(statemachined_link_v1_AutorunOk, statemachined_link_v1_AutorunOk, AUTO)
 
 
 PB_BIND(statemachined_link_v1_Saved, statemachined_link_v1_Saved, AUTO)
+
+
+PB_BIND(statemachined_link_v1_ProfileSpan, statemachined_link_v1_ProfileSpan, AUTO)
+
+
+PB_BIND(statemachined_link_v1_ProfileReport, statemachined_link_v1_ProfileReport, 2)
 
 
 

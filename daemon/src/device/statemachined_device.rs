@@ -908,9 +908,9 @@ impl StatemachinedDevice {
             let graph = compiled
                 .graph_named(self.graph_name_for_reporting()?)
                 .ok()?;
-            let row = message.get("v")?;
+            // A visit is its own row: the same fields a result_path row has.
             Some(decode_state_visit_row(
-                row,
+                message,
                 &graph.state_names_by_index,
                 &graph.transition_target_names_by_state_index,
             ))

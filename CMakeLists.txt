@@ -62,9 +62,19 @@ add_library(statemachined_core
   firmware/core/protocol/framing.cpp
   firmware/core/protocol/graph_builder.cpp
   firmware/core/protocol/host_link_session.cpp
+  firmware/core/protocol/link_payload.cpp
+  firmware/core/profile/profile.cpp
 )
 target_link_libraries(statemachined_core PUBLIC statemachined_engine statemachined_link)
 target_compile_options(statemachined_core PRIVATE -Wall -Wextra -Wpedantic -Werror)
+
+# The cycle-count profile (firmware/core/profile/profile.h), as the
+# uno_r4_minima_profile env builds it. Off by default, as on a board: the `profile`
+# command then answers `enabled: false`, and the tests hold both builds to that.
+option(STATEMACHINED_PROFILE "Compile in the cycle-count profile" OFF)
+if(STATEMACHINED_PROFILE)
+  target_compile_definitions(statemachined_core PUBLIC STATEMACHINED_PROFILE)
+endif()
 
 option(STATEMACHINED_SANITIZE "Build tests with ASan and UBSan" OFF)
 if(STATEMACHINED_SANITIZE)
@@ -81,6 +91,9 @@ add_subdirectory(tests)
 # interface honest -- a board-only header rots between board builds.
 add_library(statemachined_hal_native firmware/hal/native.cpp)
 target_link_libraries(statemachined_hal_native PUBLIC statemachined_engine)
+if(STATEMACHINED_PROFILE)
+  target_compile_definitions(statemachined_hal_native PRIVATE STATEMACHINED_PROFILE)
+endif()
 target_compile_options(statemachined_hal_native PRIVATE -Wall -Wextra -Wpedantic -Werror)
 
 # The firmware, on this machine, speaking the real protocol down a pipe. It is

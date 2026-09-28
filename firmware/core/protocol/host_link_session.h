@@ -41,6 +41,26 @@ class ReplySink {
   virtual void send_frame(const uint8_t* bytes, size_t n) = 0;
 };
 
+/// What keeps the scan out of the engine while a command is handled.
+///
+/// On a board the scan is the timer ISR, and a command that changes the engine
+/// under it would be a race; firmware/src/main.cpp explains the hold and what
+/// it costs. The session takes it around the handler and nothing else: reading
+/// the frame, decoding it and encoding the reply touch only the session's own
+/// buffers, which the ISR never does (it records visits into a lock-free ring
+/// and sets flags), so they run with the scan free to preempt them. That is
+/// most of a command -- nanopb's decode and encode are four fifths of it, by
+/// client/python/tests/perf/test_profile.py -- and none of it needs the hold.
+///
+/// Null by default, which is what the host tests and the native device want:
+/// there, nothing preempts anything.
+class EngineLock {
+ public:
+  virtual ~EngineLock() = default;
+  virtual void acquire() = 0;
+  virtual void release() = 0;
+};
+
 /// What the device says about itself in `hello_ack`, so the bridge can check a
 /// graph against this board's capacities before uploading a byte of it.
 struct DeviceIdentity {
@@ -277,6 +297,9 @@ class HostLinkSession {
   /// what every board did before there was a store at all.
   void set_settings_port(SettingsPort* p) { settings_ = p; }
 
+  /// See EngineLock. Null, the default, is no lock at all.
+  void set_engine_lock(EngineLock* lock) { lock_ = lock; }
+
   /// Read the stored settings and adopt them: the wiring, the graph set, and
   /// the autorun configuration -- which, if it says so, starts this board
   /// driving trials with no host in the picture at all.
@@ -297,6 +320,9 @@ class HostLinkSession {
   uint8_t graph_count() const { return have_set_ ? live_set_.n_graphs : 0; }
   const GraphSet& graph_set() const { return live_set_; }
   uint32_t armed_trial_id() const { return armed_trial_id_; }
+  /// A trial is in flight: started, or started and waiting for its first scan.
+  /// The same answer `state_report.running` gives.
+  bool trial_running() const { return start_pending_ || runner_.running(); }
 
   /// Tell the session how the scan loop is doing, for state_report. Set by
   /// whatever owns the timer -- the session cannot see its own lateness.
@@ -316,19 +342,21 @@ class HostLinkSession {
 
  private:
   void handle_frame(link::PayloadSpan payload, Microseconds now_us);
-  void dispatch(const link::HostMessage& m, link::PayloadSpan payload, Microseconds now_us);
+  void dispatch(const link::HostMessage& m, uint16_t message_id, link::PayloadSpan payload,
+                Microseconds now_us);
 
   // One handler per host command. Each is responsible for sending exactly one
   // reply, which is what makes a retry decidable for the bridge.
   void on_hello(const link::Hello& m, uint16_t message_id, Microseconds now_us);
-  void on_upload_message(const link::HostMessage& m, link::PayloadSpan payload,
-                         Microseconds now_us);
+  void on_upload_message(const link::HostMessage& m, uint16_t message_id,
+                         link::PayloadSpan payload, Microseconds now_us);
   void on_configure(const link::Configure& m, uint16_t message_id, Microseconds now_us);
   void on_start(const link::Start& m, uint16_t message_id, Microseconds now_us);
   void on_cancel(const link::Cancel& m, uint16_t message_id, Microseconds now_us);
   void on_ping(uint16_t message_id, Microseconds now_us);
   void on_wiring(const link::Wiring& m, uint16_t message_id);
   void on_pins_request(const link::Pins& m, uint16_t message_id);
+  void on_profile(const link::Profile& m, uint16_t message_id);
   void on_autorun(const link::Autorun& m, uint16_t message_id, Microseconds now_us);
   void on_save(uint16_t message_id);
 
@@ -452,7 +480,7 @@ class HostLinkSession {
   /// `message_id`. Returns its length, or 0 if it did not encode -- which the
   /// static_asserts on the generated sizes make a firmware bug rather than a
   /// wire condition.
-  size_t encode_composed();
+  size_t encode_composed(bool is_reply = false, uint16_t in_reply_to = 0);
 
   /// Frame `payload_len` bytes of `payload_` and hand them to the sink.
   /// Returns the frame's length, which is in `frame_` until the next call.
@@ -460,12 +488,28 @@ class HostLinkSession {
 
   /// Send what compose() began, as the reply to `message_id`, remembering it so
   /// a retry of that command is answered from the cache.
+  ///
+  /// Inside a handler this only notes the reply: the encode waits until the
+  /// engine lock is released (flush_reply), because it is the most expensive
+  /// thing a command does and it reads nothing the scan writes.
   void send(uint16_t message_id);
+  /// Encode, frame and send the reply send() noted, if there is one.
+  void flush_reply();
+  /// Zero `tx_`, flushing a noted reply first. compose() skips it when nothing
+  /// has been composed since.
+  void clear_tx();
   /// Send what compose() began, answering nothing.
   void send_unsolicited();
 
   ReplySink& out_;
   DeviceIdentity identity_;
+  EngineLock* lock_ = nullptr;
+  /// Inside dispatch(): send() notes the reply rather than encoding it.
+  bool deferring_ = false;
+  bool reply_pending_ = false;
+  uint16_t reply_to_ = 0;
+  /// `tx_` is all zero and nothing has been composed into it since.
+  bool tx_clean_ = false;
 
   FrameReader reader_;
   /// The command being handled, decoded. A member rather than a local because

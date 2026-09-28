@@ -16,9 +16,15 @@ statemachined.link.v1.Configure.patch           max_count:8
 statemachined.link.v1.Wiring.debounce_ms        max_count:32
 statemachined.link.v1.PinMap.pins               max_count:32
 
-# kResultRowsPerFrame: how many rows one result_path carries. 14 rows at the
-# worst case of 34 bytes each still fits kMaxFrame, which a static_assert holds.
-statemachined.link.v1.ResultPath.p              max_count:14
+# kResultRowsPerFrame: how many rows one result_path carries, as six parallel
+# packed arrays of that length. 14 rows at nanopb's worst case of 30 bytes each
+# still fits kMaxFrame, which a static_assert holds.
+statemachined.link.v1.ResultPath.state          max_count:14
+statemachined.link.v1.ResultPath.exit           max_count:14
+statemachined.link.v1.ResultPath.transition     max_count:14
+statemachined.link.v1.ResultPath.drawn_ms       max_count:14
+statemachined.link.v1.ResultPath.entered_us     max_count:14
+statemachined.link.v1.ResultPath.duration_us    max_count:14
 
 # Strings, with the terminator nanopb stores. The board writes these from its
 # own constants and truncates rather than overflows.
@@ -31,7 +37,8 @@ statemachined.link.v1.Error.context             max_size:64
 statemachined.link.v1.Log.level                 max_size:8
 statemachined.link.v1.Log.message               max_size:96
 
-# The envelope's counters are 16-bit on the wire and on the board.
-statemachined.link.v1.HostMessage.message_id    int_size:IS_16
-statemachined.link.v1.DeviceMessage.message_id  int_size:IS_16
-statemachined.link.v1.DeviceMessage.in_reply_to int_size:IS_16
+# The envelopes are the registry of body types and are never encoded: the frame
+# header carries the type and the counters. See link.proto.
+
+# profile::Span::Count; a static_assert holds the two together.
+statemachined.link.v1.ProfileReport.spans       max_count:14

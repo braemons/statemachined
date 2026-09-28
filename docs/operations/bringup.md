@@ -55,6 +55,37 @@ make upload
 If the port is not found, double-tap the reset button to force the bootloader and
 try again. The board enumerates as `/dev/ttyACM0` on Linux.
 
+**On a rig**, `statemachined.service` holds the port: `sudo systemctl stop
+statemachined` first, and start it again once the board is back.
+
+### Flashing an image without PlatformIO
+
+The Minima's bootloader speaks DFU, not SAM-BA: `bossac` is the Uno R4 WiFi's
+uploader and does nothing here. Put the board in its bootloader -- double-tap
+RESET, or open the port at 1200 baud -- and it enumerates as `2341:0369`
+("Santiago DFU") with no `/dev/ttyACM0`. Then, with a stock `dfu-util`
+(`apt install dfu-util`):
+
+```sh
+sudo dfu-util -d 0x2341:0x0369 -a0 -D statemachined-uno_r4_minima.bin -R
+```
+
+`-R` resets it into the new firmware and `/dev/ttyACM0` comes back. (Arduino's
+own tools pass `-Q` instead, a flag only their patched `dfu-util` has.)
+
+### Building on a Raspberry Pi
+
+The renesas-ra platform asks for `toolchain-gccarmnoneeabi@~1.70201.0` (GCC
+7.2.1), which PlatformIO publishes no `linux_aarch64` build of, so `make
+firmware` on a Pi fails with `UnknownPackageError`. A newer toolchain builds it
+-- untested against the reference image, so say so wherever it gets used:
+
+```sh
+sed 's/^\[env:uno_r4_minima\]$/&\nplatform_packages = platformio\/toolchain-gccarmnoneeabi@~1.120301.0/' \
+  platformio.ini > /tmp/platformio-gcc12.ini
+pio run -d . -c /tmp/platformio-gcc12.ini -e uno_r4_minima
+```
+
 > **Expect: D13 blinks briefly, once a second.**
 
 Nothing is connected, so that is the entire test — and it covers the three things

@@ -31,8 +31,7 @@ using Wiring = statemachined_link_v1_Wiring;
 using Timers = statemachined_link_v1_Timers;
 using Pins = statemachined_link_v1_Pins;
 using Autorun = statemachined_link_v1_Autorun;
-
-using StateVisit = statemachined_link_v1_StateVisit;
+using Profile = statemachined_link_v1_Profile;
 
 /// The bytes a message arrived as, which is what the upload's and the
 /// result's rolling checksums fold -- not the struct, which has no single

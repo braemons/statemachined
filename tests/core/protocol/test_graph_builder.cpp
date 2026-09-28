@@ -41,8 +41,9 @@ struct Upload {
 
     link::HostMessage m;
     std::string why;
-    REQUIRE_MESSAGE(host_message_from_json(body + "}", &m, &why), why);
-    const Bytes payload = encode_host_message(m);
+    link::Header header;
+    REQUIRE_MESSAGE(host_message_from_json(body + "}", &header, &m, &why), why);
+    const Bytes payload = encode_host_message(header, m);
     REQUIRE_FALSE(payload.empty());
     const link::PayloadSpan span{payload.data(), payload.size()};
     if (fold) checksum = crc16_ccitt(payload.data(), payload.size(), checksum);

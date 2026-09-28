@@ -213,6 +213,16 @@ bench-device: integration-device  ## the native device on 127.0.0.1:5300
 test-hardware: rust integration-device  ## the suite that needs a board: make test-hardware TARGET=... (or native)
 	cd client/python && uv run --group dev pytest tests/hardware --target=$(TARGET) $(ARGS)
 
+# Numbers rather than verdicts: what each command costs the scan and the wire,
+# what a graph costs, how fast results stream -- printed as a table and written
+# to build/perf/ as JSON so two firmware builds can be compared. Half of it
+# opens the board directly and half puts a daemon in front, so nothing else may
+# hold the port: on a rig, stop statemachined.service first. See
+# client/python/tests/perf/conftest.py.
+.PHONY: perf
+perf: rust                  ## measure a board, and write the figures down: make perf TARGET=/dev/ttyACM0
+	cd client/python && uv run --group dev pytest tests/perf --target=$(TARGET) -p no:cacheprovider $(ARGS)
+
 # The trial loop across the daemons is **not** here. It lives in the contracts
 # repo (`e2e-tests/`), with the other tests that are about more than one
 # daemon; `make e2e` below runs it against this checkout.
@@ -327,7 +337,9 @@ image:                      ## build the flashable image, with a manifest
 	  echo "  Holds no graph until one is uploaded, and comes back up running"; \
 	  echo "  whatever it was last saved with. Wiring in docs/operations/hardware.md"; \
 	  echo; \
-	  echo "flash with:  make upload   or   bossac -i -e -w -R <file>.bin"; \
+	  echo "flash with:  make upload, or with the board in its bootloader (double-tap RESET):"; \
+	  echo "             dfu-util -d 0x2341:0x0369 -a0 -D <file>.bin -R"; \
+	  echo "             See docs/operations/bringup.md §1."; \
 	  echo; \
 	  echo "sizes:"; \
 	  stat -c '  %n  %s bytes' $(IMAGE_DIR)/*.bin | sed 's|$(IMAGE_DIR)/||'; \

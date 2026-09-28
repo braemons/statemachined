@@ -191,7 +191,6 @@ fn device_state_to_wire(
             .and_then(|value| value.as_i64().or_else(|| value.as_f64().map(|f| f as i64)))
             .unwrap_or(0)
     };
-    let scan = state_report.get("scan").cloned().unwrap_or(serde_json::Value::Null);
     // Three answers, not two: the board said it has a wiring table, said it
     // has none, or nothing has said. The report is newer than the greeting.
     let has_wiring = state_report
@@ -216,11 +215,12 @@ fn device_state_to_wire(
             bad_lines: number(state_report, "bad_lines"),
             last_error,
         }),
+        // Flat in the state_report: the link has no nested groups (link.proto).
         scan: Some(wire::ScanHealth {
-            hz: number(&scan, "hz") as i32,
-            overruns: number(&scan, "overruns"),
-            worst_gap: number(&scan, "worst_gap") as i32,
-            tx_stalls: number(&scan, "tx_stalls"),
+            hz: number(state_report, "scan_hz") as i32,
+            overruns: number(state_report, "overruns"),
+            worst_gap: number(state_report, "worst_gap") as i32,
+            tx_stalls: number(state_report, "tx_stalls"),
         }),
         uptime_device_microseconds: number(state_report, "up_us"),
         capacities: device.capabilities.as_ref().map(capacities_to_wire),
@@ -792,9 +792,7 @@ impl DaemonState {
     /// to ask.
     fn lines_now(&self) -> Result<wire::LineMapView, tonic::Status> {
         let report = self.read_device_state()?;
-        let word = |key: &str| {
-            report.get("io").and_then(|io| io.get(key)).and_then(serde_json::Value::as_i64)
-        };
+        let word = |key: &str| report.get(key).and_then(serde_json::Value::as_i64);
         let device = self.device.lock().map_err(poisoned)?;
         Ok(line_map_view(&device, word("in"), word("out")))
     }

@@ -4,7 +4,9 @@
 #include <pb_decode.h>
 #include <pb_encode.h>
 
+#include "profile/profile.h"
 #include "protocol/crc16.h"
+#include "protocol/link_payload.h"
 
 namespace statemachined {
 
@@ -26,9 +28,9 @@ static_assert(sizeof(statemachined_link_v1_PinMap{}.pins) /
                       sizeof(statemachined_link_v1_PinMap{}.pins[0]) >=
                   kMaxLines,
               "link.options: PinMap.pins holds kMaxLines");
-static_assert(statemachined_link_v1_HostMessage_size <= kMaxPayload,
+static_assert(statemachined_link_v1_HostMessage_size + link::kMaxHeaderBytes <= kMaxPayload,
               "the largest host message fits a frame");
-static_assert(statemachined_link_v1_DeviceMessage_size <= kMaxPayload,
+static_assert(statemachined_link_v1_DeviceMessage_size + link::kMaxHeaderBytes <= kMaxPayload,
               "the largest device message fits a frame");
 
 namespace {
@@ -38,13 +40,15 @@ constexpr uint16_t kProtocolVersion = 2;
 
 /// How many rows one result_path carries: what link.options gives `p`.
 constexpr uint8_t kResultRowsPerFrame =
-    sizeof(statemachined_link_v1_ResultPath{}.p) / sizeof(statemachined_link_v1_StateVisit);
+    sizeof(statemachined_link_v1_ResultPath{}.state) / sizeof(uint32_t);
+static_assert(sizeof(statemachined_link_v1_ResultPath{}.duration_us) / sizeof(uint32_t) ==
+                  kResultRowsPerFrame,
+              "link.options gives every ResultPath array the same max_count");
 
-/// Empty messages to reset `rx_` and `tx_` from. nanopb's `_init_zero` is a
-/// brace list, which older compilers take as an initialiser and not as the
-/// right-hand side of an assignment.
-const link::HostMessage kNoHostMessage = statemachined_link_v1_HostMessage_init_zero;
-const link::DeviceMessage kNoDeviceMessage = statemachined_link_v1_DeviceMessage_init_zero;
+static_assert(sizeof(statemachined_link_v1_ProfileReport{}.spans) /
+                      sizeof(statemachined_link_v1_ProfileSpan) ==
+                  static_cast<size_t>(profile::Span::Count),
+              "link.options' ProfileReport.spans max_count must be profile::Span::Count");
 
 /// A wire value that has to fit a byte, refused rather than truncated.
 bool narrow_u8(uint32_t value, uint8_t* out) {
@@ -106,17 +110,28 @@ statemachined_link_v1_ExitCause exit_cause(StateExitCause c) {
   return statemachined_link_v1_ExitCause_EXIT_CAUSE_TERMINAL;
 }
 
-/// One visit, as a result_path row and a visit's `v` both carry it -- one
-/// shape for one fact, filled in one place.
-link::StateVisit visit_row(const StateVisit& v) {
-  link::StateVisit row = statemachined_link_v1_StateVisit_init_zero;
-  row.state = v.state_index;
-  row.exit = exit_cause(v.cause);
-  row.transition = v.transition_index;
-  row.drawn_ms = v.drawn_ms;
-  row.entered_us = v.entered_us;
-  row.duration_us = v.duration_us;
-  return row;
+/// One visit, as a `visit` carries it and as row `i` of a result_path's
+/// arrays -- one shape for one fact, filled in one place per message.
+void put_visit(statemachined_link_v1_Visit* out, const StateVisit& v) {
+  out->state = v.state_index;
+  out->exit = exit_cause(v.cause);
+  out->transition = v.transition_index;
+  out->drawn_ms = v.drawn_ms;
+  out->entered_us = v.entered_us;
+  out->duration_us = v.duration_us;
+}
+
+void append_row(statemachined_link_v1_ResultPath* out, const StateVisit& v) {
+  const pb_size_t i = out->state_count;
+  out->state[i] = v.state_index;
+  out->exit[i] = exit_cause(v.cause);
+  out->transition[i] = v.transition_index;
+  out->drawn_ms[i] = v.drawn_ms;
+  out->entered_us[i] = v.entered_us;
+  out->duration_us[i] = v.duration_us;
+  const pb_size_t n = static_cast<pb_size_t>(i + 1);
+  out->state_count = out->exit_count = out->transition_count = n;
+  out->drawn_ms_count = out->entered_us_count = out->duration_us_count = n;
 }
 
 /// The protocol error code for an upload failure. docs/reference/protocol.md 5 -- the
@@ -192,7 +207,10 @@ void HostLinkSession::receive(const uint8_t* bytes, size_t n, Microseconds now_u
 }
 
 void HostLinkSession::receive_byte(uint8_t c, Microseconds now_us) {
-  if (!reader_.feed(c)) return;
+  PROFILE_START(feed_started);
+  const bool complete = reader_.feed(c);
+  PROFILE_END(profile::Span::FrameRead, feed_started);
+  if (!complete) return;
 
   if (reader_.status() != FrameError::None) {
     // Checked before decoded, always. The frame never arrived intact, so there
@@ -208,31 +226,57 @@ void HostLinkSession::receive_byte(uint8_t c, Microseconds now_us) {
 }
 
 void HostLinkSession::handle_frame(link::PayloadSpan payload, Microseconds now_us) {
-  rx_ = kNoHostMessage;
-  pb_istream_t stream = pb_istream_from_buffer(payload.bytes, payload.len);
-  if (!pb_decode(&stream, statemachined_link_v1_HostMessage_fields, &rx_)) {
+  // Cleared here and not by pb_decode, which would otherwise walk every field
+  // of every message in the union to set its default -- in proto3 all zero,
+  // which is what memset writes in a fraction of the time. Measured by
+  // tests/perf/test_profile.py: that walk was most of a decode.
+  PROFILE_START(reset_started);
+  memset(&rx_, 0, sizeof(rx_));
+  PROFILE_END(profile::Span::RxReset, reset_started);
+  link::Header header;
+  const char* why = nullptr;
+  PROFILE_START(decode_started);
+  const link::PayloadError decoded =
+      link::decode_host_payload(payload.bytes, payload.len, &header, &rx_, &why);
+  PROFILE_END(profile::Span::Decode, decode_started);
+  // A type this firmware does not know is still a command with a message_id,
+  // and dispatch() refuses it by name with `unknown_type`, as it did when the
+  // envelope's unknown member was skipped.
+  if (decoded == link::PayloadError::UnknownType) rx_.which_body = 0;
+  if (decoded != link::PayloadError::None && decoded != link::PayloadError::UnknownType) {
     // Intact and still not a message: a list longer than this board holds, a
     // message_id wider than sixteen bits, or bytes that are not protobuf.
     ++bad_lines_;
-    send_orphan_error("bad_message", PB_GET_ERROR(&stream), "frame");
+    send_orphan_error("bad_message", why, "frame");
     return;
   }
 
   // A retry of the command just answered gets that answer back verbatim and
   // changes nothing. Acting twice is what matters: a re-executed start would
   // run a second trial.
-  if (guard_.is_repeat(rx_.message_id)) {
+  if (guard_.is_repeat(header.message_id)) {
     out_.send_frame(guard_.reply(), guard_.reply_len());
     return;
   }
 
-  dispatch(rx_, payload, now_us);
+  // The reply's struct is cleared here, before the lock, so that the handler's
+  // compose() finds it clean and does not clear it inside the hold. 376 bytes
+  // of memset was two thirds of what was left of a hold once the encode moved
+  // out (tests/perf/test_profile.py).
+  clear_tx();
+  {
+    PROFILE_SCOPE(profile::Span::Dispatch);
+    if (lock_ != nullptr) lock_->acquire();
+    deferring_ = true;
+    dispatch(rx_, header.message_id, payload, now_us);
+    deferring_ = false;
+    if (lock_ != nullptr) lock_->release();
+  }
+  flush_reply();
 }
 
-void HostLinkSession::dispatch(const link::HostMessage& m, link::PayloadSpan payload,
-                               Microseconds now_us) {
-  const uint16_t message_id = m.message_id;
-
+void HostLinkSession::dispatch(const link::HostMessage& m, uint16_t message_id,
+                               link::PayloadSpan payload, Microseconds now_us) {
   // hello is the only thing accepted before a hello: everything else needs a
   // session seed, and a device answering commands without one would be running
   // trials nobody could replay.
@@ -261,6 +305,8 @@ void HostLinkSession::dispatch(const link::HostMessage& m, link::PayloadSpan pay
       return on_autorun(m.body.autorun, message_id, now_us);
     case statemachined_link_v1_HostMessage_save_tag:
       return on_save(message_id);
+    case statemachined_link_v1_HostMessage_profile_tag:
+      return on_profile(m.body.profile, message_id);
     case statemachined_link_v1_HostMessage_configure_tag:
       return on_configure(m.body.configure, message_id, now_us);
     case statemachined_link_v1_HostMessage_start_tag:
@@ -277,7 +323,7 @@ void HostLinkSession::dispatch(const link::HostMessage& m, link::PayloadSpan pay
     case statemachined_link_v1_HostMessage_graph_action_tag:
     case statemachined_link_v1_HostMessage_graph_timer_tag:
     case statemachined_link_v1_HostMessage_graph_end_tag:
-      return on_upload_message(m, payload, now_us);
+      return on_upload_message(m, message_id, payload, now_us);
 
     default:
       break;
@@ -490,9 +536,8 @@ void HostLinkSession::on_wiring(const link::Wiring& m, uint16_t message_id) {
   send_ack(message_id);
 }
 
-void HostLinkSession::on_upload_message(const link::HostMessage& m, link::PayloadSpan payload,
-                                        Microseconds now_us) {
-  const uint16_t message_id = m.message_id;
+void HostLinkSession::on_upload_message(const link::HostMessage& m, uint16_t message_id,
+                                        link::PayloadSpan payload, Microseconds now_us) {
   if (state_ == LinkState::Armed || state_ == LinkState::Running) {
     send_error(message_id, "busy", "a trial is armed or running", "graph upload");
     return;
@@ -1074,11 +1119,10 @@ void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us)
   auto& report =
       compose(statemachined_link_v1_DeviceMessage_state_report_tag).body.state_report;
   report.link_state = static_cast<uint32_t>(state_);
-  report.has_graph = true;
-  report.graph.has_set = have_set_;
-  report.graph.set_version = have_set_ ? live_set_.version : 0;
-  report.graph.n_graphs = have_set_ ? live_set_.n_graphs : 0;
-  report.graph.index = runner_.graph_index();
+  report.has_set = have_set_;
+  report.set_version = have_set_ ? live_set_.version : 0;
+  report.n_graphs = have_set_ ? live_set_.n_graphs : 0;
+  report.graph_index = runner_.graph_index();
   report.has_wiring = have_wiring_;
   // Whether this board is arming its own trials. `link_state` already says
   // Relighting during the dwell between two of them, but not while one is in
@@ -1104,22 +1148,52 @@ void HostLinkSession::on_state_request(uint16_t message_id, Microseconds now_us)
   // is no read-back path from a pin, and `out` is the engine's own shadow
   // rather than a measurement. Under emulation it is what makes the pin map
   // testable at all.
-  report.has_io = true;
-  report.io.in = last_word_;
-  report.io.out = runner_.driven_levels();
-  report.has_scan = true;
-  report.scan.hz = scan_.hz;
-  report.scan.overruns = scan_.overruns;
-  report.scan.worst_gap = scan_.worst_gap;
-  report.scan.tx_stalls = scan_.tx_stalls;
+  report.in = last_word_;
+  report.out = runner_.driven_levels();
+  report.scan_hz = scan_.hz;
+  report.overruns = scan_.overruns;
+  report.worst_gap = scan_.worst_gap;
+  report.tx_stalls = scan_.tx_stalls;
   // Same question as the counters above it -- is this device keeping up.
-  report.scan.visits_dropped = dropped_visits_;
+  report.visits_dropped = dropped_visits_;
   // `enabled` is the mask in force *now*, so during a trial that overrode it
   // this is the trial's, not the device's. `running` is one bit per timer
   // actually in flight, delay included -- a timer counting down its onset is
   // running, it is simply not high yet.
-  report.scan.timers_enabled = timers_.enabled();
-  report.scan.timers_running = timers_.bits() >> kFirstTimerLine;
+  report.timers_enabled = timers_.enabled();
+  report.timers_running = timers_.bits() >> kFirstTimerLine;
+  send(message_id);
+}
+
+void HostLinkSession::on_profile(const link::Profile& m, uint16_t message_id) {
+  auto& out =
+      compose(statemachined_link_v1_DeviceMessage_profile_report_tag).body.profile_report;
+  out.enabled = profile::kEnabled;
+#if defined(STATEMACHINED_PROFILE)
+  out.cycles_per_second = profile::cycles_per_second();
+  if (m.reset) {
+    // A reset answers with the header alone. A full report costs its own
+    // encode -- milliseconds, in a hold -- and a reset's hold ends inside the
+    // fresh profile it just started, so it would be the first thing measured.
+    profile::reset();
+    send(message_id);
+    return;
+  }
+  const profile::Profile& p = profile::get();
+  out.spans_count = static_cast<pb_size_t>(profile::Span::Count);
+  for (pb_size_t i = 0; i < out.spans_count; ++i) {
+    out.spans[i].span = i;
+    out.spans[i].count = p.spans[i].count;
+    out.spans[i].total_cycles = p.spans[i].total_cycles;
+    out.spans[i].max_cycles = p.spans[i].max_cycles;
+  }
+  out.overruns_in_trial = p.overruns_in_trial;
+  out.worst_gap_in_trial = p.worst_gap_in_trial;
+  out.host_message_bytes = sizeof(link::HostMessage);
+  out.device_message_bytes = sizeof(link::DeviceMessage);
+#else
+  static_cast<void>(m);
+#endif
   send(message_id);
 }
 
@@ -1467,8 +1541,7 @@ void HostLinkSession::drain_visits(uint8_t max_lines) {
     visit.seq = p.seq;
     // The same row as a result_path entry, decoded by the same function on the
     // host. Two shapes for one fact is how the two drift apart.
-    visit.has_v = true;
-    visit.v = visit_row(p.visit);
+    put_visit(&visit, p.visit);
     send_unsolicited();
     // Last, so the producer never sees a slot freed before it has been read.
     visit_tail_ = static_cast<uint8_t>((visit_tail_ + 1) % kVisitRingDepth);
@@ -1512,10 +1585,10 @@ void HostLinkSession::emit_result() {
     chunk.trial_id = r.trial_id;
     chunk.from = from;
     uint8_t i = from;
-    while (i < run.path_len && chunk.p_count < kResultRowsPerFrame) {
+    while (i < run.path_len && chunk.state_count < kResultRowsPerFrame) {
       // visit(), not path[i]: the ring drops from the front, so slot 0 is not
       // visit 0 once it has wrapped. `from` stays an offset into what was sent.
-      chunk.p[chunk.p_count++] = visit_row(run.visit(i));
+      append_row(&chunk, run.visit(i));
       ++i;
     }
     const size_t len = encode_composed();
@@ -1575,16 +1648,31 @@ void HostLinkSession::send_ack(uint16_t message_id) {
 }
 
 link::DeviceMessage& HostLinkSession::compose(pb_size_t which) {
-  tx_ = kNoDeviceMessage;
+  // A reply still waiting for its encode lives in tx_, which this is about to
+  // clear: it goes out first. Only a handler that sends twice, or sends
+  // something unasked, ever meets one here.
+  flush_reply();
+  if (!tx_clean_) clear_tx();
+  tx_clean_ = false;
   tx_.which_body = which;
   return tx_;
 }
 
-size_t HostLinkSession::encode_composed() {
-  tx_.message_id = tx_message_id_;
-  pb_ostream_t stream = pb_ostream_from_buffer(payload_, sizeof(payload_));
-  if (!pb_encode(&stream, statemachined_link_v1_DeviceMessage_fields, &tx_)) return 0;
-  return stream.bytes_written;
+void HostLinkSession::clear_tx() {
+  flush_reply();
+  PROFILE_SCOPE(profile::Span::Compose);
+  // All zero is the proto3 default for every field, and what init_zero is.
+  memset(&tx_, 0, sizeof(tx_));
+  tx_clean_ = true;
+}
+
+size_t HostLinkSession::encode_composed(bool is_reply, uint16_t in_reply_to) {
+  PROFILE_SCOPE(profile::Span::Encode);
+  link::Header header;
+  header.message_id = tx_message_id_;
+  header.has_in_reply_to = is_reply;
+  header.in_reply_to = in_reply_to;
+  return link::encode_device_payload(header, tx_, payload_, sizeof(payload_));
 }
 
 size_t HostLinkSession::frame_and_send(size_t payload_len) {
@@ -1593,7 +1681,9 @@ size_t HostLinkSession::frame_and_send(size_t payload_len) {
   // frame. Nothing half-built goes out. (No message is empty: the body's tag
   // is always there, even for an `ack` that carries nothing.)
   if (payload_len == 0) return 0;
+  PROFILE_START(frame_started);
   const size_t n = encode_frame(payload_, payload_len, frame_);
+  PROFILE_END(profile::Span::FrameWrite, frame_started);
   if (n == 0) return 0;
   ++tx_message_id_;
   out_.send_frame(frame_, n);
@@ -1601,11 +1691,19 @@ size_t HostLinkSession::frame_and_send(size_t payload_len) {
 }
 
 void HostLinkSession::send(uint16_t message_id) {
-  tx_.has_in_reply_to = true;
-  tx_.in_reply_to = message_id;
-  const size_t n = frame_and_send(encode_composed());
+  // One reply per command is the protocol (the duplicate guard stores exactly
+  // one). A second would already have flushed the first, in compose().
+  reply_pending_ = true;
+  reply_to_ = message_id;
+  if (!deferring_) flush_reply();
+}
+
+void HostLinkSession::flush_reply() {
+  if (!reply_pending_) return;
+  reply_pending_ = false;
+  const size_t n = frame_and_send(encode_composed(true, reply_to_));
   if (n == 0) return;
-  guard_.remember(message_id, frame_, n);
+  guard_.remember(reply_to_, frame_, n);
 }
 
 void HostLinkSession::send_unsolicited() { frame_and_send(encode_composed()); }

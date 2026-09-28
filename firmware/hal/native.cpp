@@ -22,6 +22,7 @@
 #include <ctime>
 
 #include "hal.h"
+#include "profile/profile.h"
 
 namespace statemachined {
 namespace hal {
@@ -94,6 +95,19 @@ void init() {
   // Deliberately *not* clearing the loopback: it is configured before init()
   // by whoever built this device, and it describes the wiring rather than the
   // state. A board's jumper wires survive a reset too.
+#if defined(STATEMACHINED_PROFILE)
+  // Nanoseconds stand in for cycles: a host has no fixed clock worth counting,
+  // and the report scales by the rate either way.
+  profile::set_clock(
+      []() -> uint32_t {
+        timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        return static_cast<uint32_t>(static_cast<unsigned long long>(ts.tv_sec) *
+                                         1000000000ull +
+                                     static_cast<unsigned long long>(ts.tv_nsec));
+      },
+      1000000000u);
+#endif
 }
 
 uint16_t native_listen(uint16_t port) {

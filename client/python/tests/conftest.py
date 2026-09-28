@@ -135,10 +135,16 @@ def empty_stores(rig):
 
 def pytest_addoption(parser):
     # Here, in the top-level conftest, because pytest only takes options from
-    # the conftests it loads before collection. `tests/hardware/` reads it.
+    # the conftests it loads before collection. `tests/hardware/` and
+    # `tests/perf/` read them.
     parser.addoption(
         "--target",
         default=None,
         help="the board for tests/hardware: a device path, a host:port, or `native` for "
         "the firmware built for this machine. Without it tests/hardware is skipped.",
+    )
+    parser.addoption(
+        "--perf-out",
+        default=None,
+        help="where tests/perf writes its JSON report (default build/perf/perf-<time>.json)",
     )

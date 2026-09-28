@@ -265,12 +265,20 @@ typedef struct _statemachined_link_v1_Save {
     char dummy_field;
 } statemachined_link_v1_Save;
 
+/* Where the board's time goes: a profiling build's cycle counts, read out and
+ optionally cleared. Every build answers it; one compiled without
+ STATEMACHINED_PROFILE answers `enabled: false` and nothing else. For
+ measuring a board (client/python/tests/perf), not for a session: the daemon
+ never sends it. See firmware/core/profile/profile.h. */
+typedef struct _statemachined_link_v1_Profile {
+    /* Clear the figures instead of reporting them: the reply carries `enabled`
+ and `cycles_per_second` only, so the reset costs no more than a ping and
+ what it costs is not the first thing the fresh profile measures. */
+    bool reset;
+} statemachined_link_v1_Profile;
+
 /* Everything the daemon sends is one of these. */
 typedef struct _statemachined_link_v1_HostMessage {
-    /* The sender's per-direction counter, an unsigned 16-bit value that wraps.
- It identifies one message so a resend of it can be recognised; it orders
- nothing. See `docs/reference/protocol.md` §1.2. */
-    uint16_t message_id;
     pb_size_t which_body;
     union {
         statemachined_link_v1_Hello hello;
@@ -293,6 +301,7 @@ typedef struct _statemachined_link_v1_HostMessage {
         statemachined_link_v1_Pins pins;
         statemachined_link_v1_Autorun autorun;
         statemachined_link_v1_Save save;
+        statemachined_link_v1_Profile profile;
     } body;
 } statemachined_link_v1_HostMessage;
 
@@ -365,21 +374,6 @@ typedef struct _statemachined_link_v1_CancelAck {
     int32_t outcome;
 } statemachined_link_v1_CancelAck;
 
-/* One completed state visit: a `result_path` row, and a `visit`'s `v`. */
-typedef struct _statemachined_link_v1_StateVisit {
-    /* Within the graph. */
-    uint32_t state;
-    statemachined_link_v1_ExitCause exit;
-    /* Which of this state's transitions fired, or 255 for an exit that was not
- one. */
-    uint32_t transition;
-    /* The realised draw, in ms. */
-    int32_t drawn_ms;
-    /* Device clock. */
-    uint32_t entered_us;
-    uint32_t duration_us;
-} statemachined_link_v1_StateVisit;
-
 typedef struct _statemachined_link_v1_ResultBegin {
     uint32_t trial_id;
     int32_t outcome;
@@ -391,11 +385,28 @@ typedef struct _statemachined_link_v1_ResultBegin {
     bool truncated;
 } statemachined_link_v1_ResultBegin;
 
+/* Rows of the path, as parallel packed arrays rather than a repeated message:
+ each field of a row at index `i` is element `i` of its array, and every
+ array is the same length. A repeated message costs nanopb a sizing pass per
+ row, and this is the largest burst the board sends. A row is what `visit`
+ carries: the state, why it was left (`exit`), which transition fired (255
+ for an exit that was not one), the realised draw in ms, and the device
+ clock at entry and the time spent. */
 typedef struct _statemachined_link_v1_ResultPath {
     uint32_t trial_id;
     uint32_t from;
-    pb_size_t p_count;
-    statemachined_link_v1_StateVisit p[14];
+    pb_size_t state_count;
+    uint32_t state[14];
+    pb_size_t exit_count;
+    statemachined_link_v1_ExitCause exit[14];
+    pb_size_t transition_count;
+    uint32_t transition[14];
+    pb_size_t drawn_ms_count;
+    int32_t drawn_ms[14];
+    pb_size_t entered_us_count;
+    uint32_t entered_us[14];
+    pb_size_t duration_us_count;
+    uint32_t duration_us[14];
 } statemachined_link_v1_ResultPath;
 
 typedef struct _statemachined_link_v1_ResultEnd {
@@ -426,32 +437,10 @@ typedef struct _statemachined_link_v1_Pong {
     uint32_t us;
 } statemachined_link_v1_Pong;
 
-typedef struct _statemachined_link_v1_GraphReport {
-    bool has_set;
-    uint32_t set_version;
-    uint32_t n_graphs;
-    uint32_t index;
-} statemachined_link_v1_GraphReport;
-
-typedef struct _statemachined_link_v1_IoReport {
-    uint32_t in;
-    uint32_t out;
-} statemachined_link_v1_IoReport;
-
-typedef struct _statemachined_link_v1_ScanReport {
-    uint32_t hz;
-    uint32_t overruns;
-    uint32_t worst_gap;
-    uint32_t tx_stalls;
-    uint32_t visits_dropped;
-    uint32_t timers_enabled;
-    uint32_t timers_running;
-} statemachined_link_v1_ScanReport;
-
+/* Flat, on purpose: the three groups it had -- graph, io, scan -- were nested
+ messages, each of which nanopb encodes twice, in the reply a host polls for. */
 typedef struct _statemachined_link_v1_StateReport {
     uint32_t link_state;
-    bool has_graph;
-    statemachined_link_v1_GraphReport graph;
     bool has_wiring;
     bool autorun;
     uint32_t trial_id;
@@ -463,17 +452,42 @@ typedef struct _statemachined_link_v1_StateReport {
     uint32_t dropped_lines;
     /* Frames that arrived intact and still could not be read as a message. */
     uint32_t bad_lines;
-    bool has_io;
-    statemachined_link_v1_IoReport io;
-    bool has_scan;
-    statemachined_link_v1_ScanReport scan;
+    /* The committed set, and which of its graphs is live. */
+    bool has_set;
+    uint32_t set_version;
+    uint32_t n_graphs;
+    uint32_t graph_index;
+    /* The live pins: inputs as read, outputs as driven. */
+    uint32_t in;
+    uint32_t out;
+    /* Is this device keeping up: its measured scan rate, the scan periods that
+ went by with no scan, the longest run of them, replies that waited for the
+ wire, visits the ring had no room for, and the timers enabled and running. */
+    uint32_t scan_hz;
+    uint32_t overruns;
+    uint32_t worst_gap;
+    uint32_t tx_stalls;
+    uint32_t visits_dropped;
+    uint32_t timers_enabled;
+    uint32_t timers_running;
 } statemachined_link_v1_StateReport;
 
+/* One completed state visit, sent as it happens. Flat: the row's fields are
+ the message's, as in `result_path`. */
 typedef struct _statemachined_link_v1_Visit {
     uint32_t trial_id;
     uint32_t seq;
-    bool has_v;
-    statemachined_link_v1_StateVisit v;
+    /* Within the graph. */
+    uint32_t state;
+    statemachined_link_v1_ExitCause exit;
+    /* Which of this state's transitions fired, or 255 for an exit that was not
+ one. */
+    uint32_t transition;
+    /* The realised draw, in ms. */
+    int32_t drawn_ms;
+    /* Device clock. */
+    uint32_t entered_us;
+    uint32_t duration_us;
 } statemachined_link_v1_Visit;
 
 typedef struct _statemachined_link_v1_PinMap {
@@ -499,14 +513,33 @@ typedef struct _statemachined_link_v1_Saved {
     bool written;
 } statemachined_link_v1_Saved;
 
+/* One measured region; `span` is profile::Span in firmware/core/profile. */
+typedef struct _statemachined_link_v1_ProfileSpan {
+    uint32_t span;
+    uint32_t count;
+    uint64_t total_cycles;
+    uint32_t max_cycles;
+} statemachined_link_v1_ProfileSpan;
+
+typedef struct _statemachined_link_v1_ProfileReport {
+    /* False from a build without profiling, which reports nothing else. */
+    bool enabled;
+    /* What a cycle is worth: the core clock on a board. */
+    uint32_t cycles_per_second;
+    /* Every span, including the ones that never ran. */
+    pb_size_t spans_count;
+    statemachined_link_v1_ProfileSpan spans[14];
+    /* Overruns while a trial was running -- the ones that cost an experiment. */
+    uint32_t overruns_in_trial;
+    uint32_t worst_gap_in_trial;
+    /* The sizes of the structs every frame clears and fills, which are fixed by
+ link.options: what one decode and one reply cost before any field is set. */
+    uint32_t host_message_bytes;
+    uint32_t device_message_bytes;
+} statemachined_link_v1_ProfileReport;
+
 /* Everything the board sends is one of these. */
 typedef struct _statemachined_link_v1_DeviceMessage {
-    uint16_t message_id;
-    /* The `message_id` of the command this answers. Absent on everything the
- board sends unasked — `visit`, the result, a line-started `started` — and
- on a refusal of a frame that could not be read. */
-    bool has_in_reply_to;
-    uint16_t in_reply_to;
     pb_size_t which_body;
     union {
         statemachined_link_v1_HelloAck hello_ack;
@@ -527,6 +560,7 @@ typedef struct _statemachined_link_v1_DeviceMessage {
         statemachined_link_v1_PinMap pin_map;
         statemachined_link_v1_AutorunOk autorun_ok;
         statemachined_link_v1_Saved saved;
+        statemachined_link_v1_ProfileReport profile_report;
     } body;
 } statemachined_link_v1_DeviceMessage;
 
@@ -599,10 +633,12 @@ extern "C" {
 
 
 
+
 #define statemachined_link_v1_Started_by_ENUMTYPE statemachined_link_v1_StartSource
 
 
-#define statemachined_link_v1_StateVisit_exit_ENUMTYPE statemachined_link_v1_ExitCause
+
+#define statemachined_link_v1_ResultPath_exit_ENUMTYPE statemachined_link_v1_ExitCause
 
 
 
@@ -610,20 +646,18 @@ extern "C" {
 
 
 
-
-
-
-
-
+#define statemachined_link_v1_Visit_exit_ENUMTYPE statemachined_link_v1_ExitCause
 
 #define statemachined_link_v1_PinMap_dir_ENUMTYPE statemachined_link_v1_Direction
 
 
 
 
+
+
 /* Initializer values for message structs */
-#define statemachined_link_v1_HostMessage_init_default {0, 0, {statemachined_link_v1_Hello_init_default}}
-#define statemachined_link_v1_DeviceMessage_init_default {0, false, 0, 0, {statemachined_link_v1_HelloAck_init_default}}
+#define statemachined_link_v1_HostMessage_init_default {0, {statemachined_link_v1_Hello_init_default}}
+#define statemachined_link_v1_DeviceMessage_init_default {0, {statemachined_link_v1_HelloAck_init_default}}
 #define statemachined_link_v1_Hello_init_default {0, 0}
 #define statemachined_link_v1_SetBegin_init_default {0, 0}
 #define statemachined_link_v1_SetEnd_init_default {0, 0, 0, 0}
@@ -646,6 +680,7 @@ extern "C" {
 #define statemachined_link_v1_Pins_init_default  {_statemachined_link_v1_Direction_MIN}
 #define statemachined_link_v1_Autorun_init_default {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
 #define statemachined_link_v1_Save_init_default  {0}
+#define statemachined_link_v1_Profile_init_default {0}
 #define statemachined_link_v1_Caps_init_default  {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 #define statemachined_link_v1_HelloAck_init_default {0, "", "", 0, 0, 0, false, statemachined_link_v1_Caps_init_default, 0, 0, 0, 0}
 #define statemachined_link_v1_Ack_init_default   {false, 0, false, 0}
@@ -653,24 +688,22 @@ extern "C" {
 #define statemachined_link_v1_Armed_init_default {0, 0, 0}
 #define statemachined_link_v1_Started_init_default {0, 0, _statemachined_link_v1_StartSource_MIN, false, 0}
 #define statemachined_link_v1_CancelAck_init_default {0, 0, 0}
-#define statemachined_link_v1_StateVisit_init_default {0, _statemachined_link_v1_ExitCause_MIN, 0, 0, 0, 0}
 #define statemachined_link_v1_ResultBegin_init_default {0, 0, 0, 0, 0, 0, 0, 0}
-#define statemachined_link_v1_ResultPath_init_default {0, 0, 0, {statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default, statemachined_link_v1_StateVisit_init_default}}
+#define statemachined_link_v1_ResultPath_init_default {0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {_statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN}, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}
 #define statemachined_link_v1_ResultEnd_init_default {0, 0}
 #define statemachined_link_v1_Event_init_default {0, 0}
 #define statemachined_link_v1_Error_init_default {"", "", ""}
 #define statemachined_link_v1_Log_init_default   {"", ""}
 #define statemachined_link_v1_Pong_init_default  {0, 0}
-#define statemachined_link_v1_GraphReport_init_default {0, 0, 0, 0}
-#define statemachined_link_v1_IoReport_init_default {0, 0}
-#define statemachined_link_v1_ScanReport_init_default {0, 0, 0, 0, 0, 0, 0}
-#define statemachined_link_v1_StateReport_init_default {0, false, statemachined_link_v1_GraphReport_init_default, 0, 0, 0, 0, 0, 0, 0, 0, false, statemachined_link_v1_IoReport_init_default, false, statemachined_link_v1_ScanReport_init_default}
-#define statemachined_link_v1_Visit_init_default {0, 0, false, statemachined_link_v1_StateVisit_init_default}
+#define statemachined_link_v1_StateReport_init_default {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+#define statemachined_link_v1_Visit_init_default {0, 0, 0, _statemachined_link_v1_ExitCause_MIN, 0, 0, 0, 0}
 #define statemachined_link_v1_PinMap_init_default {_statemachined_link_v1_Direction_MIN, 0, 0, {"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}}
 #define statemachined_link_v1_AutorunOk_init_default {0, 0, 0, 0, 0}
 #define statemachined_link_v1_Saved_init_default {0, 0, 0, 0, 0}
-#define statemachined_link_v1_HostMessage_init_zero {0, 0, {statemachined_link_v1_Hello_init_zero}}
-#define statemachined_link_v1_DeviceMessage_init_zero {0, false, 0, 0, {statemachined_link_v1_HelloAck_init_zero}}
+#define statemachined_link_v1_ProfileSpan_init_default {0, 0, 0, 0}
+#define statemachined_link_v1_ProfileReport_init_default {0, 0, 0, {statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default, statemachined_link_v1_ProfileSpan_init_default}, 0, 0, 0, 0}
+#define statemachined_link_v1_HostMessage_init_zero {0, {statemachined_link_v1_Hello_init_zero}}
+#define statemachined_link_v1_DeviceMessage_init_zero {0, {statemachined_link_v1_HelloAck_init_zero}}
 #define statemachined_link_v1_Hello_init_zero    {0, 0}
 #define statemachined_link_v1_SetBegin_init_zero {0, 0}
 #define statemachined_link_v1_SetEnd_init_zero   {0, 0, 0, 0}
@@ -693,6 +726,7 @@ extern "C" {
 #define statemachined_link_v1_Pins_init_zero     {_statemachined_link_v1_Direction_MIN}
 #define statemachined_link_v1_Autorun_init_zero  {false, 0, false, 0, false, 0, false, 0, false, 0, false, 0}
 #define statemachined_link_v1_Save_init_zero     {0}
+#define statemachined_link_v1_Profile_init_zero  {0}
 #define statemachined_link_v1_Caps_init_zero     {0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 #define statemachined_link_v1_HelloAck_init_zero {0, "", "", 0, 0, 0, false, statemachined_link_v1_Caps_init_zero, 0, 0, 0, 0}
 #define statemachined_link_v1_Ack_init_zero      {false, 0, false, 0}
@@ -700,22 +734,20 @@ extern "C" {
 #define statemachined_link_v1_Armed_init_zero    {0, 0, 0}
 #define statemachined_link_v1_Started_init_zero  {0, 0, _statemachined_link_v1_StartSource_MIN, false, 0}
 #define statemachined_link_v1_CancelAck_init_zero {0, 0, 0}
-#define statemachined_link_v1_StateVisit_init_zero {0, _statemachined_link_v1_ExitCause_MIN, 0, 0, 0, 0}
 #define statemachined_link_v1_ResultBegin_init_zero {0, 0, 0, 0, 0, 0, 0, 0}
-#define statemachined_link_v1_ResultPath_init_zero {0, 0, 0, {statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero, statemachined_link_v1_StateVisit_init_zero}}
+#define statemachined_link_v1_ResultPath_init_zero {0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {_statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN, _statemachined_link_v1_ExitCause_MIN}, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}
 #define statemachined_link_v1_ResultEnd_init_zero {0, 0}
 #define statemachined_link_v1_Event_init_zero    {0, 0}
 #define statemachined_link_v1_Error_init_zero    {"", "", ""}
 #define statemachined_link_v1_Log_init_zero      {"", ""}
 #define statemachined_link_v1_Pong_init_zero     {0, 0}
-#define statemachined_link_v1_GraphReport_init_zero {0, 0, 0, 0}
-#define statemachined_link_v1_IoReport_init_zero {0, 0}
-#define statemachined_link_v1_ScanReport_init_zero {0, 0, 0, 0, 0, 0, 0}
-#define statemachined_link_v1_StateReport_init_zero {0, false, statemachined_link_v1_GraphReport_init_zero, 0, 0, 0, 0, 0, 0, 0, 0, false, statemachined_link_v1_IoReport_init_zero, false, statemachined_link_v1_ScanReport_init_zero}
-#define statemachined_link_v1_Visit_init_zero    {0, 0, false, statemachined_link_v1_StateVisit_init_zero}
+#define statemachined_link_v1_StateReport_init_zero {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
+#define statemachined_link_v1_Visit_init_zero    {0, 0, 0, _statemachined_link_v1_ExitCause_MIN, 0, 0, 0, 0}
 #define statemachined_link_v1_PinMap_init_zero   {_statemachined_link_v1_Direction_MIN, 0, 0, {"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}}
 #define statemachined_link_v1_AutorunOk_init_zero {0, 0, 0, 0, 0}
 #define statemachined_link_v1_Saved_init_zero    {0, 0, 0, 0, 0}
+#define statemachined_link_v1_ProfileSpan_init_zero {0, 0, 0, 0}
+#define statemachined_link_v1_ProfileReport_init_zero {0, 0, 0, {statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero, statemachined_link_v1_ProfileSpan_init_zero}, 0, 0, 0, 0}
 
 /* Field tags (for use in manual encoding/decoding) */
 #define statemachined_link_v1_Hello_proto_tag    1
@@ -793,7 +825,7 @@ extern "C" {
 #define statemachined_link_v1_Autorun_seed_tag   4
 #define statemachined_link_v1_Autorun_first_trial_id_tag 5
 #define statemachined_link_v1_Autorun_start_now_tag 6
-#define statemachined_link_v1_HostMessage_message_id_tag 1
+#define statemachined_link_v1_Profile_reset_tag  1
 #define statemachined_link_v1_HostMessage_hello_tag 10
 #define statemachined_link_v1_HostMessage_set_begin_tag 11
 #define statemachined_link_v1_HostMessage_set_end_tag 12
@@ -814,6 +846,7 @@ extern "C" {
 #define statemachined_link_v1_HostMessage_pins_tag 27
 #define statemachined_link_v1_HostMessage_autorun_tag 28
 #define statemachined_link_v1_HostMessage_save_tag 29
+#define statemachined_link_v1_HostMessage_profile_tag 30
 #define statemachined_link_v1_Caps_max_frame_tag 1
 #define statemachined_link_v1_Caps_max_states_tag 2
 #define statemachined_link_v1_Caps_max_transitions_tag 3
@@ -852,12 +885,6 @@ extern "C" {
 #define statemachined_link_v1_CancelAck_trial_id_tag 1
 #define statemachined_link_v1_CancelAck_cancelled_tag 2
 #define statemachined_link_v1_CancelAck_outcome_tag 3
-#define statemachined_link_v1_StateVisit_state_tag 1
-#define statemachined_link_v1_StateVisit_exit_tag 2
-#define statemachined_link_v1_StateVisit_transition_tag 3
-#define statemachined_link_v1_StateVisit_drawn_ms_tag 4
-#define statemachined_link_v1_StateVisit_entered_us_tag 5
-#define statemachined_link_v1_StateVisit_duration_us_tag 6
 #define statemachined_link_v1_ResultBegin_trial_id_tag 1
 #define statemachined_link_v1_ResultBegin_outcome_tag 2
 #define statemachined_link_v1_ResultBegin_cancel_reason_tag 3
@@ -868,7 +895,12 @@ extern "C" {
 #define statemachined_link_v1_ResultBegin_truncated_tag 8
 #define statemachined_link_v1_ResultPath_trial_id_tag 1
 #define statemachined_link_v1_ResultPath_from_tag 2
-#define statemachined_link_v1_ResultPath_p_tag   3
+#define statemachined_link_v1_ResultPath_state_tag 3
+#define statemachined_link_v1_ResultPath_exit_tag 4
+#define statemachined_link_v1_ResultPath_transition_tag 5
+#define statemachined_link_v1_ResultPath_drawn_ms_tag 6
+#define statemachined_link_v1_ResultPath_entered_us_tag 7
+#define statemachined_link_v1_ResultPath_duration_us_tag 8
 #define statemachined_link_v1_ResultEnd_trial_id_tag 1
 #define statemachined_link_v1_ResultEnd_checksum_tag 2
 #define statemachined_link_v1_Event_us_tag       1
@@ -880,34 +912,36 @@ extern "C" {
 #define statemachined_link_v1_Log_message_tag    2
 #define statemachined_link_v1_Pong_up_us_tag     1
 #define statemachined_link_v1_Pong_us_tag        2
-#define statemachined_link_v1_GraphReport_has_set_tag 1
-#define statemachined_link_v1_GraphReport_set_version_tag 2
-#define statemachined_link_v1_GraphReport_n_graphs_tag 3
-#define statemachined_link_v1_GraphReport_index_tag 4
-#define statemachined_link_v1_IoReport_in_tag    1
-#define statemachined_link_v1_IoReport_out_tag   2
-#define statemachined_link_v1_ScanReport_hz_tag  1
-#define statemachined_link_v1_ScanReport_overruns_tag 2
-#define statemachined_link_v1_ScanReport_worst_gap_tag 3
-#define statemachined_link_v1_ScanReport_tx_stalls_tag 4
-#define statemachined_link_v1_ScanReport_visits_dropped_tag 5
-#define statemachined_link_v1_ScanReport_timers_enabled_tag 6
-#define statemachined_link_v1_ScanReport_timers_running_tag 7
 #define statemachined_link_v1_StateReport_link_state_tag 1
-#define statemachined_link_v1_StateReport_graph_tag 2
-#define statemachined_link_v1_StateReport_has_wiring_tag 3
-#define statemachined_link_v1_StateReport_autorun_tag 4
-#define statemachined_link_v1_StateReport_trial_id_tag 5
-#define statemachined_link_v1_StateReport_running_tag 6
-#define statemachined_link_v1_StateReport_current_state_tag 7
-#define statemachined_link_v1_StateReport_up_us_tag 8
-#define statemachined_link_v1_StateReport_dropped_lines_tag 9
-#define statemachined_link_v1_StateReport_bad_lines_tag 10
-#define statemachined_link_v1_StateReport_io_tag 11
-#define statemachined_link_v1_StateReport_scan_tag 12
+#define statemachined_link_v1_StateReport_has_wiring_tag 2
+#define statemachined_link_v1_StateReport_autorun_tag 3
+#define statemachined_link_v1_StateReport_trial_id_tag 4
+#define statemachined_link_v1_StateReport_running_tag 5
+#define statemachined_link_v1_StateReport_current_state_tag 6
+#define statemachined_link_v1_StateReport_up_us_tag 7
+#define statemachined_link_v1_StateReport_dropped_lines_tag 8
+#define statemachined_link_v1_StateReport_bad_lines_tag 9
+#define statemachined_link_v1_StateReport_has_set_tag 10
+#define statemachined_link_v1_StateReport_set_version_tag 11
+#define statemachined_link_v1_StateReport_n_graphs_tag 12
+#define statemachined_link_v1_StateReport_graph_index_tag 13
+#define statemachined_link_v1_StateReport_in_tag 14
+#define statemachined_link_v1_StateReport_out_tag 15
+#define statemachined_link_v1_StateReport_scan_hz_tag 16
+#define statemachined_link_v1_StateReport_overruns_tag 17
+#define statemachined_link_v1_StateReport_worst_gap_tag 18
+#define statemachined_link_v1_StateReport_tx_stalls_tag 19
+#define statemachined_link_v1_StateReport_visits_dropped_tag 20
+#define statemachined_link_v1_StateReport_timers_enabled_tag 21
+#define statemachined_link_v1_StateReport_timers_running_tag 22
 #define statemachined_link_v1_Visit_trial_id_tag 1
 #define statemachined_link_v1_Visit_seq_tag      2
-#define statemachined_link_v1_Visit_v_tag        3
+#define statemachined_link_v1_Visit_state_tag    3
+#define statemachined_link_v1_Visit_exit_tag     4
+#define statemachined_link_v1_Visit_transition_tag 5
+#define statemachined_link_v1_Visit_drawn_ms_tag 6
+#define statemachined_link_v1_Visit_entered_us_tag 7
+#define statemachined_link_v1_Visit_duration_us_tag 8
 #define statemachined_link_v1_PinMap_dir_tag     1
 #define statemachined_link_v1_PinMap_n_tag       2
 #define statemachined_link_v1_PinMap_pins_tag    3
@@ -921,8 +955,17 @@ extern "C" {
 #define statemachined_link_v1_Saved_autorun_tag  3
 #define statemachined_link_v1_Saved_write_count_tag 4
 #define statemachined_link_v1_Saved_written_tag  5
-#define statemachined_link_v1_DeviceMessage_message_id_tag 1
-#define statemachined_link_v1_DeviceMessage_in_reply_to_tag 2
+#define statemachined_link_v1_ProfileSpan_span_tag 1
+#define statemachined_link_v1_ProfileSpan_count_tag 2
+#define statemachined_link_v1_ProfileSpan_total_cycles_tag 3
+#define statemachined_link_v1_ProfileSpan_max_cycles_tag 4
+#define statemachined_link_v1_ProfileReport_enabled_tag 1
+#define statemachined_link_v1_ProfileReport_cycles_per_second_tag 2
+#define statemachined_link_v1_ProfileReport_spans_tag 3
+#define statemachined_link_v1_ProfileReport_overruns_in_trial_tag 4
+#define statemachined_link_v1_ProfileReport_worst_gap_in_trial_tag 5
+#define statemachined_link_v1_ProfileReport_host_message_bytes_tag 6
+#define statemachined_link_v1_ProfileReport_device_message_bytes_tag 7
 #define statemachined_link_v1_DeviceMessage_hello_ack_tag 10
 #define statemachined_link_v1_DeviceMessage_ack_tag 11
 #define statemachined_link_v1_DeviceMessage_set_ok_tag 12
@@ -941,10 +984,10 @@ extern "C" {
 #define statemachined_link_v1_DeviceMessage_pin_map_tag 25
 #define statemachined_link_v1_DeviceMessage_autorun_ok_tag 26
 #define statemachined_link_v1_DeviceMessage_saved_tag 27
+#define statemachined_link_v1_DeviceMessage_profile_report_tag 28
 
 /* Struct field encoding specification for nanopb */
 #define statemachined_link_v1_HostMessage_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UINT32,   message_id,        1) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,hello,body.hello),  10) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,set_begin,body.set_begin),  11) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,set_end,body.set_end),  12) \
@@ -964,7 +1007,8 @@ X(a, STATIC,   ONEOF,    MESSAGE,  (body,wiring,body.wiring),  25) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,timers,body.timers),  26) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,pins,body.pins),  27) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,autorun,body.autorun),  28) \
-X(a, STATIC,   ONEOF,    MESSAGE,  (body,save,body.save),  29)
+X(a, STATIC,   ONEOF,    MESSAGE,  (body,save,body.save),  29) \
+X(a, STATIC,   ONEOF,    MESSAGE,  (body,profile,body.profile),  30)
 #define statemachined_link_v1_HostMessage_CALLBACK NULL
 #define statemachined_link_v1_HostMessage_DEFAULT NULL
 #define statemachined_link_v1_HostMessage_body_hello_MSGTYPE statemachined_link_v1_Hello
@@ -987,10 +1031,9 @@ X(a, STATIC,   ONEOF,    MESSAGE,  (body,save,body.save),  29)
 #define statemachined_link_v1_HostMessage_body_pins_MSGTYPE statemachined_link_v1_Pins
 #define statemachined_link_v1_HostMessage_body_autorun_MSGTYPE statemachined_link_v1_Autorun
 #define statemachined_link_v1_HostMessage_body_save_MSGTYPE statemachined_link_v1_Save
+#define statemachined_link_v1_HostMessage_body_profile_MSGTYPE statemachined_link_v1_Profile
 
 #define statemachined_link_v1_DeviceMessage_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UINT32,   message_id,        1) \
-X(a, STATIC,   OPTIONAL, UINT32,   in_reply_to,       2) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,hello_ack,body.hello_ack),  10) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,ack,body.ack),  11) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,set_ok,body.set_ok),  12) \
@@ -1008,7 +1051,8 @@ X(a, STATIC,   ONEOF,    MESSAGE,  (body,state_report,body.state_report),  23) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,visit,body.visit),  24) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,pin_map,body.pin_map),  25) \
 X(a, STATIC,   ONEOF,    MESSAGE,  (body,autorun_ok,body.autorun_ok),  26) \
-X(a, STATIC,   ONEOF,    MESSAGE,  (body,saved,body.saved),  27)
+X(a, STATIC,   ONEOF,    MESSAGE,  (body,saved,body.saved),  27) \
+X(a, STATIC,   ONEOF,    MESSAGE,  (body,profile_report,body.profile_report),  28)
 #define statemachined_link_v1_DeviceMessage_CALLBACK NULL
 #define statemachined_link_v1_DeviceMessage_DEFAULT NULL
 #define statemachined_link_v1_DeviceMessage_body_hello_ack_MSGTYPE statemachined_link_v1_HelloAck
@@ -1029,6 +1073,7 @@ X(a, STATIC,   ONEOF,    MESSAGE,  (body,saved,body.saved),  27)
 #define statemachined_link_v1_DeviceMessage_body_pin_map_MSGTYPE statemachined_link_v1_PinMap
 #define statemachined_link_v1_DeviceMessage_body_autorun_ok_MSGTYPE statemachined_link_v1_AutorunOk
 #define statemachined_link_v1_DeviceMessage_body_saved_MSGTYPE statemachined_link_v1_Saved
+#define statemachined_link_v1_DeviceMessage_body_profile_report_MSGTYPE statemachined_link_v1_ProfileReport
 
 #define statemachined_link_v1_Hello_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   proto,             1) \
@@ -1198,6 +1243,11 @@ X(a, STATIC,   OPTIONAL, BOOL,     start_now,         6)
 #define statemachined_link_v1_Save_CALLBACK NULL
 #define statemachined_link_v1_Save_DEFAULT NULL
 
+#define statemachined_link_v1_Profile_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, BOOL,     reset,             1)
+#define statemachined_link_v1_Profile_CALLBACK NULL
+#define statemachined_link_v1_Profile_DEFAULT NULL
+
 #define statemachined_link_v1_Caps_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   max_frame,         1) \
 X(a, STATIC,   SINGULAR, UINT32,   max_states,        2) \
@@ -1265,16 +1315,6 @@ X(a, STATIC,   SINGULAR, SINT32,   outcome,           3)
 #define statemachined_link_v1_CancelAck_CALLBACK NULL
 #define statemachined_link_v1_CancelAck_DEFAULT NULL
 
-#define statemachined_link_v1_StateVisit_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UINT32,   state,             1) \
-X(a, STATIC,   SINGULAR, UENUM,    exit,              2) \
-X(a, STATIC,   SINGULAR, UINT32,   transition,        3) \
-X(a, STATIC,   SINGULAR, SINT32,   drawn_ms,          4) \
-X(a, STATIC,   SINGULAR, UINT32,   entered_us,        5) \
-X(a, STATIC,   SINGULAR, UINT32,   duration_us,       6)
-#define statemachined_link_v1_StateVisit_CALLBACK NULL
-#define statemachined_link_v1_StateVisit_DEFAULT NULL
-
 #define statemachined_link_v1_ResultBegin_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   trial_id,          1) \
 X(a, STATIC,   SINGULAR, SINT32,   outcome,           2) \
@@ -1290,10 +1330,14 @@ X(a, STATIC,   SINGULAR, BOOL,     truncated,         8)
 #define statemachined_link_v1_ResultPath_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   trial_id,          1) \
 X(a, STATIC,   SINGULAR, UINT32,   from,              2) \
-X(a, STATIC,   REPEATED, MESSAGE,  p,                 3)
+X(a, STATIC,   REPEATED, UINT32,   state,             3) \
+X(a, STATIC,   REPEATED, UENUM,    exit,              4) \
+X(a, STATIC,   REPEATED, UINT32,   transition,        5) \
+X(a, STATIC,   REPEATED, SINT32,   drawn_ms,          6) \
+X(a, STATIC,   REPEATED, UINT32,   entered_us,        7) \
+X(a, STATIC,   REPEATED, UINT32,   duration_us,       8)
 #define statemachined_link_v1_ResultPath_CALLBACK NULL
 #define statemachined_link_v1_ResultPath_DEFAULT NULL
-#define statemachined_link_v1_ResultPath_p_MSGTYPE statemachined_link_v1_StateVisit
 
 #define statemachined_link_v1_ResultEnd_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   trial_id,          1) \
@@ -1326,57 +1370,43 @@ X(a, STATIC,   SINGULAR, UINT32,   us,                2)
 #define statemachined_link_v1_Pong_CALLBACK NULL
 #define statemachined_link_v1_Pong_DEFAULT NULL
 
-#define statemachined_link_v1_GraphReport_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, BOOL,     has_set,           1) \
-X(a, STATIC,   SINGULAR, UINT32,   set_version,       2) \
-X(a, STATIC,   SINGULAR, UINT32,   n_graphs,          3) \
-X(a, STATIC,   SINGULAR, UINT32,   index,             4)
-#define statemachined_link_v1_GraphReport_CALLBACK NULL
-#define statemachined_link_v1_GraphReport_DEFAULT NULL
-
-#define statemachined_link_v1_IoReport_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UINT32,   in,                1) \
-X(a, STATIC,   SINGULAR, UINT32,   out,               2)
-#define statemachined_link_v1_IoReport_CALLBACK NULL
-#define statemachined_link_v1_IoReport_DEFAULT NULL
-
-#define statemachined_link_v1_ScanReport_FIELDLIST(X, a) \
-X(a, STATIC,   SINGULAR, UINT32,   hz,                1) \
-X(a, STATIC,   SINGULAR, UINT32,   overruns,          2) \
-X(a, STATIC,   SINGULAR, UINT32,   worst_gap,         3) \
-X(a, STATIC,   SINGULAR, UINT32,   tx_stalls,         4) \
-X(a, STATIC,   SINGULAR, UINT32,   visits_dropped,    5) \
-X(a, STATIC,   SINGULAR, UINT32,   timers_enabled,    6) \
-X(a, STATIC,   SINGULAR, UINT32,   timers_running,    7)
-#define statemachined_link_v1_ScanReport_CALLBACK NULL
-#define statemachined_link_v1_ScanReport_DEFAULT NULL
-
 #define statemachined_link_v1_StateReport_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   link_state,        1) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  graph,             2) \
-X(a, STATIC,   SINGULAR, BOOL,     has_wiring,        3) \
-X(a, STATIC,   SINGULAR, BOOL,     autorun,           4) \
-X(a, STATIC,   SINGULAR, UINT32,   trial_id,          5) \
-X(a, STATIC,   SINGULAR, BOOL,     running,           6) \
-X(a, STATIC,   SINGULAR, UINT32,   current_state,     7) \
-X(a, STATIC,   SINGULAR, UINT32,   up_us,             8) \
-X(a, STATIC,   SINGULAR, UINT32,   dropped_lines,     9) \
-X(a, STATIC,   SINGULAR, UINT32,   bad_lines,        10) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  io,               11) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  scan,             12)
+X(a, STATIC,   SINGULAR, BOOL,     has_wiring,        2) \
+X(a, STATIC,   SINGULAR, BOOL,     autorun,           3) \
+X(a, STATIC,   SINGULAR, UINT32,   trial_id,          4) \
+X(a, STATIC,   SINGULAR, BOOL,     running,           5) \
+X(a, STATIC,   SINGULAR, UINT32,   current_state,     6) \
+X(a, STATIC,   SINGULAR, UINT32,   up_us,             7) \
+X(a, STATIC,   SINGULAR, UINT32,   dropped_lines,     8) \
+X(a, STATIC,   SINGULAR, UINT32,   bad_lines,         9) \
+X(a, STATIC,   SINGULAR, BOOL,     has_set,          10) \
+X(a, STATIC,   SINGULAR, UINT32,   set_version,      11) \
+X(a, STATIC,   SINGULAR, UINT32,   n_graphs,         12) \
+X(a, STATIC,   SINGULAR, UINT32,   graph_index,      13) \
+X(a, STATIC,   SINGULAR, UINT32,   in,               14) \
+X(a, STATIC,   SINGULAR, UINT32,   out,              15) \
+X(a, STATIC,   SINGULAR, UINT32,   scan_hz,          16) \
+X(a, STATIC,   SINGULAR, UINT32,   overruns,         17) \
+X(a, STATIC,   SINGULAR, UINT32,   worst_gap,        18) \
+X(a, STATIC,   SINGULAR, UINT32,   tx_stalls,        19) \
+X(a, STATIC,   SINGULAR, UINT32,   visits_dropped,   20) \
+X(a, STATIC,   SINGULAR, UINT32,   timers_enabled,   21) \
+X(a, STATIC,   SINGULAR, UINT32,   timers_running,   22)
 #define statemachined_link_v1_StateReport_CALLBACK NULL
 #define statemachined_link_v1_StateReport_DEFAULT NULL
-#define statemachined_link_v1_StateReport_graph_MSGTYPE statemachined_link_v1_GraphReport
-#define statemachined_link_v1_StateReport_io_MSGTYPE statemachined_link_v1_IoReport
-#define statemachined_link_v1_StateReport_scan_MSGTYPE statemachined_link_v1_ScanReport
 
 #define statemachined_link_v1_Visit_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UINT32,   trial_id,          1) \
 X(a, STATIC,   SINGULAR, UINT32,   seq,               2) \
-X(a, STATIC,   OPTIONAL, MESSAGE,  v,                 3)
+X(a, STATIC,   SINGULAR, UINT32,   state,             3) \
+X(a, STATIC,   SINGULAR, UENUM,    exit,              4) \
+X(a, STATIC,   SINGULAR, UINT32,   transition,        5) \
+X(a, STATIC,   SINGULAR, SINT32,   drawn_ms,          6) \
+X(a, STATIC,   SINGULAR, UINT32,   entered_us,        7) \
+X(a, STATIC,   SINGULAR, UINT32,   duration_us,       8)
 #define statemachined_link_v1_Visit_CALLBACK NULL
 #define statemachined_link_v1_Visit_DEFAULT NULL
-#define statemachined_link_v1_Visit_v_MSGTYPE statemachined_link_v1_StateVisit
 
 #define statemachined_link_v1_PinMap_FIELDLIST(X, a) \
 X(a, STATIC,   SINGULAR, UENUM,    dir,               1) \
@@ -1403,6 +1433,26 @@ X(a, STATIC,   SINGULAR, BOOL,     written,           5)
 #define statemachined_link_v1_Saved_CALLBACK NULL
 #define statemachined_link_v1_Saved_DEFAULT NULL
 
+#define statemachined_link_v1_ProfileSpan_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, UINT32,   span,              1) \
+X(a, STATIC,   SINGULAR, UINT32,   count,             2) \
+X(a, STATIC,   SINGULAR, UINT64,   total_cycles,      3) \
+X(a, STATIC,   SINGULAR, UINT32,   max_cycles,        4)
+#define statemachined_link_v1_ProfileSpan_CALLBACK NULL
+#define statemachined_link_v1_ProfileSpan_DEFAULT NULL
+
+#define statemachined_link_v1_ProfileReport_FIELDLIST(X, a) \
+X(a, STATIC,   SINGULAR, BOOL,     enabled,           1) \
+X(a, STATIC,   SINGULAR, UINT32,   cycles_per_second,   2) \
+X(a, STATIC,   REPEATED, MESSAGE,  spans,             3) \
+X(a, STATIC,   SINGULAR, UINT32,   overruns_in_trial,   4) \
+X(a, STATIC,   SINGULAR, UINT32,   worst_gap_in_trial,   5) \
+X(a, STATIC,   SINGULAR, UINT32,   host_message_bytes,   6) \
+X(a, STATIC,   SINGULAR, UINT32,   device_message_bytes,   7)
+#define statemachined_link_v1_ProfileReport_CALLBACK NULL
+#define statemachined_link_v1_ProfileReport_DEFAULT NULL
+#define statemachined_link_v1_ProfileReport_spans_MSGTYPE statemachined_link_v1_ProfileSpan
+
 extern const pb_msgdesc_t statemachined_link_v1_HostMessage_msg;
 extern const pb_msgdesc_t statemachined_link_v1_DeviceMessage_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Hello_msg;
@@ -1427,6 +1477,7 @@ extern const pb_msgdesc_t statemachined_link_v1_Timers_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Pins_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Autorun_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Save_msg;
+extern const pb_msgdesc_t statemachined_link_v1_Profile_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Caps_msg;
 extern const pb_msgdesc_t statemachined_link_v1_HelloAck_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Ack_msg;
@@ -1434,7 +1485,6 @@ extern const pb_msgdesc_t statemachined_link_v1_SetOk_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Armed_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Started_msg;
 extern const pb_msgdesc_t statemachined_link_v1_CancelAck_msg;
-extern const pb_msgdesc_t statemachined_link_v1_StateVisit_msg;
 extern const pb_msgdesc_t statemachined_link_v1_ResultBegin_msg;
 extern const pb_msgdesc_t statemachined_link_v1_ResultPath_msg;
 extern const pb_msgdesc_t statemachined_link_v1_ResultEnd_msg;
@@ -1442,14 +1492,13 @@ extern const pb_msgdesc_t statemachined_link_v1_Event_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Error_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Log_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Pong_msg;
-extern const pb_msgdesc_t statemachined_link_v1_GraphReport_msg;
-extern const pb_msgdesc_t statemachined_link_v1_IoReport_msg;
-extern const pb_msgdesc_t statemachined_link_v1_ScanReport_msg;
 extern const pb_msgdesc_t statemachined_link_v1_StateReport_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Visit_msg;
 extern const pb_msgdesc_t statemachined_link_v1_PinMap_msg;
 extern const pb_msgdesc_t statemachined_link_v1_AutorunOk_msg;
 extern const pb_msgdesc_t statemachined_link_v1_Saved_msg;
+extern const pb_msgdesc_t statemachined_link_v1_ProfileSpan_msg;
+extern const pb_msgdesc_t statemachined_link_v1_ProfileReport_msg;
 
 /* Defines for backwards compatibility with code written before nanopb-0.4.0 */
 #define statemachined_link_v1_HostMessage_fields &statemachined_link_v1_HostMessage_msg
@@ -1476,6 +1525,7 @@ extern const pb_msgdesc_t statemachined_link_v1_Saved_msg;
 #define statemachined_link_v1_Pins_fields &statemachined_link_v1_Pins_msg
 #define statemachined_link_v1_Autorun_fields &statemachined_link_v1_Autorun_msg
 #define statemachined_link_v1_Save_fields &statemachined_link_v1_Save_msg
+#define statemachined_link_v1_Profile_fields &statemachined_link_v1_Profile_msg
 #define statemachined_link_v1_Caps_fields &statemachined_link_v1_Caps_msg
 #define statemachined_link_v1_HelloAck_fields &statemachined_link_v1_HelloAck_msg
 #define statemachined_link_v1_Ack_fields &statemachined_link_v1_Ack_msg
@@ -1483,7 +1533,6 @@ extern const pb_msgdesc_t statemachined_link_v1_Saved_msg;
 #define statemachined_link_v1_Armed_fields &statemachined_link_v1_Armed_msg
 #define statemachined_link_v1_Started_fields &statemachined_link_v1_Started_msg
 #define statemachined_link_v1_CancelAck_fields &statemachined_link_v1_CancelAck_msg
-#define statemachined_link_v1_StateVisit_fields &statemachined_link_v1_StateVisit_msg
 #define statemachined_link_v1_ResultBegin_fields &statemachined_link_v1_ResultBegin_msg
 #define statemachined_link_v1_ResultPath_fields &statemachined_link_v1_ResultPath_msg
 #define statemachined_link_v1_ResultEnd_fields &statemachined_link_v1_ResultEnd_msg
@@ -1491,14 +1540,13 @@ extern const pb_msgdesc_t statemachined_link_v1_Saved_msg;
 #define statemachined_link_v1_Error_fields &statemachined_link_v1_Error_msg
 #define statemachined_link_v1_Log_fields &statemachined_link_v1_Log_msg
 #define statemachined_link_v1_Pong_fields &statemachined_link_v1_Pong_msg
-#define statemachined_link_v1_GraphReport_fields &statemachined_link_v1_GraphReport_msg
-#define statemachined_link_v1_IoReport_fields &statemachined_link_v1_IoReport_msg
-#define statemachined_link_v1_ScanReport_fields &statemachined_link_v1_ScanReport_msg
 #define statemachined_link_v1_StateReport_fields &statemachined_link_v1_StateReport_msg
 #define statemachined_link_v1_Visit_fields &statemachined_link_v1_Visit_msg
 #define statemachined_link_v1_PinMap_fields &statemachined_link_v1_PinMap_msg
 #define statemachined_link_v1_AutorunOk_fields &statemachined_link_v1_AutorunOk_msg
 #define statemachined_link_v1_Saved_fields &statemachined_link_v1_Saved_msg
+#define statemachined_link_v1_ProfileSpan_fields &statemachined_link_v1_ProfileSpan_msg
+#define statemachined_link_v1_ProfileReport_fields &statemachined_link_v1_ProfileReport_msg
 
 /* Maximum encoded size of messages (where known) */
 #define STATEMACHINED_LINK_V1_STATEMACHINED_LINK_V1_LINK_PB_H_MAX_SIZE statemachined_link_v1_DeviceMessage_size
@@ -1510,44 +1558,43 @@ extern const pb_msgdesc_t statemachined_link_v1_Saved_msg;
 #define statemachined_link_v1_Cancel_size        8
 #define statemachined_link_v1_Caps_size          60
 #define statemachined_link_v1_Configure_size     246
-#define statemachined_link_v1_DeviceMessage_size 500
+#define statemachined_link_v1_DeviceMessage_size 470
 #define statemachined_link_v1_Error_size         171
 #define statemachined_link_v1_Event_size         12
 #define statemachined_link_v1_GraphAction_size   22
 #define statemachined_link_v1_GraphBegin_size    18
 #define statemachined_link_v1_GraphDist_size     410
 #define statemachined_link_v1_GraphEnd_size      12
-#define statemachined_link_v1_GraphReport_size   20
 #define statemachined_link_v1_GraphState_size    32
 #define statemachined_link_v1_GraphTimer_size    58
 #define statemachined_link_v1_GraphTransition_size 32
 #define statemachined_link_v1_HelloAck_size      176
 #define statemachined_link_v1_Hello_size         17
-#define statemachined_link_v1_HostMessage_size   417
-#define statemachined_link_v1_IoReport_size      12
+#define statemachined_link_v1_HostMessage_size   413
 #define statemachined_link_v1_Log_size           106
 #define statemachined_link_v1_Patch_size         24
 #define statemachined_link_v1_PinMap_size        296
 #define statemachined_link_v1_Ping_size          0
 #define statemachined_link_v1_Pins_size          2
 #define statemachined_link_v1_Pong_size          12
+#define statemachined_link_v1_ProfileReport_size 466
+#define statemachined_link_v1_ProfileSpan_size   29
+#define statemachined_link_v1_Profile_size       2
 #define statemachined_link_v1_ResultBegin_size   44
 #define statemachined_link_v1_ResultEnd_size     12
-#define statemachined_link_v1_ResultPath_size    488
+#define statemachined_link_v1_ResultPath_size    460
 #define statemachined_link_v1_Save_size          0
 #define statemachined_link_v1_Saved_size         18
-#define statemachined_link_v1_ScanReport_size    42
 #define statemachined_link_v1_SetBegin_size      12
 #define statemachined_link_v1_SetEnd_size        24
 #define statemachined_link_v1_SetOk_size         30
 #define statemachined_link_v1_Start_size         6
 #define statemachined_link_v1_Started_size       20
-#define statemachined_link_v1_StateReport_size   122
+#define statemachined_link_v1_StateReport_size   123
 #define statemachined_link_v1_StateRequest_size  0
-#define statemachined_link_v1_StateVisit_size    32
 #define statemachined_link_v1_Timeout_size       12
 #define statemachined_link_v1_Timers_size        6
-#define statemachined_link_v1_Visit_size         46
+#define statemachined_link_v1_Visit_size         44
 #define statemachined_link_v1_Wiring_size        210
 
 #ifdef __cplusplus

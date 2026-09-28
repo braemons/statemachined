@@ -78,6 +78,14 @@ pub fn encode_device_message(
     encode_envelope(DEVICE_MESSAGE, msg_type, message_id, in_reply_to, fields)
 }
 
+/// A payload's fixed header: `type` (the body's field number in the
+/// envelope's `oneof`), `flags` (bit 0: `in_reply_to` follows), `message_id`
+/// little-endian, and `in_reply_to` little-endian when flagged. Then the body,
+/// encoded as its own message. `docs/reference/protocol.md` §1 and
+/// `firmware/core/protocol/link_payload.h` are the same layout.
+const HEADER_BYTES: usize = 4;
+const FLAG_IN_REPLY_TO: u8 = 0x01;
+
 fn encode_envelope(
     envelope_name: &str,
     msg_type: &str,
@@ -99,13 +107,18 @@ fn encode_envelope(
         return Err(format!("{msg_type} is not a message in link.proto"));
     };
     let body = message_from_json(&body_descriptor, fields, msg_type)?;
-    let mut envelope = DynamicMessage::new(envelope_descriptor);
-    envelope.set_field_by_name("message_id", ProtoValue::U32(message_id as u32));
+    let type_byte = u8::try_from(body_field.number())
+        .map_err(|_| format!("{msg_type}'s number does not fit the header's type byte"))?;
+    let mut out = Vec::with_capacity(HEADER_BYTES + 2 + body.encoded_len());
+    out.push(type_byte);
+    out.push(if in_reply_to.is_some() { FLAG_IN_REPLY_TO } else { 0 });
+    out.extend_from_slice(&message_id.to_le_bytes());
     if let Some(in_reply_to) = in_reply_to {
-        envelope.set_field_by_name("in_reply_to", ProtoValue::U32(in_reply_to as u32));
+        out.extend_from_slice(&in_reply_to.to_le_bytes());
     }
-    envelope.set_field(&body_field, ProtoValue::Message(body));
-    Ok(envelope.encode_to_vec())
+    body.encode(&mut out)
+        .map_err(|problem| format!("{msg_type} did not encode: {problem}"))?;
+    Ok(out)
 }
 
 /// A frame's protobuf from the board, as `{msg_type, message_id,
@@ -122,43 +135,47 @@ pub fn decode_host_message(payload: &[u8]) -> Result<Value, String> {
 
 fn decode_envelope(name: &str, payload: &[u8]) -> Result<Value, String> {
     let descriptor = message_named(name);
-    let envelope = DynamicMessage::decode(descriptor.clone(), payload)
-        .map_err(|problem| format!("not a {}: {problem}", descriptor.name()))?;
-    let mut out = Map::new();
-    let mut body = None;
-    for field in descriptor.fields() {
-        if field.containing_oneof().is_some() && envelope.has_field(&field) {
-            body = Some(field);
-        }
-    }
-    let Some(body_field) = body else {
+    if payload.len() < HEADER_BYTES {
         return Err(format!(
-            "a {} with no body this daemon knows: a newer board's message",
+            "a {} payload of {} bytes is shorter than its header",
+            descriptor.name(),
+            payload.len()
+        ));
+    }
+    let type_byte = payload[0];
+    let flags = payload[1];
+    let message_id = u16::from_le_bytes([payload[2], payload[3]]);
+    let mut at = HEADER_BYTES;
+    let mut in_reply_to = None;
+    if flags & FLAG_IN_REPLY_TO != 0 {
+        let Some(bytes) = payload.get(at..at + 2) else {
+            return Err("a payload flagged in_reply_to is shorter than its header".into());
+        };
+        in_reply_to = Some(u16::from_le_bytes([bytes[0], bytes[1]]));
+        at += 2;
+    }
+    let Some(body_field) = descriptor
+        .get_field(u32::from(type_byte))
+        .filter(|field| field.containing_oneof().is_some())
+    else {
+        return Err(format!(
+            "a {} of type {type_byte}, which this daemon does not know: a newer board's message",
             descriptor.name()
         ));
     };
+    let Kind::Message(body_descriptor) = body_field.kind() else {
+        return Err(format!("{} is not a message in link.proto", body_field.name()));
+    };
+    let body = DynamicMessage::decode(body_descriptor, &payload[at..])
+        .map_err(|problem| format!("not a {}: {problem}", body_field.name()))?;
+    let mut out = Map::new();
     out.insert("msg_type".into(), Value::from(body_field.name()));
-    out.insert(
-        "message_id".into(),
-        json_of(
-            &envelope
-                .get_field_by_name("message_id")
-                .expect("an envelope field"),
-            &Kind::Uint32,
-        ),
-    );
-    if let Some(in_reply_to) = descriptor.get_field_by_name("in_reply_to") {
-        if envelope.has_field(&in_reply_to) {
-            out.insert(
-                "in_reply_to".into(),
-                json_of(&envelope.get_field(&in_reply_to), &in_reply_to.kind()),
-            );
-        }
+    out.insert("message_id".into(), Value::from(message_id));
+    if let Some(in_reply_to) = in_reply_to {
+        out.insert("in_reply_to".into(), Value::from(in_reply_to));
     }
-    if let ProtoValue::Message(body) = envelope.get_field(&body_field).as_ref() {
-        for (key, value) in object_of(body) {
-            out.insert(key, value);
-        }
+    for (key, value) in object_of(&body) {
+        out.insert(key, value);
     }
     Ok(Value::Object(out))
 }
@@ -450,32 +467,54 @@ mod tests {
 
     #[test]
     fn a_device_message_names_what_it_answers_only_when_it_answers_something() {
-        let descriptor = message_named(DEVICE_MESSAGE);
-        let mut envelope = DynamicMessage::new(descriptor.clone());
-        envelope.set_field_by_name("message_id", ProtoValue::U32(7));
-        let visit_descriptor = pool()
-            .get_message_by_name("statemachined.link.v1.Visit")
-            .unwrap();
-        let mut visit = DynamicMessage::new(visit_descriptor);
-        visit.set_field_by_name("trial_id", ProtoValue::U32(193));
-        envelope.set_field_by_name("visit", ProtoValue::Message(visit));
-        let unasked = decode_device_message(&envelope.encode_to_vec()).unwrap();
+        let visit = fields(json!({"trial_id": 193, "state": 2}));
+        let unasked =
+            decode_device_message(&encode_device_message("visit", 7, None, &visit).unwrap())
+                .unwrap();
         assert_eq!(unasked["msg_type"], "visit");
+        assert_eq!(unasked["message_id"], 7);
+        assert_eq!(unasked["state"], 2);
         assert!(unasked.get("in_reply_to").is_none());
-        // A message field with nothing in it is absent, not an empty object.
-        assert!(unasked.get("v").is_none());
 
-        envelope.set_field_by_name("in_reply_to", ProtoValue::U32(0));
-        let reply = decode_device_message(&envelope.encode_to_vec()).unwrap();
+        // Zero is a message_id like any other, so presence is the flag's.
+        let reply =
+            decode_device_message(&encode_device_message("pong", 8, Some(0), &Map::new()).unwrap())
+                .unwrap();
         assert_eq!(reply["in_reply_to"], 0);
     }
 
     #[test]
+    fn a_message_field_with_nothing_in_it_is_absent_not_empty() {
+        let ack = fields(json!({"board": "uno_r4_minima"}));
+        let back = decode_device_message(&encode_device_message("hello_ack", 1, Some(0), &ack).unwrap())
+            .unwrap();
+        assert!(back.get("caps").is_none());
+    }
+
+    #[test]
+    fn the_header_is_the_bytes_the_board_reads() {
+        // type 23 (ping), no flags, message_id 0x0102 little-endian, empty body.
+        assert_eq!(
+            encode_host_message("ping", 0x0102, &Map::new()).unwrap(),
+            vec![23, 0, 0x02, 0x01]
+        );
+        // type 22 (pong), in_reply_to flagged, message_id 5, in_reply_to 4.
+        let pong = encode_device_message("pong", 5, Some(4), &Map::new()).unwrap();
+        assert_eq!(&pong[..6], &[22, 1, 5, 0, 4, 0]);
+    }
+
+    #[test]
     fn a_device_message_with_no_body_this_daemon_knows_is_named_as_such() {
-        // message_id 3, and field 99 -- a body from a newer board.
-        let payload = [0x08, 0x03, 0x9A, 0x06, 0x00];
+        // Type 99 -- a body from a newer board -- message_id 3, no flags.
+        let payload = [99, 0x00, 0x03, 0x00];
         let refused = decode_device_message(&payload).unwrap_err();
         assert!(refused.contains("newer board"), "{refused}");
+    }
+
+    #[test]
+    fn a_payload_shorter_than_its_header_is_refused() {
+        assert!(decode_device_message(&[22, 0, 1]).is_err());
+        assert!(decode_device_message(&[22, 1, 1, 0, 4]).is_err());
     }
 
     #[test]

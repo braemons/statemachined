@@ -17,6 +17,7 @@
 #include <FspTimer.h>
 
 #include "hal.h"
+#include "profile/profile.h"
 
 // Which port the host is on.
 //
@@ -168,6 +169,16 @@ void init() {
 
   // Real on a UART, ignored on native USB CDC, which runs at bus speed.
   STATEMACHINED_LINK.begin(921600);
+
+#if defined(STATEMACHINED_PROFILE)
+  // The Cortex-M4's cycle counter, for core/profile. Off out of reset: trace
+  // has to be enabled before the DWT counts at all.
+  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+  DWT->CYCCNT = 0;
+  DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+  // 48 MHz wraps it every ~89 s, and every use is a difference far shorter.
+  profile::set_clock([]() -> uint32_t { return DWT->CYCCNT; }, SystemCoreClock);
+#endif
 }
 
 const char* const* input_pin_labels() { return kInputPinLabels; }

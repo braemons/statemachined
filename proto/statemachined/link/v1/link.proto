@@ -33,13 +33,21 @@ syntax = "proto3";
 package statemachined.link.v1;
 
 // ---------------------------------------------------------------- envelopes ---
+//
+// **The registry of message types, not an encoded message.** A frame's payload
+// is a fixed header -- `type`, `flags`, `message_id` and, from the board,
+// `in_reply_to` (docs/reference/protocol.md §1) -- and then the body alone,
+// encoded as its own message. `type` is the body's field number here.
+//
+// It used to be this envelope, encoded, with the body as a `oneof` member. That
+// cost the board more than anything else it did: nanopb walks every member of
+// the `oneof` to encode one, and encodes a nested message twice (once to size
+// it), so a `pong` cost five times its own encode. The shape is kept because it
+// is still the one place that says which number is which message, and because
+// nanopb's union of the bodies is exactly the struct the board decodes into.
 
 // Everything the daemon sends is one of these.
 message HostMessage {
-  // The sender's per-direction counter, an unsigned 16-bit value that wraps.
-  // It identifies one message so a resend of it can be recognised; it orders
-  // nothing. See `docs/reference/protocol.md` §1.2.
-  uint32 message_id = 1;
   oneof body {
     Hello hello = 10;
     SetBegin set_begin = 11;
@@ -61,16 +69,12 @@ message HostMessage {
     Pins pins = 27;
     Autorun autorun = 28;
     Save save = 29;
+    Profile profile = 30;
   }
 }
 
 // Everything the board sends is one of these.
 message DeviceMessage {
-  uint32 message_id = 1;
-  // The `message_id` of the command this answers. Absent on everything the
-  // board sends unasked — `visit`, the result, a line-started `started` — and
-  // on a refusal of a frame that could not be read.
-  optional uint32 in_reply_to = 2;
   oneof body {
     HelloAck hello_ack = 10;
     Ack ack = 11;
@@ -90,6 +94,7 @@ message DeviceMessage {
     PinMap pin_map = 25;
     AutorunOk autorun_ok = 26;
     Saved saved = 27;
+    ProfileReport profile_report = 28;
   }
 }
 
@@ -309,6 +314,18 @@ message Autorun {
 
 message Save {}
 
+// Where the board's time goes: a profiling build's cycle counts, read out and
+// optionally cleared. Every build answers it; one compiled without
+// STATEMACHINED_PROFILE answers `enabled: false` and nothing else. For
+// measuring a board (client/python/tests/perf), not for a session: the daemon
+// never sends it. See firmware/core/profile/profile.h.
+message Profile {
+  // Clear the figures instead of reporting them: the reply carries `enabled`
+  // and `cycles_per_second` only, so the reset costs no more than a ping and
+  // what it costs is not the first thing the fresh profile measures.
+  bool reset = 1;
+}
+
 // ------------------------------------------------------------ device → host ---
 
 message Caps {
@@ -384,21 +401,6 @@ enum ExitCause {
   EXIT_CAUSE_TERMINAL = 4;
 }
 
-// One completed state visit: a `result_path` row, and a `visit`'s `v`.
-message StateVisit {
-  // Within the graph.
-  uint32 state = 1;
-  ExitCause exit = 2;
-  // Which of this state's transitions fired, or 255 for an exit that was not
-  // one.
-  uint32 transition = 3;
-  // The realised draw, in ms.
-  sint32 drawn_ms = 4;
-  // Device clock.
-  uint32 entered_us = 5;
-  uint32 duration_us = 6;
-}
-
 message ResultBegin {
   uint32 trial_id = 1;
   sint32 outcome = 2;
@@ -410,10 +412,22 @@ message ResultBegin {
   bool truncated = 8;
 }
 
+// Rows of the path, as parallel packed arrays rather than a repeated message:
+// each field of a row at index `i` is element `i` of its array, and every
+// array is the same length. A repeated message costs nanopb a sizing pass per
+// row, and this is the largest burst the board sends. A row is what `visit`
+// carries: the state, why it was left (`exit`), which transition fired (255
+// for an exit that was not one), the realised draw in ms, and the device
+// clock at entry and the time spent.
 message ResultPath {
   uint32 trial_id = 1;
   uint32 from = 2;
-  repeated StateVisit p = 3;
+  repeated uint32 state = 3;
+  repeated ExitCause exit = 4;
+  repeated uint32 transition = 5;
+  repeated sint32 drawn_ms = 6;
+  repeated uint32 entered_us = 7;
+  repeated uint32 duration_us = 8;
 }
 
 message ResultEnd {
@@ -444,50 +458,60 @@ message Pong {
   uint32 us = 2;
 }
 
-message GraphReport {
-  bool has_set = 1;
-  uint32 set_version = 2;
-  uint32 n_graphs = 3;
-  uint32 index = 4;
-}
 
-message IoReport {
-  uint32 in = 1;
-  uint32 out = 2;
-}
 
-message ScanReport {
-  uint32 hz = 1;
-  uint32 overruns = 2;
-  uint32 worst_gap = 3;
-  uint32 tx_stalls = 4;
-  uint32 visits_dropped = 5;
-  uint32 timers_enabled = 6;
-  uint32 timers_running = 7;
-}
 
+// Flat, on purpose: the three groups it had -- graph, io, scan -- were nested
+// messages, each of which nanopb encodes twice, in the reply a host polls for.
 message StateReport {
   uint32 link_state = 1;
-  GraphReport graph = 2;
-  bool has_wiring = 3;
-  bool autorun = 4;
-  uint32 trial_id = 5;
-  bool running = 6;
-  uint32 current_state = 7;
-  uint32 up_us = 8;
+  bool has_wiring = 2;
+  bool autorun = 3;
+  uint32 trial_id = 4;
+  bool running = 5;
+  uint32 current_state = 6;
+  uint32 up_us = 7;
   // Frames the board threw away whole: too long, not COBS, or a CRC that did
   // not match.
-  uint32 dropped_lines = 9;
+  uint32 dropped_lines = 8;
   // Frames that arrived intact and still could not be read as a message.
-  uint32 bad_lines = 10;
-  IoReport io = 11;
-  ScanReport scan = 12;
+  uint32 bad_lines = 9;
+  // The committed set, and which of its graphs is live.
+  bool has_set = 10;
+  uint32 set_version = 11;
+  uint32 n_graphs = 12;
+  uint32 graph_index = 13;
+  // The live pins: inputs as read, outputs as driven.
+  uint32 in = 14;
+  uint32 out = 15;
+  // Is this device keeping up: its measured scan rate, the scan periods that
+  // went by with no scan, the longest run of them, replies that waited for the
+  // wire, visits the ring had no room for, and the timers enabled and running.
+  uint32 scan_hz = 16;
+  uint32 overruns = 17;
+  uint32 worst_gap = 18;
+  uint32 tx_stalls = 19;
+  uint32 visits_dropped = 20;
+  uint32 timers_enabled = 21;
+  uint32 timers_running = 22;
 }
 
+// One completed state visit, sent as it happens. Flat: the row's fields are
+// the message's, as in `result_path`.
 message Visit {
   uint32 trial_id = 1;
   uint32 seq = 2;
-  StateVisit v = 3;
+  // Within the graph.
+  uint32 state = 3;
+  ExitCause exit = 4;
+  // Which of this state's transitions fired, or 255 for an exit that was not
+  // one.
+  uint32 transition = 5;
+  // The realised draw, in ms.
+  sint32 drawn_ms = 6;
+  // Device clock.
+  uint32 entered_us = 7;
+  uint32 duration_us = 8;
 }
 
 message PinMap {
@@ -510,4 +534,28 @@ message Saved {
   bool autorun = 3;
   uint32 write_count = 4;
   bool written = 5;
+}
+
+// One measured region; `span` is profile::Span in firmware/core/profile.
+message ProfileSpan {
+  uint32 span = 1;
+  uint32 count = 2;
+  uint64 total_cycles = 3;
+  uint32 max_cycles = 4;
+}
+
+message ProfileReport {
+  // False from a build without profiling, which reports nothing else.
+  bool enabled = 1;
+  // What a cycle is worth: the core clock on a board.
+  uint32 cycles_per_second = 2;
+  // Every span, including the ones that never ran.
+  repeated ProfileSpan spans = 3;
+  // Overruns while a trial was running -- the ones that cost an experiment.
+  uint32 overruns_in_trial = 4;
+  uint32 worst_gap_in_trial = 5;
+  // The sizes of the structs every frame clears and fills, which are fixed by
+  // link.options: what one decode and one reply cost before any field is set.
+  uint32 host_message_bytes = 6;
+  uint32 device_message_bytes = 7;
 }

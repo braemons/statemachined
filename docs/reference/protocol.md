@@ -917,6 +917,26 @@ A blank store, a damaged one and a board with no store are all ordinary: the
 compiled-in defaults stand, because a mitigation that depends on somebody having
 saved settings is not one.
 
+### 3.10 `profile`
+
+For measuring a board, not for running one: the daemon never sends it.
+`client/python/tests/perf` does, over the bare link.
+
+| Field   | Type | Meaning |
+| ------- | ---- | ------- |
+| `reset` | bool | Clear the figures instead of reporting them |
+
+A build compiled with `STATEMACHINED_PROFILE` (the `uno_r4_minima_profile`
+env) times named regions of its own work in CPU cycles -- the scan, the hold a
+command takes, and inside it the frame reader, nanopb's decode and encode, the
+handler -- and answers with a `profile_report` (§4.7). Every other build
+answers too, with `enabled: false` and nothing else, so a host can tell which
+build it is talking to rather than getting `unknown_type`.
+
+A `reset` is answered with the header alone (`enabled`, `cycles_per_second`):
+a full report costs milliseconds to encode, and that hold would otherwise be
+the first thing the fresh profile measured.
+
 ---
 
 ## 4. Device → host
@@ -1238,6 +1258,24 @@ names. Nothing in software can: there is no read-back path from a pin. It closes
 the gap between the firmware's table and the host's belief about it, which is
 the gap that used to be closed by copying; the gap to the soldering iron is
 closed by watching a level change when somebody presses the lever.
+
+### 4.7 `profile_report`
+
+The answer to `profile` (§3.10).
+
+| Field                  | Type          | Meaning |
+| ---------------------- | ------------- | ------- |
+| `enabled`              | bool          | False from a build without profiling, which sends nothing else |
+| `cycles_per_second`    | u32           | What a cycle is worth: the core clock on a board |
+| `spans`                | list          | `span`, `count`, `total_cycles` (u64), `max_cycles`, one per region, in `profile::Span` order (`firmware/core/profile/profile.h`) |
+| `overruns_in_trial`    | u32           | Scan periods lost while a trial was running |
+| `worst_gap_in_trial`   | u32           | The most of them in a row |
+| `host_message_bytes`   | u32           | `sizeof` the decode struct every frame clears and fills |
+| `device_message_bytes` | u32           | `sizeof` the encode struct every reply does |
+
+Spans nest: `dispatch` includes the encoding of the reply it sends, and a
+command's `hold` includes everything done with its frame. Each figure is the
+wall time of its own region, and the host does the subtracting.
 
 ---
 

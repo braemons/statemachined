@@ -10,6 +10,7 @@
 
 #include "doctest.h"
 #include "link_json.h"
+#include "profile/profile.h"
 #include "protocol/crc16.h"
 #include "protocol/framing.h"
 #include "protocol/host_link_session.h"
@@ -36,10 +37,11 @@ struct RecordingSink : ReplySink {
     const Bytes frame(p, p + n);
     link::DeviceMessage message;
     Bytes payload;
-    REQUIRE(decode_device_frame(frame, &message, &payload));
+    link::Header header;
+    REQUIRE(decode_device_frame(frame, &header, &message, &payload));
     frames.push_back(frame);
     payloads.push_back(payload);
-    lines.push_back(json_of(message));
+    lines.push_back(json_of(header, message));
   }
 };
 
@@ -109,8 +111,9 @@ struct Host {
   static Bytes payload_of(const std::string& body) {
     link::HostMessage m;
     std::string why;
-    REQUIRE_MESSAGE(host_message_from_json(body + "}", &m, &why), why);
-    const Bytes payload = encode_host_message(m);
+    link::Header header;
+    REQUIRE_MESSAGE(host_message_from_json(body + "}", &header, &m, &why), why);
+    const Bytes payload = encode_host_message(header, m);
     REQUIRE_FALSE(payload.empty());
     return payload;
   }
@@ -2436,6 +2439,83 @@ TEST_CASE("a board can be told to run itself later without starting now") {
   after.device.set_settings_port(&store);
   REQUIRE(after.device.restore_settings(0) == SettingsError::None);
   CHECK(after.device.autorun_active());
+}
+
+/// Records when the session takes and lets go of the engine, and how many
+/// frames had gone out at each moment.
+struct OrderingLock : EngineLock {
+  const RecordingSink* sink = nullptr;
+  int acquired = 0;
+  int released = 0;
+  size_t frames_at_acquire = 0;
+  size_t frames_at_release = 0;
+  void acquire() override {
+    ++acquired;
+    frames_at_acquire = sink->frames.size();
+  }
+  void release() override {
+    ++released;
+    frames_at_release = sink->frames.size();
+  }
+};
+
+TEST_CASE("a command's handler runs under the engine lock, and its reply goes out after") {
+  // The point of the split: nanopb's encode is the most expensive part of a
+  // command and reads nothing the scan writes, so it must not be inside the
+  // window in which the scan waits.
+  Host h;
+  OrderingLock lock;
+  lock.sink = &h.sink;
+  h.device.set_engine_lock(&lock);
+  greet(h);
+  for (const char* command : {"ping", "state"}) {
+    const int before = lock.acquired;
+    const auto r = h.send(std::string(R"({"msg_type":")") + command + R"(","message_id":)" +
+                          h.next_message_id());
+    REQUIRE(r.size() == 1);
+    CHECK(lock.acquired == before + 1);
+    CHECK(lock.released == lock.acquired);
+    CHECK(lock.frames_at_release == lock.frames_at_acquire);
+  }
+}
+
+TEST_CASE("a retried command is answered from the cache without taking the engine") {
+  Host h;
+  OrderingLock lock;
+  lock.sink = &h.sink;
+  h.device.set_engine_lock(&lock);
+  greet(h);
+  const auto first = h.send(R"({"msg_type":"state","message_id":77)");
+  const int after_first = lock.acquired;
+  const auto again = h.send(R"({"msg_type":"state","message_id":77)");
+  REQUIRE(first.size() == 1);
+  REQUIRE(again.size() == 1);
+  CHECK(again[0] == first[0]);
+  CHECK(lock.acquired == after_first);
+}
+
+TEST_CASE("every build answers `profile`, and says whether it is a profiling build") {
+  // The perf suite needs to know which build it is talking to before it reads
+  // any figures, so a build without profiling answers rather than refusing.
+  Host h;
+  greet(h);
+  const auto r = h.send(R"({"msg_type":"profile","message_id":)" + h.next_message_id());
+  REQUIRE(r.size() == 1);
+  REQUIRE(type_of(r[0]) == "profile_report");
+  CHECK(flag(r[0], "enabled") == profile::kEnabled);
+  if (profile::kEnabled) {
+    CHECK(field(r[0], "spans") == std::to_string(static_cast<int>(profile::Span::Count)));
+    CHECK(field(r[0], "cycles_per_second") != "0");
+  } else {
+    CHECK(field(r[0], "spans") == "0");
+  }
+}
+
+TEST_CASE("`profile` is refused before hello, like everything else") {
+  Host h;
+  const auto r = h.send(R"({"msg_type":"profile","message_id":1)");
+  REQUIRE(r.size() == 1);
+  CHECK(type_of(r[0]) == "error");
 }
 
 TEST_CASE("stopping a self-driving board is never refused as busy") {

@@ -86,9 +86,7 @@ impl TrialResultCollector {
                     ));
                 }
                 self.rolling_checksum = crc16_ccitt(payload, self.rolling_checksum);
-                if let Some(rows) = message.get("p").and_then(Value::as_array) {
-                    self.rows.extend(rows.iter().cloned());
-                }
+                self.rows.extend(rows_of(message)?);
                 Ok(None)
             }
             Some(MsgType::ResultEnd) => {
@@ -106,4 +104,49 @@ impl TrialResultCollector {
             _ => Ok(None),
         }
     }
+}
+
+/// The fields of a path row, in the order a `result_path` carries them as
+/// parallel arrays (link.proto) and under the names a `visit` carries them.
+const ROW_FIELDS: [&str; 6] = [
+    "state",
+    "exit",
+    "transition",
+    "drawn_ms",
+    "entered_us",
+    "duration_us",
+];
+
+/// A `result_path`'s rows, zipped back out of its arrays into the objects a
+/// `visit` is, so one decoder reads both. Arrays of different lengths are a
+/// chunk that cannot be read, not rows to guess at.
+fn rows_of(message: &Value) -> Result<Vec<Value>, String> {
+    let empty = Vec::new();
+    let columns: Vec<&Vec<Value>> = ROW_FIELDS
+        .iter()
+        .map(|name| message.get(*name).and_then(Value::as_array).unwrap_or(&empty))
+        .collect();
+    let n = columns[0].len();
+    if columns.iter().any(|column| column.len() != n) {
+        return Err(format!(
+            "a result_path's arrays differ in length: {}",
+            ROW_FIELDS
+                .iter()
+                .zip(&columns)
+                .map(|(name, column)| format!("{name} {}", column.len()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    Ok((0..n)
+        .map(|i| {
+            Value::Object(
+                ROW_FIELDS
+                    .iter()
+                    .zip(&columns)
+                    .map(|(name, column)| (name.to_string(), column[i].clone()))
+                    .collect(),
+            )
+        })
+        .collect())
 }

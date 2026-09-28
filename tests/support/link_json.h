@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "protocol/link_messages.h"
+#include "protocol/link_payload.h"
 
 namespace statemachined::test {
 
@@ -25,21 +26,25 @@ using Bytes = std::vector<uint8_t>;
 /// `text` as the HostMessage it describes. False, with `why`, for a member
 /// this cannot carry. A `msg_type` link.proto has no body for is returned with
 /// no body, which is what the board gets from a newer daemon's command.
-bool host_message_from_json(const std::string& text, link::HostMessage* out, std::string* why);
+/// `message_id` goes into `header`, the body into `out`.
+bool host_message_from_json(const std::string& text, link::Header* header,
+                            link::HostMessage* out, std::string* why);
 
-/// The protobuf bytes of a host message: what a frame carries, and what the
-/// upload's checksum folds.
-Bytes encode_host_message(const link::HostMessage& message);
+/// A host message's payload, header and body: what a frame carries, and what
+/// the upload's checksum folds. A message with no body gets a type number no
+/// board knows, which is what a newer daemon's command looks like.
+Bytes encode_host_message(const link::Header& header, const link::HostMessage& message);
 
 /// `payload` sealed into a frame, delimiter included.
 Bytes frame_of(const Bytes& payload);
 
 /// Read one frame the board sent. False if it is not a frame, or not a
 /// DeviceMessage -- either of which is a board bug these tests exist to catch.
-bool decode_device_frame(const Bytes& frame, link::DeviceMessage* out, Bytes* payload);
+bool decode_device_frame(const Bytes& frame, link::Header* header, link::DeviceMessage* out,
+                         Bytes* payload);
 
 /// The line the NDJSON board would have written for `message`, newline
 /// included and CRC left off.
-std::string json_of(const link::DeviceMessage& message);
+std::string json_of(const link::Header& header, const link::DeviceMessage& message);
 
 }  // namespace statemachined::test

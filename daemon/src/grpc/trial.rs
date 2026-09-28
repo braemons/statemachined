@@ -415,15 +415,13 @@ impl DaemonState {
                 .get(usize::try_from(index?).ok()?)
                 .cloned()
         })();
-        let io = report.get("io");
-        let word = |key: &str| io.and_then(|io| io.get(key)).and_then(Value::as_i64);
+        let word = |key: &str| report.get(key).and_then(Value::as_i64);
         let number = |source: Option<&Value>, key: &str| {
             source
                 .and_then(|s| s.get(key))
                 .and_then(Value::as_i64)
                 .unwrap_or(0)
         };
-        let scan = report.get("scan");
         Ok(wire::RigState {
             connected: device.is_connected(),
             link_state: number(Some(&report), "link_state") as i32,
@@ -440,10 +438,10 @@ impl DaemonState {
             input_word: word("in"),
             output_word: word("out"),
             scan: Some(wire::ScanHealth {
-                hz: number(scan, "hz") as i32,
-                overruns: number(scan, "overruns"),
-                worst_gap: number(scan, "worst_gap") as i32,
-                tx_stalls: number(scan, "tx_stalls"),
+                hz: number(Some(&report), "scan_hz") as i32,
+                overruns: number(Some(&report), "overruns"),
+                worst_gap: number(Some(&report), "worst_gap") as i32,
+                tx_stalls: number(Some(&report), "tx_stalls"),
             }),
             newest_trace_entry_number: self.trace.newest_entry_number(),
         })
