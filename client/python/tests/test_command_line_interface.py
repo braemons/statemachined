@@ -48,3 +48,54 @@ def test_a_document_from_stdin_needs_a_name():
     with pytest.raises(SystemExit) as exit:
         main(["graphs", "put", "-"])
     assert exit.value.code == ExitStatus.USAGE == 2
+
+
+def test_a_line_map_from_stdin_needs_a_name_too():
+    with pytest.raises(SystemExit) as exit:
+        main(["lines", "put", "-"])
+    assert exit.value.code == ExitStatus.USAGE
+
+
+def test_a_graph_check_needs_a_name_or_a_draft():
+    with pytest.raises(SystemExit) as exit:
+        main(["graphs", "check"])
+    assert exit.value.code == ExitStatus.USAGE
+    assert build_parser().parse_args(["graphs", "check", "--file", "g.json"]).draft == "g.json"
+
+
+def test_autorun_leaves_unnamed_settings_alone():
+    """`None` is "leave it" in the client, so the CLI must not default them."""
+    arguments = build_parser().parse_args(["autorun", "on", "--no-start-now"])
+    assert (arguments.graph_name, arguments.seed, arguments.start_now) == (None, None, False)
+    assert build_parser().parse_args(["autorun"]).action is None
+
+
+def test_the_bare_reads_stay_reads():
+    for command in ("lines", "rig-config", "autorun"):
+        assert build_parser().parse_args([command]).action is None
+
+
+# -- against a daemon ------------------------------------------------------------
+
+
+def test_the_rig_config_is_patched_one_field_at_a_time(rig, capsys):
+    before = rig.read_configuration()
+    status = main(
+        ["--rig", rig.address, "rig-config", "set", "--expected-board", "a-test-board"]
+    )
+    try:
+        assert status == ExitStatus.OK
+        update = json.loads(capsys.readouterr().out)
+        assert update["configuration"]["expected_board"] == "a-test-board"
+        assert update["configuration"]["graph_store_directory"] == before.graph_store_directory
+    finally:
+        main(
+            [
+                "--rig",
+                rig.address,
+                "rig-config",
+                "set",
+                "--expected-board",
+                before.expected_board,
+            ]
+        )

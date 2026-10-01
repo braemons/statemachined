@@ -395,7 +395,25 @@ docs-build:                 ## build the static docs site to site/
 # Everything CI runs, in the order it runs it, minus the toolchain installs.
 # The point is that a red build can be reproduced with one command.
 .PHONY: ci
-ci: check-core check-proto test sanitize golden format-check rust-check client firmware  ## everything CI runs
+# The family's names for the targets above (contracts/DAEMON_LAYOUT.md §4), so
+# that `make check` means the same thing in every daemon's repository.
+
+.PHONY: proto build check dev package
+proto: rust-proto firmware-proto  ## regenerate everything proto/ produces: daemon, board, client
+	@$(MAKE) --no-print-directory -C client/python proto
+
+build: rust                 ## build the daemon
+
+check: check-core check-proto test sanitize golden format-check rust-check client  ## everything but the firmware build, which needs PlatformIO
+
+dev: rust                   ## the daemon with no board (loop://), its stores under dev/store
+	cargo run --manifest-path daemon/Cargo.toml -- serve --device loop:// \
+	  --rig-config packaging/etc/statemachined-rig-config.toml \
+	  --storage-dir dev/store --no-mdns
+
+package: deb                ## the .deb for this machine
+
+ci: check firmware          ## everything CI runs
 
 # -- the daemon -------------------------------------------------------------
 
