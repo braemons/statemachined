@@ -29,6 +29,7 @@ from enum import Enum, IntEnum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from .api_types import RigConfigurationPatch
 from .daemon_client import DEFAULT_PORT, StatemachinedClient
 from .daemon_refusals import DaemonRefusedTheRequest
 
@@ -124,12 +125,47 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("health", help="is the daemon up, and does it have a board")
     commands.add_parser("state", help="everything true right now")
     commands.add_parser("device", help="the board, as the daemon last saw it")
-    commands.add_parser("lines", help="the wiring: named lines and the board's own pins")
+    lines = commands.add_parser(
+        "lines", help="the wiring: named lines and the board's own pins"
+    )
+    line_actions = lines.add_subparsers(dest="action")
+    lines_put = line_actions.add_parser(
+        "put", help="write a line map, push it to the board and save it into the config"
+    )
+    lines_put.add_argument("file", help="the line map as JSON, or - for stdin")
+    lines_put.add_argument("--name", help="default: the file's stem")
     commands.add_parser("firmware", help="what the board runs against what this host has")
     commands.add_parser("session", help="the session and what is loaded")
     commands.add_parser("observers", help="who is watching this rig right now")
-    commands.add_parser("rig-config", help="the rig config: this box's hardware")
+    rig_config = commands.add_parser("rig-config", help="the rig config: this box's hardware")
+    rig_config_actions = rig_config.add_subparsers(dest="action")
+    rig_config_set = rig_config_actions.add_parser(
+        "set", help="change some of it until the daemon restarts; /etc is never written"
+    )
+    rig_config_set.add_argument("--device-target")
+    rig_config_set.add_argument("--device-baud", type=int)
+    rig_config_set.add_argument("--expected-board")
+    rig_config_set.add_argument("--graph-mode")
+    rig_config_set.add_argument("--startup-state-machine-config")
+    rig_config_set.add_argument("--session-seed")
     commands.add_parser("link", help="open the serial link, or reopen it")
+    commands.add_parser(
+        "save-to-board", help="write the board's wiring, graph set and autorun to its flash"
+    )
+
+    autorun = commands.add_parser("autorun", help="the board's own trial loop, with no host")
+    autorun_actions = autorun.add_subparsers(dest="action")
+    autorun_on = autorun_actions.add_parser("on", help="turn it on")
+    autorun_on.add_argument("--graph", dest="graph_name", help="default: the one it had")
+    autorun_on.add_argument("--cap-ms", type=int, default=0, dest="cap_milliseconds")
+    autorun_on.add_argument("--seed", type=int, help="fix the draw; default: the board picks")
+    autorun_on.add_argument("--first-trial-id", type=int)
+    autorun_on.add_argument(
+        "--start-now",
+        action=argparse.BooleanOptionalAction,
+        help="--no-start-now to enable it for the next power-up only, so it can be saved",
+    )
+    autorun_actions.add_parser("off", help="turn it off")
 
     watch = commands.add_parser("watch", help="follow the state stream until interrupted")
     watch.add_argument(
@@ -160,7 +196,14 @@ def build_parser() -> argparse.ArgumentParser:
     graph_remove = graph_actions.add_parser("rm", help="delete one graph")
     graph_remove.add_argument("name")
     graph_check = graph_actions.add_parser("check", help="compile it against the board")
-    graph_check.add_argument("name")
+    graph_check.add_argument(
+        "name", nargs="?", help="a stored graph; omit and pass --file for a draft"
+    )
+    graph_check.add_argument("--file", dest="draft", help="a graph to check without storing it")
+    graph_upload = graph_actions.add_parser(
+        "upload", help="push one stored graph to the board, replacing the committed set"
+    )
+    graph_upload.add_argument("name")
 
     configs = commands.add_parser("configs", help="the state machine config store")
     config_actions = configs.add_subparsers(dest="action", required=True)
@@ -180,6 +223,13 @@ def build_parser() -> argparse.ArgumentParser:
         "graphs", nargs="*", help="graphs to commit instead of the config's own"
     )
     commands.add_parser("close", help="end the session")
+    active_graph = commands.add_parser(
+        "active-graph", help="the graph a trial configured without one uses"
+    )
+    active_graph_actions = active_graph.add_subparsers(dest="action", required=True)
+    active_graph_set = active_graph_actions.add_parser("set", help="choose it")
+    active_graph_set.add_argument("graph")
+    active_graph_actions.add_parser("clear", help="unset it: every trial names its graph")
 
     trial = commands.add_parser("trial", help="arm, start, cancel or read a trial")
     trial_actions = trial.add_subparsers(dest="action", required=True)
@@ -206,6 +256,10 @@ def build_parser() -> argparse.ArgumentParser:
     recording_actions.add_parser("clear", help="throw the open one away")
     recording_get = recording_actions.add_parser("get", help="one recording's manifest")
     recording_get.add_argument("name")
+    recording_entries = recording_actions.add_parser("entries", help="a page of its entries")
+    recording_entries.add_argument("name")
+    recording_entries.add_argument("--offset", type=int, default=0)
+    recording_entries.add_argument("--limit", type=int, default=500)
     recording_remove = recording_actions.add_parser("rm", help="delete a closed recording")
     recording_remove.add_argument("name")
 
@@ -217,6 +271,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     if getattr(arguments, "file", None) == "-" and not arguments.name:
         parser.error("put - reads stdin and needs --name")
+    checking = arguments.command == "graphs" and arguments.action == "check"
+    if checking and not (arguments.name or arguments.draft):
+        parser.error("check needs a stored graph's name, or --file")
 
     try:
         with StatemachinedClient(arguments.rig) as rig:
@@ -251,6 +308,8 @@ def _run(rig: StatemachinedClient, arguments) -> int:
             _print(rig.read_state())
         case "device":
             _print(rig.read_device())
+        case "lines" if arguments.action == "put":
+            _print(rig.write_line_map(*_named_document(arguments)))
         case "lines":
             _print(rig.read_lines())
         case "firmware":
@@ -259,10 +318,35 @@ def _run(rig: StatemachinedClient, arguments) -> int:
             _print(rig.read_session())
         case "observers":
             _print(rig.read_observers())
+        case "rig-config" if arguments.action == "set":
+            _print(
+                rig.patch_configuration(
+                    RigConfigurationPatch(
+                        device_target=arguments.device_target,
+                        device_baud=arguments.device_baud,
+                        expected_board=arguments.expected_board,
+                        graph_mode=arguments.graph_mode,
+                        startup_state_machine_config=arguments.startup_state_machine_config,
+                        session_seed=arguments.session_seed,
+                    )
+                )
+            )
         case "rig-config":
             _print(rig.read_configuration())
         case "link":
             _print(rig.open_link())
+        case "save-to-board":
+            _print(rig.save_settings())
+        case "autorun":
+            _autorun(rig, arguments)
+        case "active-graph":
+            _print(
+                {
+                    "active_graph": rig.set_active_graph(arguments.graph)
+                    if arguments.action == "set"
+                    else rig.clear_active_graph()
+                }
+            )
         case "watch":
             _watch(rig, summary=arguments.summary)
         case "trace":
@@ -328,9 +412,15 @@ def _graphs(rig: StatemachinedClient, arguments) -> int:
         case "rm":
             _print(rig.delete_graph(arguments.name))
         case "check":
-            validation = rig.validate_graph(arguments.name)
+            validation = (
+                rig.validate_graph_text(_read(arguments.draft))
+                if arguments.draft
+                else rig.validate_graph(arguments.name)
+            )
             _print(validation)
             return ExitStatus.OK if validation.valid else ExitStatus.REFUSED
+        case "upload":
+            _print(rig.upload_graph(arguments.name))
     return 0
 
 
@@ -347,6 +437,29 @@ def _configs(rig: StatemachinedClient, arguments) -> int:
         case "load":
             _print(rig.load_config(arguments.name))
     return 0
+
+
+def _read(path: str) -> str:
+    return sys.stdin.read() if path == "-" else Path(path).read_text(encoding="utf-8")
+
+
+def _autorun(rig: StatemachinedClient, arguments) -> None:
+    match arguments.action:
+        case None:
+            _print(rig.read_autorun())
+        case "on":
+            _print(
+                rig.write_autorun(
+                    True,
+                    graph_name=arguments.graph_name,
+                    cap_milliseconds=arguments.cap_milliseconds,
+                    seed=arguments.seed,
+                    first_trial_id=arguments.first_trial_id,
+                    start_now=arguments.start_now,
+                )
+            )
+        case "off":
+            _print(rig.write_autorun(False))
 
 
 def _named_document(arguments) -> tuple[str, str]:
@@ -392,6 +505,10 @@ def _recording(rig: StatemachinedClient, arguments) -> int:
             _print(rig.clear_recording())
         case "get":
             _print(rig.read_recording(arguments.name))
+        case "entries":
+            _print(
+                rig.read_recording_entries(arguments.name, arguments.offset, arguments.limit)
+            )
         case "rm":
             _print(rig.delete_recording(arguments.name))
     return 0

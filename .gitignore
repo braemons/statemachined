@@ -60,3 +60,6 @@ report.html
 # discover this daemon's services -- so it is excepted by name.
 !daemon/src/wire/descriptor_for_reflection.bin
 !daemon/src/wire/link_descriptor.bin
+
+# `make dev`: the stores of a daemon run from this checkout.
+/dev/store/
