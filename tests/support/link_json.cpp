@@ -223,6 +223,8 @@ const char* exit_token(statemachined_link_v1_ExitCause c) {
       return "cancel";
     case statemachined_link_v1_ExitCause_EXIT_CAUSE_TERMINAL:
       return "terminal";
+    case statemachined_link_v1_ExitCause_EXIT_CAUSE_LIMIT:
+      return "limit";
     default:
       return "?";
   }
@@ -303,6 +305,8 @@ bool host_message_from_json(const std::string& text, link::Header* header,
     r.u32("target", &x.target);
     r.u32("hold", &x.has_hold, &x.hold);
     r.boolean("level", &x.level);
+    r.u32("limit", &x.has_limit, &x.limit);
+    r.u32("limit_target", &x.has_limit_target, &x.limit_target);
   } else if (t == "graph_action") {
     out->which_body = statemachined_link_v1_HostMessage_graph_action_tag;
     auto& a = b.graph_action;

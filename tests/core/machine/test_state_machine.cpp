@@ -319,3 +319,73 @@ TEST_CASE("a dwell on a state that is not terminal is refused") {
   b.entry(a);
   CHECK(validate(b.g) == GraphError::RelightOnLiveState);
 }
+
+TEST_CASE("a limited transition takes its target that many times, then its limit_target") {
+  // "Three early licks restart the wait, the fourth ends the trial", as one
+  // self-transition rather than four copies of the waiting state.
+  Builder b;
+  const uint8_t wait = b.state();
+  const uint8_t go = b.terminal_code(1);
+  const uint8_t early = b.terminal_code(5);
+  Transition lick{bit(0), 0, 0, wait, kNoRandomDistribution, false};
+  lick.limit = 3;
+  lick.limit_target = early;
+  b.on(wait, lick);
+  b.timeout(wait, b.fixed(1000), go);
+  b.entry(wait);
+  REQUIRE(validate(b.g) == GraphError::None);
+
+  StateMachine m(b.g);
+  uint32_t t = 0;
+  m.start(1, t);
+  for (int i = 0; i < 4; ++i) {
+    run_until(m, bit(0), t, t + ms(1));
+    run_until(m, 0, t, t + ms(1));
+  }
+
+  CHECK_FALSE(m.is_running());
+  const StateMachineRunRecord& r = m.get_record();
+  CHECK(r.terminal_code == 5);
+  REQUIRE(r.path_len == 5);
+  for (uint8_t i = 0; i < 3; ++i) {
+    CHECK(r.visit(i).cause == StateExitCause::Transition);
+    CHECK(r.visit(i).transition_index == 0);
+  }
+  CHECK(r.visit(3).cause == StateExitCause::Limit);
+  CHECK(r.visit(3).transition_index == 0);
+  CHECK(r.visit(4).cause == StateExitCause::Terminal);
+}
+
+TEST_CASE("a limit counts within one run and starts again with the next") {
+  Builder b;
+  const uint8_t wait = b.state();
+  const uint8_t go = b.terminal_code(1);
+  const uint8_t early = b.terminal_code(5);
+  Transition lick{bit(0), 0, 0, wait, kNoRandomDistribution, false};
+  lick.limit = 2;
+  lick.limit_target = early;
+  b.on(wait, lick);
+  b.timeout(wait, b.fixed(10), go);
+  b.entry(wait);
+  REQUIRE(validate(b.g) == GraphError::None);
+
+  StateMachine m(b.g);
+  uint32_t t = 0;
+  // Two licks use the limit up without exceeding it; the wait then times out.
+  m.start(1, t);
+  run_until(m, bit(0), t, t + ms(1));
+  run_until(m, 0, t, t + ms(1));
+  run_until(m, bit(0), t, t + ms(1));
+  run_until(m, 0, t, t + ms(20));
+  REQUIRE_FALSE(m.is_running());
+  CHECK(m.get_record().terminal_code == 1);
+
+  // A fresh run owes nothing to the last one: two more licks are allowed.
+  m.start(2, t);
+  run_until(m, bit(0), t, t + ms(1));
+  run_until(m, 0, t, t + ms(1));
+  run_until(m, bit(0), t, t + ms(1));
+  run_until(m, 0, t, t + ms(20));
+  REQUIRE_FALSE(m.is_running());
+  CHECK(m.get_record().terminal_code == 1);
+}

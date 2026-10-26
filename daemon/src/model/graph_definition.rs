@@ -372,6 +372,25 @@ pub struct TransitionSpecification {
     /// it.
     #[serde(default)]
     pub fire_if_already_true_on_entry: bool,
+    /// Take `goto` at most this many times in one trial, and go to `then` on
+    /// every firing after that — "three early licks restart the wait, the
+    /// fourth ends the trial".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<TransitionLimit>,
+}
+
+/// How often a transition may take its `goto` before it goes somewhere else.
+///
+/// Counted per trial on the device and never carried into the next: counting
+/// *trials* is triald's, and this is the within-trial count triald cannot
+/// keep, because it only learns about a trial once it has ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransitionLimit {
+    /// How many firings go to `goto`. At least 1, at most 255.
+    pub times: i64,
+    /// Where every firing after those goes.
+    pub then: String,
 }
 
 /// Leave after a drawn duration, whatever the inputs are doing.
@@ -474,6 +493,21 @@ impl StateDefinition {
             transition.when.validate()?;
             if transition.goto.is_empty() {
                 return refuse(format!("a transition of state '{}' goes nowhere", self.name));
+            }
+            if let Some(limit) = &transition.limit {
+                if !(1..=255).contains(&limit.times) {
+                    return refuse(format!(
+                        "a transition of state '{}' has limit.times {}, and a limit is between 1 \
+                         and 255 firings",
+                        self.name, limit.times
+                    ));
+                }
+                if limit.then.is_empty() {
+                    return refuse(format!(
+                        "a transition of state '{}' has a limit with nowhere to go past it",
+                        self.name
+                    ));
+                }
             }
         }
 
@@ -680,6 +714,9 @@ impl GraphDefinition {
             for (position, transition) in state.transitions.iter().enumerate() {
                 let where_ = format!("transition {position} of state '{}'", state.name);
                 self.require_state(&transition.goto, &where_)?;
+                if let Some(limit) = &transition.limit {
+                    self.require_state(&limit.then, &format!("{where_}'s limit"))?;
+                }
                 if let Some(hold) = &transition.hold {
                     self.require_distribution(hold, &where_)?;
                 }
@@ -732,7 +769,12 @@ impl GraphDefinition {
             if let Some(timeout) = &state.timeout {
                 to_walk.push(&timeout.goto);
             }
-            to_walk.extend(state.transitions.iter().map(|t| t.goto.as_str()));
+            for transition in &state.transitions {
+                to_walk.push(&transition.goto);
+                if let Some(limit) = &transition.limit {
+                    to_walk.push(&limit.then);
+                }
+            }
         }
 
         if !reachable

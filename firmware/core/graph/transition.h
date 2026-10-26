@@ -50,6 +50,17 @@ struct Transition {
   /// is already holding must not end the trial instantly.
   bool fire_if_true_on_entry = false;
 
+  /// How many times per run `target_state` may be taken; 0 means no limit.
+  /// Once it has been taken that often, every further firing goes to
+  /// `limit_target` instead -- "three early licks restart the wait, the fourth
+  /// ends the trial" is one transition rather than three copies of a state.
+  ///
+  /// Counted per run, never across runs: counting trials is triald's job, and
+  /// a count the firmware carried from one trial into the next would be state
+  /// the trial record could not account for.
+  uint8_t limit = 0;
+  StateIndex limit_target = kNoState;  ///< where a firing past the limit goes
+
   /// The predicate alone, with no edge or hold logic.
   constexpr bool holds(LineBitmask w) const {
     return (w & all_high) == all_high && (any_high == 0 || (w & any_high) != 0) &&

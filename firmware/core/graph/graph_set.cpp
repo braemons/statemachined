@@ -136,6 +136,8 @@ GraphError validate(const GraphSet& g) {
       for (uint8_t c = 0; c < s.transition_count; ++c) {
         const Transition& t = g.transitions[s.first_transition + c];
         if (!mine(t.target_state)) return GraphError::BadTarget;
+        if (t.limit != 0 && !mine(t.limit_target)) return GraphError::BadTarget;
+        if (t.limit == 0 && t.limit_target != kNoState) return GraphError::BadTarget;
         if (t.hold_duration != kNoRandomDistribution && t.hold_duration >= g.n_distributions)
           return GraphError::TooManyDistributions;
       }
@@ -161,8 +163,11 @@ GraphError validate(const GraphSet& g) {
         }
       };
       if (s.timeout_duration != kNoRandomDistribution) push(s.timeout_target);
-      for (uint8_t c = 0; c < s.transition_count; ++c)
-        push(g.transitions[s.first_transition + c].target_state);
+      for (uint8_t c = 0; c < s.transition_count; ++c) {
+        const Transition& t = g.transitions[s.first_transition + c];
+        push(t.target_state);
+        if (t.limit != 0) push(t.limit_target);
+      }
     }
 
     if (!terminal_reachable) return GraphError::NoTerminal;

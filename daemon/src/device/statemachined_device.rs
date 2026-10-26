@@ -882,6 +882,7 @@ impl StatemachinedDevice {
                     row,
                     &graph.state_names_by_index,
                     &graph.transition_target_names_by_state_index,
+                    &graph.limit_target_names_by_state_index,
                 )
             })
             .collect::<Result<Vec<_>, _>>();
@@ -913,6 +914,7 @@ impl StatemachinedDevice {
                 message,
                 &graph.state_names_by_index,
                 &graph.transition_target_names_by_state_index,
+                &graph.limit_target_names_by_state_index,
             ))
         })();
         let visit = match named {

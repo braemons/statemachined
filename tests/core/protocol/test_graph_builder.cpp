@@ -843,3 +843,63 @@ TEST_CASE("`level` on a graph_transition reaches fire_if_true_on_entry") {
     CHECK_FALSE(u.set.transitions[0].fire_if_true_on_entry);
   }
 }
+
+TEST_CASE("a graph_transition's limit arrives with where it goes past it") {
+  SUBCASE("limit and limit_target together reach the transition") {
+    Upload u;
+    minimal(u);
+    REQUIRE(
+        u.send(
+            R"({"msg_type":"graph_transition","message_id":5,"target":0,"all":1,"limit":3,"limit_target":1)") ==
+        UploadError::None);
+    REQUIRE(u.finish(1, 0) == UploadError::None);
+    CHECK(u.set.transitions[0].limit == 3);
+    CHECK(u.set.transitions[0].limit_target == 1);
+  }
+
+  SUBCASE("absent means no limit") {
+    Upload u;
+    minimal(u);
+    REQUIRE(u.send(R"({"msg_type":"graph_transition","message_id":5,"target":1,"all":1)") ==
+            UploadError::None);
+    REQUIRE(u.finish(1, 0) == UploadError::None);
+    CHECK(u.set.transitions[0].limit == 0);
+    CHECK(u.set.transitions[0].limit_target == kNoState);
+  }
+
+  SUBCASE("a limit with nowhere to go past it is refused") {
+    Upload u;
+    minimal(u);
+    CHECK(
+        u.send(
+            R"({"msg_type":"graph_transition","message_id":5,"target":0,"all":1,"limit":3)") ==
+        UploadError::BadField);
+  }
+
+  SUBCASE("a limit_target with no limit is refused") {
+    Upload u;
+    minimal(u);
+    CHECK(
+        u.send(
+            R"({"msg_type":"graph_transition","message_id":5,"target":0,"all":1,"limit_target":1)") ==
+        UploadError::BadField);
+  }
+
+  SUBCASE("a limit of zero is refused rather than meaning 'always go past it'") {
+    Upload u;
+    minimal(u);
+    CHECK(
+        u.send(
+            R"({"msg_type":"graph_transition","message_id":5,"target":0,"all":1,"limit":0,"limit_target":1)") ==
+        UploadError::BadField);
+  }
+
+  SUBCASE("a limit_target outside the graph is refused") {
+    Upload u;
+    minimal(u);
+    CHECK(
+        u.send(
+            R"({"msg_type":"graph_transition","message_id":5,"target":0,"all":1,"limit":3,"limit_target":2)") ==
+        UploadError::BadIndex);
+  }
+}

@@ -19,6 +19,8 @@ enum class StateExitCause : uint8_t {
   Transition = 1,
   Cancel = 2,
   Terminal = 3,  ///< the run ended here
+  Limit = 4,     ///< a transition fired past its limit and went to its
+                 ///< limit_target rather than its target
 };
 
 /// What a terminal state reports. Opaque to the machine, which only ever

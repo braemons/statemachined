@@ -298,6 +298,20 @@ UploadError GraphBuilder::add_transition(const link::GraphTransition& m,
 
   t.fire_if_true_on_entry = m.level;
 
+  // Both or neither: a limit with nowhere to go past it, or a destination no
+  // limit ever sends anything to, is a graph that does not say what it means.
+  if (m.has_limit != m.has_limit_target)
+    return fail(UploadError::BadField, m.has_limit ? "limit_target" : "limit");
+  if (m.has_limit) {
+    if (m.limit == 0 || m.limit > UINT8_MAX) return fail(UploadError::BadField, "limit");
+    uint8_t limit_target = 0;
+    if (!narrow_u8(m.limit_target, &limit_target))
+      return fail(UploadError::BadField, "limit_target");
+    if (limit_target >= expected_states_) return fail(UploadError::BadIndex, "limit_target");
+    t.limit = static_cast<uint8_t>(m.limit);
+    t.limit_target = static_cast<StateIndex>(first_state_ + limit_target);
+  }
+
   g_.transitions[g_.n_transitions++] = t;
   g_.states[current_state_].transition_count++;
   fold(payload);

@@ -178,6 +178,12 @@ message GraphTransition {
   // A distribution. Absent means the predicate fires the scan it holds.
   optional uint32 hold = 5;
   bool level = 6;
+  // How many times per run `target` may be taken. Absent means no limit. Once
+  // it has been taken that often, every further firing goes to `limit_target`
+  // instead, and the visit reports EXIT_CAUSE_LIMIT.
+  optional uint32 limit = 7;
+  // A state, within this graph. Required with `limit`, refused without it.
+  optional uint32 limit_target = 8;
 }
 
 enum ActionOn {
@@ -399,6 +405,9 @@ enum ExitCause {
   EXIT_CAUSE_TRANSITION = 2;
   EXIT_CAUSE_CANCEL = 3;
   EXIT_CAUSE_TERMINAL = 4;
+  // A transition fired after its `limit` was used up, and went to its
+  // `limit_target` rather than its `target`.
+  EXIT_CAUSE_LIMIT = 5;
 }
 
 message ResultBegin {

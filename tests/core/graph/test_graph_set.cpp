@@ -331,3 +331,26 @@ TEST_CASE("a duration naming a distribution that does not exist is refused") {
   b.g.states[wait].timeout_duration = b.g.n_distributions;
   CHECK(validate(b.g) == GraphError::TooManyDistributions);
 }
+
+TEST_CASE("a limit_target counts for reachability, and must exist") {
+  // The only way into Early is past the lick transition's limit, so a graph
+  // reachability check that ignored limit_target would refuse it.
+  Builder b;
+  const uint8_t wait = b.state();
+  const uint8_t go = b.terminal(TrialOutcome::Hit);
+  const uint8_t early = b.terminal(TrialOutcome::Early);
+  Transition lick{bit(0), 0, 0, wait, kNoRandomDistribution, false};
+  lick.limit = 3;
+  lick.limit_target = early;
+  b.on(wait, lick);
+  b.timeout(wait, b.fixed(100), go);
+  b.entry(wait);
+  CHECK(validate(b.g) == GraphError::None);
+
+  b.g.transitions[0].limit_target = 42;
+  CHECK(validate(b.g) == GraphError::BadTarget);
+
+  b.g.transitions[0].limit = 0;  // a destination nothing sends anything to
+  b.g.transitions[0].limit_target = early;
+  CHECK(validate(b.g) == GraphError::BadTarget);
+}

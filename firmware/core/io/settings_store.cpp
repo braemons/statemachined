@@ -241,6 +241,8 @@ bool save_settings(const StoredSettings& s, uint32_t write_count, SettingsWriter
       e.u8(t.target_state);
       e.u8(t.hold_duration);
       e.boolean(t.fire_if_true_on_entry);
+      e.u8(t.limit);
+      e.u8(t.limit_target);
     }
     for (uint8_t i = 0; i < g.n_output_actions; ++i) {
       const OutputAction& a = g.output_actions[i];
@@ -356,6 +358,8 @@ SettingsError load_settings(StoredSettings& s, SettingsReader& in) {
       t.target_state = d.u8();
       t.hold_duration = d.u8();
       t.fire_if_true_on_entry = d.boolean();
+      t.limit = d.u8();
+      t.limit_target = d.u8();
     }
     for (uint8_t i = 0; i < n_output_actions; ++i) {
       OutputAction& a = g->output_actions[i];

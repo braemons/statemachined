@@ -106,6 +106,8 @@ statemachined_link_v1_ExitCause exit_cause(StateExitCause c) {
       return statemachined_link_v1_ExitCause_EXIT_CAUSE_CANCEL;
     case StateExitCause::Terminal:
       return statemachined_link_v1_ExitCause_EXIT_CAUSE_TERMINAL;
+    case StateExitCause::Limit:
+      return statemachined_link_v1_ExitCause_EXIT_CAUSE_LIMIT;
   }
   return statemachined_link_v1_ExitCause_EXIT_CAUSE_TERMINAL;
 }

@@ -46,6 +46,7 @@ OutputUpdate StateMachine::start(uint64_t seed, Microseconds now_us, LineBitmask
   hold_pending_ = false;
   has_pending_ = false;
   pending_ = OutputUpdate{};
+  for (uint8_t i = 0; i < kMaxTransitions; ++i) fire_count_[i] = 0;
 
   enter(graph().entry, now_us, word);
   const State& s = set_->states[current_];
@@ -297,9 +298,15 @@ OutputUpdate StateMachine::advance(LineBitmask word, Microseconds now_us) {
       hold_pending_ = true;  // re-check next scan even on an unchanged word
       continue;
     }
-    next = cond.target_state;
     fired = c;
-    cause = StateExitCause::Transition;
+    if (cond.limit != 0 && fire_count_[i] >= cond.limit) {
+      next = cond.limit_target;
+      cause = StateExitCause::Limit;
+    } else {
+      if (cond.limit != 0) ++fire_count_[i];
+      next = cond.target_state;
+      cause = StateExitCause::Transition;
+    }
   }
 
   if (next == kNoState && timeout_ms_ >= 0 &&

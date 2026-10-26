@@ -247,6 +247,14 @@ does. A terminal state that declares none is where a self-driving board stops --
 per outcome, so a graph can say "reward, wait two seconds, go again" and "an
 abort ends the session" in the same file.
 
+**A transition can carry a `limit`**: `{"when": {"any": ["lick"]}, "goto":
+"WaitForSpeed", "limit": {"times": 3, "then": "Early"}}` takes `goto` three
+times in a trial and goes to `then` on every firing after that. The count is
+per trial and per transition, kept on the device, and cleared when the next
+trial starts. A visit that went to `then` reports exit cause `limit`, and its
+fired transition's target is resolved to `then` rather than to `goto`, so the
+record names the state the trial actually went to.
+
 **The parameters are named, where the wire's are positional.** A distribution on
 the wire carries `a`, `b` and `c`, whose meaning depends on `kind` — terse
 because the device has 32 KB. A person writing a foreperiod down should write

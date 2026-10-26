@@ -495,6 +495,7 @@ export class GraphStorePanelElement extends BasePanelElement {
       if (each.timeout?.goto === oldName) each.timeout.goto = newName;
       for (const transition of each.transitions || []) {
         if (transition.goto === oldName) transition.goto = newName;
+        if (transition.limit?.then === oldName) transition.limit.then = newName;
       }
     }
     this.edited();
@@ -678,6 +679,33 @@ export class GraphStorePanelElement extends BasePanelElement {
               },
             }),
             this.make("span", { class: "muted", text: "fire if already true on entry" }),
+          ]),
+          this.make("label", { class: "row", title: "Take 'go to' at most this many times in one trial, then go to the state after it instead -- 'three early licks restart the wait, the fourth ends the trial'. Empty means no limit." }, [
+            this.make("span", { class: "muted", text: "at most" }),
+            this.make("input", {
+              type: "number",
+              min: "1",
+              max: "255",
+              value: transition.limit ? `${transition.limit.times}` : "",
+              onChange: (event) => {
+                const times = Number(event.target.value);
+                transition.limit =
+                  event.target.value === "" || times < 1
+                    ? null
+                    : { times, then: transition.limit?.then || stateNames[0] };
+                this.edited();
+              },
+            }),
+            this.make("span", { class: "muted", text: "times" }),
+            transition.limit
+              ? this.make("span", { class: "row" }, [
+                  this.make("span", { class: "muted", text: "then" }),
+                  this.selectField(stateNames, transition.limit.then, (then) => {
+                    transition.limit.then = then;
+                    this.edited();
+                  }),
+                ])
+              : null,
           ]),
           this.make("span", { class: "spacer" }),
           this.make("button", {

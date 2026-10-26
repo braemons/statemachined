@@ -60,7 +60,10 @@ typedef enum _statemachined_link_v1_ExitCause {
     statemachined_link_v1_ExitCause_EXIT_CAUSE_TIMEOUT = 1,
     statemachined_link_v1_ExitCause_EXIT_CAUSE_TRANSITION = 2,
     statemachined_link_v1_ExitCause_EXIT_CAUSE_CANCEL = 3,
-    statemachined_link_v1_ExitCause_EXIT_CAUSE_TERMINAL = 4
+    statemachined_link_v1_ExitCause_EXIT_CAUSE_TERMINAL = 4,
+    /* A transition fired after its `limit` was used up, and went to its
+ `limit_target` rather than its `target`. */
+    statemachined_link_v1_ExitCause_EXIT_CAUSE_LIMIT = 5
 } statemachined_link_v1_ExitCause;
 
 /* Struct definitions */
@@ -140,6 +143,14 @@ typedef struct _statemachined_link_v1_GraphTransition {
     bool has_hold;
     uint32_t hold;
     bool level;
+    /* How many times per run `target` may be taken. Absent means no limit. Once
+ it has been taken that often, every further firing goes to `limit_target`
+ instead, and the visit reports EXIT_CAUSE_LIMIT. */
+    bool has_limit;
+    uint32_t limit;
+    /* A state, within this graph. Required with `limit`, refused without it. */
+    bool has_limit_target;
+    uint32_t limit_target;
 } statemachined_link_v1_GraphTransition;
 
 typedef struct _statemachined_link_v1_GraphAction {
@@ -595,8 +606,8 @@ extern "C" {
 #define _statemachined_link_v1_Direction_ARRAYSIZE ((statemachined_link_v1_Direction)(statemachined_link_v1_Direction_DIRECTION_OUT+1))
 
 #define _statemachined_link_v1_ExitCause_MIN statemachined_link_v1_ExitCause_EXIT_CAUSE_UNSPECIFIED
-#define _statemachined_link_v1_ExitCause_MAX statemachined_link_v1_ExitCause_EXIT_CAUSE_TERMINAL
-#define _statemachined_link_v1_ExitCause_ARRAYSIZE ((statemachined_link_v1_ExitCause)(statemachined_link_v1_ExitCause_EXIT_CAUSE_TERMINAL+1))
+#define _statemachined_link_v1_ExitCause_MAX statemachined_link_v1_ExitCause_EXIT_CAUSE_LIMIT
+#define _statemachined_link_v1_ExitCause_ARRAYSIZE ((statemachined_link_v1_ExitCause)(statemachined_link_v1_ExitCause_EXIT_CAUSE_LIMIT+1))
 
 
 
@@ -665,7 +676,7 @@ extern "C" {
 #define statemachined_link_v1_GraphDist_init_default {0, _statemachined_link_v1_DistKind_MIN, 0, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}
 #define statemachined_link_v1_Timeout_init_default {0, 0}
 #define statemachined_link_v1_GraphState_init_default {0, false, 0, false, statemachined_link_v1_Timeout_init_default, false, 0}
-#define statemachined_link_v1_GraphTransition_init_default {0, 0, 0, 0, false, 0, 0}
+#define statemachined_link_v1_GraphTransition_init_default {0, 0, 0, 0, false, 0, 0, false, 0, false, 0}
 #define statemachined_link_v1_GraphAction_init_default {_statemachined_link_v1_ActionOn_MIN, 0, _statemachined_link_v1_ActionKind_MIN, 0, 0}
 #define statemachined_link_v1_GraphTimer_init_default {0, 0, false, 0, false, 0, false, 0, false, 0, 0, 0, 0, 0, 0}
 #define statemachined_link_v1_GraphEnd_init_default {0, 0}
@@ -711,7 +722,7 @@ extern "C" {
 #define statemachined_link_v1_GraphDist_init_zero {0, _statemachined_link_v1_DistKind_MIN, 0, 0, 0, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, 0, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}}
 #define statemachined_link_v1_Timeout_init_zero  {0, 0}
 #define statemachined_link_v1_GraphState_init_zero {0, false, 0, false, statemachined_link_v1_Timeout_init_zero, false, 0}
-#define statemachined_link_v1_GraphTransition_init_zero {0, 0, 0, 0, false, 0, 0}
+#define statemachined_link_v1_GraphTransition_init_zero {0, 0, 0, 0, false, 0, 0, false, 0, false, 0}
 #define statemachined_link_v1_GraphAction_init_zero {_statemachined_link_v1_ActionOn_MIN, 0, _statemachined_link_v1_ActionKind_MIN, 0, 0}
 #define statemachined_link_v1_GraphTimer_init_zero {0, 0, false, 0, false, 0, false, 0, false, 0, 0, 0, 0, 0, 0}
 #define statemachined_link_v1_GraphEnd_init_zero {0, 0}
@@ -780,6 +791,8 @@ extern "C" {
 #define statemachined_link_v1_GraphTransition_target_tag 4
 #define statemachined_link_v1_GraphTransition_hold_tag 5
 #define statemachined_link_v1_GraphTransition_level_tag 6
+#define statemachined_link_v1_GraphTransition_limit_tag 7
+#define statemachined_link_v1_GraphTransition_limit_target_tag 8
 #define statemachined_link_v1_GraphAction_on_tag 1
 #define statemachined_link_v1_GraphAction_line_tag 2
 #define statemachined_link_v1_GraphAction_kind_tag 3
@@ -1134,7 +1147,9 @@ X(a, STATIC,   SINGULAR, UINT32,   any,               2) \
 X(a, STATIC,   SINGULAR, UINT32,   none,              3) \
 X(a, STATIC,   SINGULAR, UINT32,   target,            4) \
 X(a, STATIC,   OPTIONAL, UINT32,   hold,              5) \
-X(a, STATIC,   SINGULAR, BOOL,     level,             6)
+X(a, STATIC,   SINGULAR, BOOL,     level,             6) \
+X(a, STATIC,   OPTIONAL, UINT32,   limit,             7) \
+X(a, STATIC,   OPTIONAL, UINT32,   limit_target,      8)
 #define statemachined_link_v1_GraphTransition_CALLBACK NULL
 #define statemachined_link_v1_GraphTransition_DEFAULT NULL
 
@@ -1567,7 +1582,7 @@ extern const pb_msgdesc_t statemachined_link_v1_ProfileReport_msg;
 #define statemachined_link_v1_GraphEnd_size      12
 #define statemachined_link_v1_GraphState_size    32
 #define statemachined_link_v1_GraphTimer_size    58
-#define statemachined_link_v1_GraphTransition_size 32
+#define statemachined_link_v1_GraphTransition_size 44
 #define statemachined_link_v1_HelloAck_size      176
 #define statemachined_link_v1_Hello_size         17
 #define statemachined_link_v1_HostMessage_size   413

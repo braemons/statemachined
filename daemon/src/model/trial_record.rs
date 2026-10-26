@@ -95,6 +95,7 @@ pub fn decode_state_visit_row(
     row: &Value,
     state_names_by_index: &[String],
     transition_target_names_by_state_index: &[Vec<String>],
+    limit_target_names_by_state_index: &[Vec<Option<String>>],
 ) -> Result<StateVisitRecord, String> {
     let Some(fields) = row.as_object() else {
         return Err(format!("a path row is not a StateVisit: {row}"));
@@ -110,27 +111,36 @@ pub fn decode_state_visit_row(
                 state_names_by_index.len()
             )
         })? as usize;
+    let exit_cause = match fields.get("exit") {
+        Some(Value::String(cause)) => cause.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    };
     let transition_index = number("transition");
     let (fired_position, fired_target) = if transition_index == NO_TRANSITION_FIRED {
         (None, None)
     } else {
-        let target = transition_target_names_by_state_index
-            .get(state_index)
-            .and_then(|targets| {
-                usize::try_from(transition_index)
-                    .ok()
-                    .and_then(|at| targets.get(at))
-            })
-            .cloned();
+        let at = usize::try_from(transition_index).ok();
+        // A firing past the transition's limit went to its `then`, not its
+        // `goto`: the exit cause is what says which, so the record names the
+        // state the trial actually went to.
+        let target = if exit_cause == "limit" {
+            limit_target_names_by_state_index
+                .get(state_index)
+                .and_then(|targets| at.and_then(|at| targets.get(at)))
+                .cloned()
+                .flatten()
+        } else {
+            transition_target_names_by_state_index
+                .get(state_index)
+                .and_then(|targets| at.and_then(|at| targets.get(at)))
+                .cloned()
+        };
         (Some(transition_index), target)
     };
     Ok(StateVisitRecord {
         state_name: state_names_by_index[state_index].clone(),
-        exit_cause: match fields.get("exit") {
-            Some(Value::String(cause)) => cause.clone(),
-            Some(other) => other.to_string(),
-            None => String::new(),
-        },
+        exit_cause,
         fired_transition_position: fired_position,
         fired_transition_target_state_name: fired_target,
         drawn_duration_ms: number("drawn_ms"),
@@ -171,6 +181,7 @@ mod tests {
             &row(json!([1, "transition", 0, 500, 500120, 183044])),
             &states,
             &targets,
+            &[],
         )
         .unwrap();
         assert_eq!(visit.state_name, "Cue");
@@ -191,8 +202,28 @@ mod tests {
             &row(json!([1, "transition", 1, 0, 0, 10])),
             &states,
             &targets,
+            &[],
         )
         .unwrap();
+        assert_eq!(
+            visit.fired_transition_target_state_name.as_deref(),
+            Some("Aborted")
+        );
+    }
+
+    #[test]
+    fn a_firing_past_its_limit_names_where_it_actually_went() {
+        let (states, targets) = names();
+        let limits = vec![vec![None], vec![Some("Aborted".to_string()), None], vec![], vec![]];
+        let visit = decode_state_visit_row(
+            &row(json!([1, "limit", 0, 0, 0, 10])),
+            &states,
+            &targets,
+            &limits,
+        )
+        .unwrap();
+        assert_eq!(visit.exit_cause, "limit");
+        assert_eq!(visit.fired_transition_position, Some(0));
         assert_eq!(
             visit.fired_transition_target_state_name.as_deref(),
             Some("Aborted")
@@ -206,6 +237,7 @@ mod tests {
             &row(json!([0, "timeout", 255, 500, 0, 500120])),
             &states,
             &targets,
+            &[],
         )
         .unwrap();
         assert_eq!(visit.fired_transition_position, None);
@@ -216,7 +248,7 @@ mod tests {
     fn a_state_index_the_graph_cannot_explain_is_a_finding_not_a_guess() {
         let (states, targets) = names();
         let refused =
-            decode_state_visit_row(&row(json!([9, "timeout", 255, 0, 0, 0])), &states, &targets)
+            decode_state_visit_row(&row(json!([9, "timeout", 255, 0, 0, 0])), &states, &targets, &[])
                 .unwrap_err();
         assert!(
             refused.contains("names state 9, and the graph has 4 states"),
@@ -228,7 +260,7 @@ mod tests {
     fn a_row_that_is_not_a_state_visit_is_refused() {
         let (states, targets) = names();
         let refused =
-            decode_state_visit_row(&json!([0, "timeout"]), &states, &targets).unwrap_err();
+            decode_state_visit_row(&json!([0, "timeout"]), &states, &targets, &[]).unwrap_err();
         assert!(refused.contains("not a StateVisit"), "{refused}");
     }
 

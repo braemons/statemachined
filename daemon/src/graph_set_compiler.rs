@@ -173,6 +173,10 @@ pub struct CompiledGraph {
     /// graph declares them — so a visit's `transition_index` resolves to a
     /// state name without the host knowing the pool's layout.
     pub transition_target_names_by_state_index: Vec<Vec<String>>,
+    /// Beside it, where each transition goes once its limit is used up —
+    /// `None` for one with no limit. A visit that left with exit cause `limit`
+    /// resolves here rather than to its `goto`.
+    pub limit_target_names_by_state_index: Vec<Vec<Option<String>>>,
     /// Which entry of the set's shared distribution pool each of this graph's
     /// named distributions became. What a per-trial `patch` needs.
     pub distribution_pool_index_by_name: IndexMap<String, usize>,
@@ -696,6 +700,7 @@ pub fn compile_graph_set_for_device(
         }
 
         let mut transition_targets_by_state_index: Vec<Vec<String>> = Vec::new();
+        let mut limit_targets_by_state_index: Vec<Vec<Option<String>>> = Vec::new();
         let mut graph_transition_count = 0usize;
         let mut graph_output_action_count = 0usize;
 
@@ -719,6 +724,13 @@ pub fn compile_graph_set_for_device(
                     .transitions
                     .iter()
                     .map(|transition| transition.goto.clone())
+                    .collect(),
+            );
+            limit_targets_by_state_index.push(
+                state
+                    .transitions
+                    .iter()
+                    .map(|transition| transition.limit.as_ref().map(|limit| limit.then.clone()))
                     .collect(),
             );
             for transition in &state.transitions {
@@ -753,6 +765,13 @@ pub fn compile_graph_set_for_device(
                 }
                 if transition.fire_if_already_true_on_entry {
                     fields.insert("level".into(), json!(true));
+                }
+                if let Some(limit) = &transition.limit {
+                    fields.insert("limit".into(), json!(limit.times));
+                    fields.insert(
+                        "limit_target".into(),
+                        json!(state_index(&state_names, &limit.then, &graph.name)?),
+                    );
                 }
                 graph_upload_messages.push(UploadMessage {
                     msg_type: MsgType::GraphTransition,
@@ -799,6 +818,7 @@ pub fn compile_graph_set_for_device(
             slot,
             state_names_by_index: state_names.iter().map(|name| name.to_string()).collect(),
             transition_target_names_by_state_index: transition_targets_by_state_index,
+            limit_target_names_by_state_index: limit_targets_by_state_index,
             distribution_pool_index_by_name,
         });
     }

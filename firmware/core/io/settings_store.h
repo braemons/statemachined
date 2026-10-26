@@ -112,7 +112,7 @@ const char* settings_error_str(SettingsError e);
 /// The format version written into every record. Bumped whenever the field
 /// order below changes, which is what turns "reads back plausibly" into "is
 /// refused".
-constexpr uint16_t kSettingsFormat = 1;
+constexpr uint16_t kSettingsFormat = 2;  // 2: a transition carries its limit
 
 /// Write `s` through `out`, stamping it with `write_count`. The caller supplies
 /// the count, having read the previous one back at boot: the store does not

@@ -258,3 +258,24 @@ TEST_CASE("the write counter is whatever the caller stamped, and comes back") {
   REQUIRE(load_settings(again, next) == SettingsError::None);
   CHECK(again.write_count == 1);
 }
+
+TEST_CASE("a transition's limit survives a round trip") {
+  Builder b = built_set();
+  b.g.transitions[0].limit = 4;
+  b.g.transitions[0].limit_target = b.g.transitions[0].target_state;
+  REQUIRE(validate(b.g) == GraphError::None);
+
+  StoredSettings out;
+  out.set = &b.g;
+  out.has_set = true;
+  Storage storage;
+  REQUIRE(save_settings(out, 1, storage));
+
+  GraphSet restored;
+  StoredSettings in;
+  in.set = &restored;
+  REQUIRE(load_settings(in, storage) == SettingsError::None);
+  CHECK(restored.transitions[0].limit == 4);
+  CHECK(restored.transitions[0].limit_target == b.g.transitions[0].target_state);
+  CHECK(restored.transitions[1].limit == 0);
+}

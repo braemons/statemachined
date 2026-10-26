@@ -786,6 +786,14 @@ the trial type store. **Open: which.**
    pulses. Counting is what this item assigns to triald, and a divider is a
    counter with an output stage.
 
+   **One count did come to the firmware: a transition's `limit`.** "Three early
+   licks restart the wait, the fourth ends the trial" counts *within* a trial,
+   which triald cannot do — it learns about a trial when it has ended. Without
+   it, a graph unrolls the waiting state once per retry. So a transition may
+   carry `limit` and `limit_target`: its count is cleared at `start()` and
+   nowhere else, and a firing past it goes to `limit_target` and is recorded as
+   exit cause `limit`. Counting *across* trials stays triald's.
+
    Eight rather than sixteen, because each one costs a bit of the 32-line input
    word and the reference board has eight real input lines. `caps.max_timers`
    and `caps.first_timer_line` say so on the wire, so a host reads both.

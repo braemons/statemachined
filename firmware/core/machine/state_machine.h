@@ -251,6 +251,10 @@ class StateMachine {
   Rng rng_;
   StateMachineRunRecord record_;
   TransitionState trans_state_[kMaxTransitions];
+  /// How often each limited transition has taken its target in this run. Per
+  /// pool entry rather than per state, and cleared by start() and nowhere else:
+  /// re-entering a state is exactly what a limit counts, so it must not reset.
+  uint8_t fire_count_[kMaxTransitions] = {0};
 
   bool running_ = false;
   StateIndex current_ = kNoState;

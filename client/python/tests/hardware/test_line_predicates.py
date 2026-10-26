@@ -180,3 +180,51 @@ def test_level_makes_a_predicate_fire_on_entry(rig, loopback):
         f"a level transition took {result.visits[1].measured_duration_microseconds} us "
         "to fire on entry"
     )
+
+
+def test_a_limited_transition_goes_elsewhere_once_its_limit_is_used_up(rig, loopback):
+    """`limit`: take `goto` this many times in a trial, then go to `then`.
+
+    "Two early licks restart the wait, the third ends the trial". `Wait` raises
+    output A and its transition fires on input A; `Gap` holds the line low long
+    enough that re-entering `Wait` is a fresh rising edge. Run twice, because
+    the count is per trial: a count carried into the second trial would end it
+    on its first firing.
+    """
+    rig.use(
+        {
+            "name": "limited",
+            "entry": "Wait",
+            "distributions": {"settle": {"kind": "fixed", "duration_ms": 20}},
+            "states": [
+                {
+                    "name": "Wait",
+                    "on_entry": [{"line": output(OUT_A), "kind": "high"}],
+                    "transitions": [
+                        {
+                            "when": {"all": [IN_A]},
+                            "goto": "Gap",
+                            "limit": {"times": 2, "then": "Early"},
+                        }
+                    ],
+                },
+                {"name": "Gap", "timeout": {"after": "settle", "goto": "Wait"}},
+                {"name": "Early", "outcome": "EARLY"},
+            ],
+        }
+    )
+    for _ in range(2):
+        result = rig.run("limited", cap_milliseconds=1000)
+        assert result.outcome == TrialOutcome.EARLY
+        path = [(visit.state_name, visit.exit_cause) for visit in result.visits]
+        assert path == [
+            ("Wait", "transition"),
+            ("Gap", "timeout"),
+            ("Wait", "transition"),
+            ("Gap", "timeout"),
+            ("Wait", "limit"),
+            ("Early", "terminal"),
+        ]
+        assert result.visits[0].fired_transition_target_state_name == "Gap"
+        assert result.visits[4].fired_transition_position == 0
+        assert result.visits[4].fired_transition_target_state_name == "Early"

@@ -367,10 +367,19 @@ a single device-wide setting could not express.
 | `target` | `u8`           | State entered when the predicate fires                                                                                                                                                                                      |
 | `hold`   | `u8`, optional | Distribution index for how long the predicate must stay true before it fires. Absent for none                                                                                                                                |
 | `level`  | bool           | `false` (default): the predicate fires on its own **rising edge**, so a transition already true on entry does not fire until the predicate goes false and true again. `true`: it fires immediately on entry if already true |
+| `limit`  | `u8`, optional | How many times per run `target` may be taken, 1–255. Absent for no limit. Every firing after that goes to `limit_target`, and its visit reports `exit` `"limit"` |
+| `limit_target` | `u8`, optional | State entered by a firing past `limit`. Required with `limit` and refused without it |
 
 Declaration order resolves a tie: the first transition of a state whose
 predicate holds is the one that fires. Bpod does the same, and it is the only
 tie-break an experimenter can reason about from reading the graph.
+
+**A limit counts per run and per transition.** Each limited transition has a
+count, cleared when a run starts and never carried into the next one —
+counting trials is triald's. Re-entering the state does not clear it, which is
+the point: `{"any": [lick]} → WaitForSpeed` with `limit` 3 and `limit_target`
+Early restarts the wait on three early licks and ends the trial on the fourth,
+as one transition rather than four copies of the state.
 
 #### `graph_action`
 
@@ -1078,7 +1087,7 @@ per row, and this is the largest burst the device sends. The fields of a row:
 | Field         | Type   |                                                                                                                                                                                                                                                                                           |
 | ------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `state`       | `u8`   | Which state. An **index**, not a name — the bridge holds the graph and resolves names host-side, which is part of what keeps the device inside 32 KB                                                                                                                                      |
-| `exit`        | token  | `"timeout"` `"transition"` `"cancel"` `"terminal"`                                                                                                                                                                                                                                        |
+| `exit`        | token  | `"timeout"` `"transition"` `"cancel"` `"terminal"` `"limit"`. `"limit"` is a transition that fired past its `limit` and went to its `limit_target`; `transition` still says which one                                                                                                    |
 | `transition`  | `u8`   | Which of **this state's** transitions fired, counted from zero in declaration order, or `255` for an exit that was not one. Per state, like `state_index` is per graph: the host reads the graph the way it wrote it, and never has to know where a state's slice of the shared pool sits |
 | `drawn_ms`    | `i32`  | The **realised** duration of the draw, in ms. Reported so a random timing is evidence in the record and not merely reproducible from the seed                                                                                                                                             |
 | `entered_us`  | `u32`  | Entry timestamp, device clock                                                                                                                                                                                                                                                             |
