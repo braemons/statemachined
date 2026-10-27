@@ -688,12 +688,16 @@ rather than resolving cleanly onto different holes. Set `expected_board =
 - **Scan timer.** An `IntervalTimer` at NVIC priority 64, above the USB
   interrupt's default 128, so the scan preempts the USB stack as it does on the
   R4.
-- **Storage.** One file, `/settings`, on a 64 KB LittleFS at the top of program
-  flash, holding up to 32 KB. The core's 4 KB EEPROM emulation is smaller than a
+- **Storage.** One file, `/settings`, on a 512 KB LittleFS at the top of program
+  flash (eight 64 KB erase blocks, since LittleFS cannot format fewer than a
+  few), holding up to 32 KB. The core's 4 KB EEPROM emulation is smaller than a
   full graph set on this board. **A save stops the scan**: the core erases and
   programs flash with interrupts off, because the image runs from the same chip.
-  It costs tens of milliseconds of missed scans, which `state_report` counts, so
-  save between sessions.
+  Measured 2026-10-27 saving the bench config's three graphs: 13 overruns, a
+  worst gap of 13 scans (1.3 ms), which `state_report` counts. Save between
+  sessions. The record survives a power cycle and a firmware upload: the
+  loader erases only what the new image needs, and the filesystem is at the
+  top of flash.
 - **Not measured.** No figure from the R4's sections above has been taken on
   this board yet.
 

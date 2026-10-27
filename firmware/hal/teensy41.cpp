@@ -212,14 +212,18 @@ bool link_up() {
 //
 // **A save stops the scan.** The core runs every flash erase and program with
 // interrupts off, because the image itself executes from the same flash. A
-// save costs tens of milliseconds of missed scans, which state_report counts.
-// Save between sessions, as a rig does anyway (host_link_session.cpp).
+// save of the bench config's three graphs measured 13 missed scans (1.3 ms),
+// which state_report counts. Save between sessions, as a rig does anyway
+// (host_link_session.cpp).
 
 namespace {
 
-/// What LittleFS is given. It rounds to 64 KB; the file inside it is held to
-/// half that, so the filesystem's own blocks always have room beside a record.
-constexpr uint32_t kFilesystemBytes = 64u * 1024u;
+/// What LittleFS is given: eight of the 4.1's 64 KB erase blocks. Not one, which
+/// is what this first asked for and which cannot even be formatted -- LittleFS
+/// keeps its superblock in a pair of blocks, and a rewritten file needs a block
+/// beside the one it replaces. Found on the board: the mount failed and the
+/// board reported nowhere to keep settings. The record itself is held to 32 KB.
+constexpr uint32_t kFilesystemBytes = 512u * 1024u;
 constexpr size_t kStoreBytes = 32u * 1024u;
 constexpr const char* kStoreFile = "/settings";
 
