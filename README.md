@@ -216,7 +216,7 @@ running trials on its own would stop. See
 | | |
 |---|---|
 | **Arduino Uno R4 Minima** | Reference target. 32 KB RAM, and the constraint that keeps the design honest |
-| Teensy 4.1 | The headroom target, and Bpod's own board |
+| Teensy 4.1 | The headroom target, and Bpod's own board. 3.3 V, not 5 V tolerant; `firmware/hal/teensy41.cpp` |
 | ESP32 | WiFi and BT stay off in the trial loop |
 | native | Unit tests and the simulator — the same `core/`, on the host |
 

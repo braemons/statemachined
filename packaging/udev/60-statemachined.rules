@@ -18,6 +18,17 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="2341", ATTRS{idProduct}=="0069", \
   OWNER="statemachined", MODE="0660", SYMLINK+="braemons/statemachined0", \
   TAG+="systemd"
 
+# The Teensy 4.1, running this firmware as a USB serial device:
+#   16c0:0483  PJRC Teensyduino Serial
+#
+# That ID is every Teensy running a USB-serial sketch, not just this firmware,
+# which is why the rig config's `expected_board` is worth setting. Its
+# bootloader is HID (16c0:0478), not a tty, so it never matches here; flashing
+# it as a normal user needs PJRC's own rule, 00-teensy.rules.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="0483", \
+  OWNER="statemachined", MODE="0660", SYMLINK+="braemons/statemachined0", \
+  TAG+="systemd"
+
 # A rig with two of these boards has two candidates for that symlink, and which
 # one wins is enumeration order again. Pin them by the serial in the descriptor
 # instead -- `udevadm info -a -n /dev/ttyACM0 | grep serial` prints it -- and

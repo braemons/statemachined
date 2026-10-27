@@ -246,7 +246,7 @@ FlashSettingsPort g_settings;
 
 DeviceIdentity make_identity() {
   DeviceIdentity id;
-  id.board = "uno_r4_minima";
+  id.board = hal::board_name();
   id.firmware_version = firmware_version();
   id.input_line_count = kBoardInputLines;
   id.output_line_count = kBoardOutputLines;

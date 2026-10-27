@@ -15,10 +15,18 @@ use crate::device::device_pin_map::Direction;
 const UNO_R4_MINIMA_IN: [&str; 8] = ["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9"];
 const UNO_R4_MINIMA_OUT: [&str; 8] = ["D10", "D11", "D12", "A0", "A1", "A2", "A3", "A4"];
 
+/// The Teensy 4.1, by the bare numbers on PJRC's card. Not "D2" or "A0", so a
+/// map written for the reference board does not resolve here. 0/1 are Serial1
+/// and 13 is the LED, as on the R4.
+const TEENSY41_IN: [&str; 8] = ["2", "3", "4", "5", "6", "7", "8", "9"];
+const TEENSY41_OUT: [&str; 8] = ["10", "11", "12", "14", "15", "16", "17", "18"];
+
 pub fn pins_of(board: &str, direction: Direction) -> &'static [&'static str] {
     match (board, direction) {
         ("uno_r4_minima", Direction::In) => &UNO_R4_MINIMA_IN,
         ("uno_r4_minima", Direction::Out) => &UNO_R4_MINIMA_OUT,
+        ("teensy41", Direction::In) => &TEENSY41_IN,
+        ("teensy41", Direction::Out) => &TEENSY41_OUT,
         _ => &[],
     }
 }

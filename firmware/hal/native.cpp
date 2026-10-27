@@ -86,6 +86,7 @@ static_assert(sizeof(kSimulatedLineLabels) / sizeof(kSimulatedLineLabels[0]) >= 
 static_assert(sizeof(kSimulatedLineLabels) / sizeof(kSimulatedLineLabels[0]) >= kMaxOutputLines,
               "every output line this build reports needs a label");
 
+const char* board_name() { return "native"; }
 const char* const* input_pin_labels() { return kSimulatedLineLabels; }
 const char* const* output_pin_labels() { return kSimulatedLineLabels; }
 

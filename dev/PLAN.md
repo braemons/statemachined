@@ -841,7 +841,7 @@ the trial type store. **Open: which.**
 | **M6** | ☐ | A whole session on the R4, with `triald sim`'s simulated subject replaced by the real board — what this document's M4 originally asked for, and it needs everything above |
 | **M7** | ☐ | Data flash: the wiring a board knows before anybody greets it (`docs/developer/daemon.md` §3.4) |
 | **M8** | ☐ | Virtual events, output overrides, the sync line |
-| **M9** | ☐ | Teensy 4.1 and ESP32 HALs; the golden reproducibility test green on all three boards |
+| **M9** | ▶️ | Teensy 4.1 and ESP32 HALs; the golden reproducibility test green on all three boards. Teensy HAL written and building (`firmware/hal/teensy41.cpp`), not yet measured; ESP32 not started |
 
 ### Emulation, and what it can and cannot settle
 

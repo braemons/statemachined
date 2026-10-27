@@ -181,6 +181,7 @@ void init() {
 #endif
 }
 
+const char* board_name() { return "uno_r4_minima"; }
 const char* const* input_pin_labels() { return kInputPinLabels; }
 const char* const* output_pin_labels() { return kOutputPinLabels; }
 
