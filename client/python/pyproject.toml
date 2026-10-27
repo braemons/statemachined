@@ -68,6 +68,11 @@ testpaths = ["tests"]
 # `_wire_conversions.py`.
 exclude = ["statemachined_client/_proto"]
 
+[tool.ty.environment]
+# tests/perf imports the hardware suite's `bench_rig` by putting its directory
+# on sys.path (tests/perf/conftest.py); ty has to be told the same path.
+extra-paths = ["tests/hardware"]
+
 [tool.ruff]
 line-length = 96
 src = ["statemachined_client", "tests"]

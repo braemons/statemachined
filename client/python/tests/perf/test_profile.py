@@ -25,6 +25,7 @@ the hold is what a trial pays.
 from __future__ import annotations
 
 import time
+from typing import Any
 
 import pytest
 from bench_rig import BenchRig, scratch_directory, start_daemon, wait_until
@@ -143,7 +144,7 @@ class Trial:
         self.link.drain()
 
 
-def _read(link: Link) -> tuple[dict, object]:
+def _read(link: Link) -> tuple[dict, Any]:
     """The profile as {span name: stats}, in microseconds."""
     raw = link.profile()
     per_us = 1e6 / raw.cycles_per_second

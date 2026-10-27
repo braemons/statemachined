@@ -39,6 +39,7 @@ import termios
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 #: The repository root, three levels up from this file's directory.
 REPOSITORY = Path(__file__).resolve().parents[4]
@@ -137,7 +138,9 @@ class Received:
     message_id: int
     in_reply_to: int | None
     #: The body, inside a DeviceMessage so `WhichOneof("body")` names it.
-    message: object
+    #: `Any` because the module it comes from is compiled at import time
+    #: (`_load_link_pb2`), so there is no type to name.
+    message: Any
 
 
 def unframe(encoded: bytes) -> Received:
@@ -166,7 +169,7 @@ def unframe(encoded: bytes) -> Received:
 class Exchange:
     """One command and its answer, timed on the host."""
 
-    reply: object
+    reply: Any  # a DeviceMessage; see Received.message
     round_trip_s: float
     #: Frames the board sent unasked while this one was in flight.
     unsolicited: list
