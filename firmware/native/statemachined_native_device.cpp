@@ -76,7 +76,7 @@ class QueueingReplySink : public ReplySink {
 
 DeviceIdentity native_device_identity() {
   DeviceIdentity identity;
-  identity.board = "native";
+  identity.board = hal::board_name();
   identity.firmware_version = firmware_version();
   identity.input_line_count = kMaxLines;
   identity.output_line_count = kMaxOutputLines;

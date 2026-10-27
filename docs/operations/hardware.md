@@ -13,7 +13,7 @@ belongs in a release note.
 ## Uno R4 Minima — the reference target
 
 Renesas RA4M1 (Cortex-M4 at 48 MHz), 32 KB SRAM, 256 KB flash, native USB CDC.
-The only board we have, and the one that sets the design.
+The board that sets the design; everything is proven here first.
 
 ### Line map
 
@@ -646,7 +646,81 @@ the port over.
 
 ---
 
-## Teensy 4.1, ESP32
+## Teensy 4.1
 
-Not yet. See `dev/PLAN.md`, milestone M6. Nothing in the design needs their
-resources; they are there to prove the portable core was worth having.
+NXP i.MX RT1062 (Cortex-M7 at 600 MHz), 1 MB RAM, 8 MB flash, native USB CDC.
+The headroom target. It runs the same 10 kHz scan as the reference board, so a
+graph behaves the same on either; what changes is how large a graph set fits
+(`platformio.ini`: 128 states, 255 transitions, 255 output actions, 128
+distributions per board, against the R4's 32/64/64/32).
+
+**3.3 V, and not 5 V tolerant.** The R4 Minima is a 5 V board. A harness wired
+for it drives inputs at 5 V, and the same wires on a Teensy damage the pin. Every
+input needs level shifting, and outputs drive 3.3 V, which some valve drivers
+and TTL inputs do not read as high.
+
+### Line map
+
+The same shape as the R4's — 0/1 are Serial1, 13 is the on-board LED, and neither
+is a line — labelled with the bare numbers printed on PJRC's card:
+
+| input line | Pin | | output line | Pin |
+|---|---|---|---|---|
+| 0 | 2 | | 0 | 10 |
+| 1 | 3 | | 1 | 11 |
+| 2 | 4 | | 2 | 12 |
+| 3 | 5 | | 3 | 14 (A0) |
+| 4 | 6 | | 4 | 15 (A1) |
+| 5 | 7 | | 5 | 16 (A2) |
+| 6 | 8 | | 6 | 17 (A3) |
+| 7 | 9 | | 7 | 18 (A4) |
+
+Defined in `firmware/hal/teensy41.cpp`. The board reports itself as `teensy41`
+and its labels are `"2"`…`"18"`, never `"D2"` or `"A0"`. That is deliberate: a
+line map written against the reference board's labels fails to resolve here,
+rather than resolving cleanly onto different holes. Set `expected_board =
+"teensy41"` in the rig config.
+
+### How it differs from the R4
+
+- **Ports.** Inputs are read with one `PSR` read per GPIO port, outputs written
+  through `DR_SET`/`DR_CLEAR`, both from the core's own pin table.
+- **Scan timer.** An `IntervalTimer` at NVIC priority 64, above the USB
+  interrupt's default 128, so the scan preempts the USB stack as it does on the
+  R4.
+- **Storage.** One file, `/settings`, on a 512 KB LittleFS at the top of program
+  flash (eight 64 KB erase blocks, since LittleFS cannot format fewer than a
+  few), holding up to 32 KB. The core's 4 KB EEPROM emulation is smaller than a
+  full graph set on this board. **A save stops the scan**: the core erases and
+  programs flash with interrupts off, because the image runs from the same chip.
+  Measured 2026-10-27 saving the bench config's three graphs: 13 overruns, a
+  worst gap of 13 scans (1.3 ms), which `state_report` counts. Save between
+  sessions. The record survives a power cycle and a firmware upload: the
+  loader erases only what the new image needs, and the filesystem is at the
+  top of flash.
+- **Not measured.** No figure from the R4's sections above has been taken on
+  this board yet.
+
+### Flashing
+
+```sh
+make upload BOARD=teensy41   # pio run -e teensy41 -t upload, via teensy_loader_cli
+```
+
+The loader opens the bootloader's `hidraw` node, which needs PJRC's udev rule
+(it ships with PlatformIO's tool package):
+
+```sh
+sudo cp ~/.platformio/packages/tool-teensy/00-teensy.rules /etc/udev/rules.d/
+sudo udevadm control --reload-rules && sudo udevadm trigger
+```
+
+If the board does not enter the bootloader on its own, press the button on it
+once. Running this firmware it enumerates as `16c0:0483`, which
+`packaging/udev/60-statemachined.rules` links to `/dev/braemons/statemachined0`.
+
+---
+
+## ESP32
+
+Not yet. See `dev/PLAN.md`, milestone M9.

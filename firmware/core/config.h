@@ -100,6 +100,17 @@ constexpr uint8_t kMaxOutputLines = STATEMACHINED_MAX_OUTPUT_LINES;
 /// than the 64 it used to be, which is the price of a trial whose path is
 /// complete rather than truncated. See docs/developer/daemon.md 3.6.
 constexpr uint8_t kMaxPath = STATEMACHINED_MAX_PATH;
+// The same mistake for every pool indexed by a uint8_t whose 0xFF is the "none"
+// sentinel: 256 narrows to 0 and the build would ship with empty pools. The
+// Teensy and ESP32 envs asked for 256 and 512 here before anything checked.
+static_assert(STATEMACHINED_MAX_STATES >= 1 && STATEMACHINED_MAX_STATES <= 255,
+              "a StateIndex is a uint8_t with 0xFF meaning none");
+static_assert(STATEMACHINED_MAX_TRANSITIONS >= 1 && STATEMACHINED_MAX_TRANSITIONS <= 255,
+              "a TransitionIndex is a uint8_t with 0xFF meaning none");
+static_assert(STATEMACHINED_MAX_OUTPUT_ACTIONS >= 1 && STATEMACHINED_MAX_OUTPUT_ACTIONS <= 255,
+              "an OutputActionIndex is a uint8_t");
+static_assert(STATEMACHINED_MAX_DISTRIBUTIONS >= 1 && STATEMACHINED_MAX_DISTRIBUTIONS <= 255,
+              "a RandomDistributionIndex is a uint8_t with 0xFF meaning none");
 static_assert(kMaxPath >= 1 && STATEMACHINED_MAX_PATH <= 255,
               "path_len is a uint8_t; 256 breaks record_visit's comparison silently");
 

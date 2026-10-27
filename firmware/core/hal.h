@@ -14,7 +14,8 @@
 // anything else.
 //
 // Implementations: firmware/hal/native.cpp (host, for the simulator),
-// firmware/hal/renesas_ra4m1.cpp (Uno R4 Minima). See docs/operations/hardware.md for which
+// firmware/hal/renesas_ra4m1.cpp (Uno R4 Minima), firmware/hal/teensy41.cpp
+// (Teensy 4.1). See docs/operations/hardware.md for which
 // physical pin is which line.
 #pragma once
 #include <cstddef>
@@ -118,6 +119,11 @@ bool storage_write(const void* src, size_t n);
 bool storage_write_commit();
 
 // ---------------------------------------------------------------- the pins ---
+
+/// Which board this build is for, as `hello_ack` names it and as the rig
+/// config's `expected_board` is checked against: the PlatformIO env's name.
+/// From the HAL because the HAL is the one thing in the build that is per board.
+const char* board_name();
 
 /// What is written on the board beside each line, indexed by line number, or
 /// nullptr where this build has no pins worth naming.
